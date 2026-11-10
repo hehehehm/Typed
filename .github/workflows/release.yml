@@ -1,0 +1,68 @@
+# Автосборка Typed: на каждый тег vX.Y.Z собирает Setup.exe и .dmg
+# и прикрепляет их к релизу на https://github.com/hehehehm/typed/releases
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}   # ручной запуск из вкладки Actions (без релиза, только артефакты)
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) {
+            choco install innosetup -y --no-progress
+          }
+      - name: Проверка версии тега
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $v = [regex]::Match((Get-Content Cargo.toml -Raw), '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "Тег ${{ github.ref_name }} не совпадает с версией в Cargo.toml ($v)" }
+      - name: Тесты
+        run: cargo test --release
+      - name: Установщик
+        shell: pwsh
+        run: .\packaging\windows\build-installer.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/Typed-Setup-*.exe
+
+  macos:
+    runs-on: macos-latest   # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: .dmg
+        run: bash packaging/macos/build-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/Typed-*.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Typed ${{ github.ref_name }}
+          files: out/*
+          generate_release_notes: true
