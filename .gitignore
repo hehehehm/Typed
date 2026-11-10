@@ -1,0 +1,24 @@
+# Сборка
+target/
+dist/
+**/*.rs.bk
+
+# Готовые установщики и архивы
+*.exe
+*.dmg
+*.msi
+*.zip
+*.tar.gz
+
+# Данные пользователя (на всякий случай: обычно они в %APPDATA%\typed)
+vault.bin
+typed.chk
+config.json
+
+# Системный мусор
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/

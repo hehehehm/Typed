@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/app"]
+
+[workspace.package]
+version = "0.3.64"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+authors = ["B. Konti"]

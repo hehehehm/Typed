@@ -1,0 +1,47 @@
+[package]
+name = "layout-keeper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Typed"
+
+[[bin]]
+name = "layout-keeper"
+path = "src/main.rs"
+
+[dependencies]
+layout_keeper_core = { path = "../core" }
+zeroize = "1"
+log = "0.4"
+env_logger = "0.11"
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+png = "0.17"
+arboard = { version = "3", default-features = false }
+qrcodegen = "1.8"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = "2.21"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
+  "Win32_System_Console",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_Shell",
+  "Win32_UI_Accessibility",
+  "Win32_System_Registry",
+  "Win32_Graphics_Gdi",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_ToolHelp",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+winres = "0.1"
