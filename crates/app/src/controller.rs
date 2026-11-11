@@ -355,6 +355,17 @@ mod tests {
     }
 
     #[test]
+    fn missing_spaces_follow_setting_and_exceptions() {
+        let moba = r"c:\program files (x86)\mobatek\mobaxterm\mobaxterm.exe";
+        let mut c = ctl();
+        c.tick(Some("telegram"), Some(Lang::Ru));
+        assert!(!typ(&mut c, "вофисе ").is_empty(), "on by default");
+        c.tick(Some(moba), Some(Lang::Ru));
+        assert!(c.config.is_exception(moba));
+        assert!(typ(&mut c, "вофисе незнаю ").is_empty(), "never in exception apps");
+    }
+
+    #[test]
     fn retries_layout_switch_until_os_applies() {
         let mut c = ctl();
         c.config.set_layout("mobaxterm", Lang::En);

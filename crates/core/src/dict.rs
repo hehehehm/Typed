@@ -32,6 +32,10 @@ static RU_EXTRA: &str = include_str!("../data/ru_extra.txt");
 /// offer a correction target. Memory-mapped from the binary, no start-up cost.
 static EN_KNOWN: &[u8] = include_bytes!("../data/en_known.fst");
 static RU_KNOWN: &[u8] = include_bytes!("../data/ru_known.fst");
+/// Brand / product / company / service names (Wikidata CC0 + curated), since 0.3.65.
+/// Known-only like the full-form sets: never offered as a correction.
+static EN_BRANDS: &str = include_str!("../data/en_brands.txt");
+static RU_BRANDS: &str = include_str!("../data/ru_brands.txt");
 
 /// Rank given to curated extras that are not in the frequency list: frequent enough to
 /// pass the short-word check in the engine (so `дщд` → `lol` works).
@@ -53,6 +57,8 @@ pub struct Dictionary {
     sorted: Vec<String>,
     /// Full-form set without ranks (see [`Dictionary::is_word`]).
     known: Option<fst::Set<&'static [u8]>>,
+    /// Brand and product names (see [`Dictionary::with_brands`]).
+    brands: HashSet<String>,
 }
 
 /// One byte per letter for the full-form sets: `a`–`z` as ASCII, `а`–`я` as
@@ -105,13 +111,35 @@ impl Dictionary {
         let bigrams = counts.into_iter().filter(|&(_, n)| n >= MIN_BIGRAM_WORDS).map(|(k, _)| k).collect();
         let mut sorted: Vec<String> = ranks.keys().cloned().collect();
         sorted.sort_unstable();
-        Dictionary { lang, ranks, bigrams, sorted, known: None }
+        Dictionary { lang, ranks, bigrams, sorted, known: None, brands: HashSet::new() }
     }
 
     /// Attach a full-form set built by `examples/build_wordset.rs`.
     pub fn with_known_set(mut self, fst_bytes: &'static [u8]) -> Self {
         self.known = fst::Set::new(fst_bytes).ok();
         self
+    }
+
+    /// Attach a brand-name list (`#` comment lines ignored). Brands count as full forms:
+    /// real words that are never changed and never offered as fixes.
+    pub fn with_brands(mut self, list: &str) -> Self {
+        self.brands = list
+            .lines()
+            .map(str::trim)
+            .filter(|w| !w.is_empty() && !w.starts_with('#'))
+            .map(Self::normalize)
+            .collect();
+        self
+    }
+
+    /// Number of brand names attached.
+    pub fn brands_len(&self) -> usize {
+        self.brands.len()
+    }
+
+    /// A brand / product name from the bundled list.
+    pub fn is_brand(&self, word: &str) -> bool {
+        !self.brands.is_empty() && FULL_FORMS.load(Ordering::Relaxed) && self.brands.contains(&Self::normalize(word))
     }
 
     /// Number of words in the full-form set (0 without one).
@@ -122,6 +150,9 @@ impl Dictionary {
     /// In the full-form set only (normalised or not). Rare forms live here: they are
     /// real words, but have no frequency rank and are never correction targets.
     pub fn in_full_forms(&self, word: &str) -> bool {
+        if self.is_brand(word) {
+            return true;
+        }
         let Some(set) = &self.known else { return false };
         if !FULL_FORMS.load(Ordering::Relaxed) {
             return false;
@@ -189,6 +220,14 @@ pub fn full_forms_fst(lang: Lang) -> &'static [u8] {
     }
 }
 
+/// Embedded brand list for `lang` (for audits building their own dictionaries).
+pub fn brands_list(lang: Lang) -> &'static str {
+    match lang {
+        Lang::En => EN_BRANDS,
+        Lang::Ru => RU_BRANDS,
+    }
+}
+
 /// Ranked list plus extras only, without the full-form set (audits and tests).
 pub fn ranked_only(lang: Lang) -> Dictionary {
     match lang {
@@ -202,8 +241,8 @@ pub fn get(lang: Lang) -> &'static Dictionary {
     static EN: OnceLock<Dictionary> = OnceLock::new();
     static RU: OnceLock<Dictionary> = OnceLock::new();
     match lang {
-        Lang::En => EN.get_or_init(|| Dictionary::with_extras(Lang::En, EN_WORDS, EN_EXTRA).with_known_set(EN_KNOWN)),
-        Lang::Ru => RU.get_or_init(|| Dictionary::with_extras(Lang::Ru, RU_WORDS, RU_EXTRA).with_known_set(RU_KNOWN)),
+        Lang::En => EN.get_or_init(|| Dictionary::with_extras(Lang::En, EN_WORDS, EN_EXTRA).with_known_set(EN_KNOWN).with_brands(EN_BRANDS)),
+        Lang::Ru => RU.get_or_init(|| Dictionary::with_extras(Lang::Ru, RU_WORDS, RU_EXTRA).with_known_set(RU_KNOWN).with_brands(RU_BRANDS)),
     }
 }
 
@@ -237,6 +276,22 @@ mod tests {
         assert!(get(Lang::Ru).contains("имхо"));
         assert!(get(Lang::En).rank("brb").unwrap() <= EXTRA_RANK);
         assert!(!get(Lang::En).contains("# curated"));
+    }
+
+    #[test]
+    fn brands_are_known_but_not_ranked() {
+        for w in ["realme", "Realme", "tecno", "infinix", "redmi", "oneplus", "zscaler"] {
+            assert!(get(Lang::En).is_word(w), "{w}");
+            assert!(!get(Lang::En).contains(w), "{w} must not become a fix target");
+        }
+        for w in ["реалми", "сяоми", "хуавей", "хуавея", "айфона", "айфоне", "айфоном", "самсунга", "ютубе", "нейросеткой"] {
+            assert!(get(Lang::Ru).is_word(w), "{w}");
+        }
+        assert!(get(Lang::En).brands_len() > 10_000);
+        assert!(get(Lang::Ru).brands_len() > 3_000);
+        // Short tokens are left out: they collide with mistyped words.
+        assert!(!get(Lang::En).is_brand("kia") && !get(Lang::En).is_brand("bmw"));
+        assert!(!get(Lang::En).is_brand("# brand"));
     }
 
     #[test]

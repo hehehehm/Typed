@@ -334,6 +334,9 @@ pub struct Config {
     /// Words the user undid: never autocorrected again (normalised, lowercase).
     #[serde(default)]
     pub never_correct: Vec<String>,
+    /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
+    #[serde(default = "default_true")]
+    pub fix_missing_spaces: bool,
 }
 
 impl Default for Config {
@@ -361,6 +364,7 @@ impl Default for Config {
             undo_hotkey: default_undo_hotkey(),
             undo_on_backspace: true,
             never_correct: Vec::new(),
+            fix_missing_spaces: true,
         }
     }
 }
@@ -522,6 +526,7 @@ impl Config {
             fix_typos: self.fix_typos,
             never_correct: self.never_correct.iter().map(|w| crate::engine::never_key(w)).filter(|w| !w.is_empty()).collect(),
             undo_on_backspace: self.undo_on_backspace,
+            fix_missing_spaces: self.fix_missing_spaces,
         }
     }
 
@@ -693,4 +698,14 @@ mod tests {
         assert_eq!(Config::from_json(&disabled.to_json()).unwrap(), disabled);
     }
 
+    #[test]
+    fn missing_spaces_setting_defaults_on_and_roundtrips() {
+        let old = Config::from_json(r#"{"autocorrect":true,"apps":{"chat":"ru"}}"#).unwrap();
+        assert!(old.fix_missing_spaces);
+        assert!(old.engine_options().fix_missing_spaces);
+        assert!(Config::default().fix_missing_spaces);
+        let off = Config::from_json(r#"{"fix_missing_spaces":false}"#).unwrap();
+        assert!(!off.engine_options().fix_missing_spaces);
+        assert_eq!(Config::from_json(&off.to_json()).unwrap(), off);
+    }
 }

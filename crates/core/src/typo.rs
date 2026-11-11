@@ -130,7 +130,7 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
         if lang == Lang::Ru && morph::only_ending_differs(&lower_s, &cand) {
             continue;
         }
-        if lang == Lang::En && en_affix_only(&lower_s, &cand) {
+        if lang == Lang::En && (en_affix_only(&lower_s, &cand) || en_end_letter_only(&lower_s, &cand)) {
             continue;
         }
         if let Some(r) = rank(&cand) {
@@ -223,6 +223,18 @@ fn en_affix_only(typed: &str, cand: &str) -> bool {
     const SUFFIXES: [&str; 14] = ["s", "es", "d", "ed", "er", "ers", "al", "ly", "an", "ian", "ing", "t", "y", "ness"];
     let (long, short) = if typed.len() > cand.len() { (typed, cand) } else { (cand, typed) };
     long.strip_prefix(short).is_some_and(|tail| SUFFIXES.contains(&tail))
+}
+
+/// English `cand` only adds or drops one letter at the very end (`realme` / `realm`,
+/// `apple` / `appl`): usually another word (a brand, a name, a form), not a slip. The
+/// Russian counterpart is [`morph::only_ending_differs`]. A doubled last letter
+/// (`helloo` → `hello`) is still a slip and may be fixed.
+fn en_end_letter_only(typed: &str, cand: &str) -> bool {
+    let (t, c): (Vec<char>, Vec<char>) = (typed.chars().collect(), cand.chars().collect());
+    if t.len() == c.len() + 1 && t.starts_with(&c) {
+        return t[t.len() - 1] != t[t.len() - 2];
+    }
+    c.len() == t.len() + 1 && c.starts_with(&t)
 }
 
 /// The fix starts with the typed first letter, or swaps the first two: slips at the
@@ -561,6 +573,23 @@ mod tests {
     fn real_words_missing_from_list_0_3_63() {
         assert_eq!(suggest("скидывать", Lang::Ru), None);
         assert_eq!(suggest("скидываешь", Lang::Ru), None);
+    }
+
+    #[test]
+    fn en_last_letter_only_is_not_a_typo_0_3_65() {
+        // Unknown word that is a listed word plus / minus its last letter: left alone.
+        let d = dict::ranked_only(Lang::En);
+        assert!(!d.is_word("realme"));
+        assert_eq!(suggest_in(&d, "realme", Lang::En), None);
+        assert_eq!(suggest("realme", Lang::En), None);
+        assert!(en_end_letter_only("realme", "realm"));
+        assert!(en_end_letter_only("appl", "apple"));
+        assert!(!en_end_letter_only("helloo", "hello"), "doubled last letter is a slip");
+        assert!(!en_end_letter_only("wrold", "world"));
+        assert_eq!(suggest_in(&d, "helloo", Lang::En).as_deref(), Some("hello"));
+        // Ordinary slips inside the word are still fixed.
+        assert_eq!(suggest("wrold", Lang::En).as_deref(), Some("world"));
+        assert_eq!(suggest("becuase", Lang::En).as_deref(), Some("because"));
     }
 
     #[test]

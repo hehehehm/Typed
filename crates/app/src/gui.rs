@@ -576,6 +576,8 @@ impl App {
         ui.small("Буква, которая сама по себе слово только в другом языке, переводится: d → в, z → я, ф → a, ш → i. Настоящие a, I, в, и, я остаются. Остальные (q/й) — в язык приложения.");
         changed |= ui.checkbox(&mut self.cfg.fix_typos, "Исправлять опечатки (поечаток → опечаток)").changed();
         ui.small("Одна ошибка — в словах от 4 букв, две — от 8 букв. Только когда вариант один и частый. Комбинация конвертации возвращает как было.");
+        changed |= ui.checkbox(&mut self.cfg.fix_missing_spaces, "Расставлять пропущенные пробелы").changed();
+        ui.small("После предлогов и «не»: снейросеткой → с нейросеткой, вофисе → в офисе, незнаю → не знаю. Только когда слова нет в словарях. Отменяется как исправление.");
         changed |= ui.checkbox(&mut self.cfg.undo_on_backspace, "Backspace сразу после исправления отменяет его").changed();
         ui.small("Только первый Backspace, пока не нажато ничего другого. Слово возвращается как было и запоминается, если вы его оставите.");
         changed |= ui.checkbox(&mut self.cfg.auto_learn, "Автозапоминание").changed();
@@ -978,7 +980,11 @@ impl eframe::App for App {
             hide_window(ctx);
             self.ui_visible = false;
         }
-        if can_hide && ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        // Only on the transition: a hidden window can keep reporting `minimized`, and
+        // re-sending the hide commands every frame woke eframe again and again (≈6% CPU
+        // while minimized, 0% while open).
+        if can_hide && minimized && self.ui_visible {
             hide_window(ctx);
             self.ui_visible = false;
         }
@@ -991,9 +997,16 @@ impl eframe::App for App {
             show_window(ctx);
             self.ui_visible = true;
         }
-        if !self.ui_visible {
+        if !self.ui_visible || (minimized && !(want_vault || want_show)) {
+            // Minimized to the taskbar (no tray) is idle too: nothing to paint, so no
+            // timed repaint; restoring the window sends its own events.
             // Hidden to the tray: do not paint or resize. A 200ms repaint here was
             // leaking gigabytes of GPU memory on Windows while the window was invisible.
+            // An unlocked vault still needs its idle lock: one cheap wake a minute.
+            self.vault.tick(ctx, self.cfg.vault_idle_minutes);
+            if self.vault.is_unlocked() {
+                ctx.request_repaint_after(Duration::from_secs(60));
+            }
             return;
         }
         self.apply_theme(ctx);

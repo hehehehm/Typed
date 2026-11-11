@@ -23,6 +23,9 @@
 //! 5. The converted form (optionally without up to 2 trailing punctuation characters,
 //!    e.g. `ghbdtn,` → `привет,`) is a known word in the other language → convert.
 //!    Words of ≤3 letters must be among the 3000 most frequent to count.
+//! 5a. Missing space (`fix_missing_spaces`): an unknown Russian token that is a glued
+//!     preposition / «не» + a frequent word becomes two words (`вофисе` → `в офисе`),
+//!     see [`crate::split`]; curated glued forms (`незнаю`) are split before rule 4.
 //! 6. Neither is a dictionary word: convert only if the typed word contains letter
 //!    bigrams impossible in its language *and* the converted form has none and is at
 //!    least 4 letters long. Random strings usually fail both and are kept.
@@ -31,6 +34,7 @@ use crate::buffer::WordBuffer;
 use crate::dict::{self, Dictionary};
 use crate::filename;
 use crate::layout::{self, Lang};
+use crate::split;
 use crate::typo;
 use crate::userdict::UserWords;
 use std::collections::HashSet;
@@ -74,14 +78,18 @@ pub struct EngineOptions {
     pub never_correct: HashSet<String>,
     /// Backspace right after an autocorrection (before any other key) undoes it.
     pub undo_on_backspace: bool,
+    /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
+    pub fix_missing_spaces: bool,
 }
 
 /// `Decision::Convert` reason for a typo fix (kept for undo).
 pub const TYPO_REASON: &str = "typo fix";
+/// `Decision::Convert` reason for an inserted missing space (undoable like a typo fix).
+pub const SPACE_REASON: &str = "missing space after a function word";
 
 impl Default for EngineOptions {
     fn default() -> Self {
-        Self { autocorrect: true, convert_single_letters: true, preferred_lang: None, skip_urls_emails: true, skip_tokens_with_digits: true, min_word_len: 2, user_words: UserWords::default(), fix_typos: false, never_correct: HashSet::new(), undo_on_backspace: true }
+        Self { autocorrect: true, convert_single_letters: true, preferred_lang: None, skip_urls_emails: true, skip_tokens_with_digits: true, min_word_len: 2, user_words: UserWords::default(), fix_typos: false, never_correct: HashSet::new(), undo_on_backspace: true, fix_missing_spaces: true }
     }
 }
 
@@ -497,13 +505,26 @@ impl Engine {
 
         let chars: Vec<char> = token.chars().collect();
 
+        let ranked_convert = || {
+            Self::try_convert(&chars, src, o.min_word_len, |w| {
+                dst_dict.rank(w).is_some_and(|r| w.chars().count() > 3 || r < SHORT_WORD_MAX_RANK)
+            })
+        };
+        // Glued forms the lists carry as words (`незнаю`): split before "known word".
+        if o.fix_missing_spaces && src == Lang::Ru && split::is_glued(core) {
+            if let Some(d) = ranked_convert() {
+                return d;
+            }
+            if let Some(d) = Self::split_decision(token, core, src) {
+                return d;
+            }
+        }
+
         if src_dict.contains(core) {
             return Decision::Keep("known word in current layout");
         }
 
-        if let Some(d) = Self::try_convert(&chars, src, o.min_word_len, |w| {
-            dst_dict.rank(w).is_some_and(|r| w.chars().count() > 3 || r < SHORT_WORD_MAX_RANK)
-        }) {
+        if let Some(d) = ranked_convert() {
             return d;
         }
 
@@ -520,6 +541,35 @@ impl Engine {
             if let Some(d) = Self::try_convert(&chars, src, o.min_word_len, |w| {
                 w.chars().count() >= FULL_FORM_CONVERT_MIN_LEN && dst_dict.in_full_forms(w)
             }) {
+                return d;
+            }
+        }
+
+        // Missing space after a function word (`вофисе` → `в офисе`): the token is in its
+        // own layout (no conversion fired above) and unknown in every list.
+        if o.fix_missing_spaces {
+            if let Some(d) = Self::split_decision(token, core, src) {
+                // A typo fix that puts back a missing letter, swaps letters back or fixes
+                // one vowel beats the split (`отсуда` → `отсюда`, not `от суда`;
+                // `котрое` → `которое`); other fixes lose (`отебе` is `о тебе`, not `отеле`).
+                if o.fix_typos && core.chars().all(char::is_alphabetic) {
+                    if let Some(fix) = typo::suggest(core, src) {
+                        let (n, m) = (core.chars().count(), fix.chars().count());
+                        let mut a: Vec<char> = Dictionary::normalize(core).chars().collect();
+                        let mut b: Vec<char> = Dictionary::normalize(&fix).chars().collect();
+                        a.sort_unstable();
+                        b.sort_unstable();
+                        let vowel_slip = {
+                            let (x, y): (Vec<char>, Vec<char>) = (core.chars().collect(), fix.chars().collect());
+                            let diff: Vec<usize> = (0..n.min(m)).filter(|&i| x[i] != y[i]).collect();
+                            let v = |c: char| "аеёиоуыэюяAEIOUaeiou".contains(c.to_lowercase().next().unwrap_or(c));
+                            n == m && diff.len() == 1 && v(x[diff[0]]) && v(y[diff[0]])
+                        };
+                        if m > n || a == b || vowel_slip {
+                            return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
+                        }
+                    }
+                }
                 return d;
             }
         }
@@ -545,6 +595,14 @@ impl Engine {
             }
         }
         Decision::Keep("not confident")
+    }
+
+    fn split_decision(token: &str, core: &str, src: Lang) -> Option<Decision> {
+        if !core.chars().all(char::is_alphabetic) {
+            return None;
+        }
+        let fixed = split::split_glued(dict::get(src), core, src)?;
+        Some(Decision::Convert { text: token.replacen(core, &fixed, 1), target: src, reason: SPACE_REASON })
     }
 
     /// User words win over every other rule, digits and signs included (`ьз3` → `mp3`,
@@ -1196,5 +1254,72 @@ mod tests {
         assert_eq!(conv("crblsdfdibvcz").as_deref(), Some("скидывавшимся"));
         // A rare real Russian form typed correctly stays.
         assert_eq!(conv("скидывавшимся"), None);
+    }
+
+    #[test]
+    fn brands_0_3_65() {
+        let mut e = engine();
+        e.options.fix_typos = true;
+        // Typed in EN: kept (it used to become `realm`).
+        assert!(type_str(&mut e, "realme ").is_empty());
+        assert!(type_str(&mut e, "Realme ").is_empty());
+        for w in ["realme", "tecno", "infinix", "oneplus"] {
+            assert_eq!(e.decide(w), Decision::Keep("known word form in current layout"), "{w}");
+        }
+        // Typed on the RU layout: converted to the brand.
+        assert_eq!(conv("куфдьу").as_deref(), Some("realme"));
+        assert_eq!(conv("шташтшч").as_deref(), Some("infinix"));
+        // Russian spellings stay Russian.
+        for w in ["реалми", "сяоми", "айфоном", "самсунга", "хуавея"] {
+            assert_eq!(conv(w), None, "{w}");
+            assert_eq!(e.decide(w), Decision::Keep("known word form in current layout"), "{w}");
+        }
+        // And still convert when typed on the EN layout.
+        assert_eq!(conv("fqajyjv").as_deref(), Some("айфоном"));
+        // Earlier user cases are unchanged.
+        assert_eq!(conv("зуфсу").as_deref(), Some("peace"));
+        assert_eq!(conv("мфгдеюишт").as_deref(), Some("vault.bin"));
+        assert_eq!(typo::suggest("скидывать", Lang::Ru), None);
+        assert_eq!(typo::suggest("оцени", Lang::Ru), None);
+    }
+
+    #[test]
+    fn missing_space_after_function_word() {
+        let mut e = engine();
+        assert_eq!(type_str(&mut e, "снейросеткой "), vec![Replacement { delete: 13, insert: "с нейросеткой ".into(), target: Lang::Ru }]);
+        assert_eq!(type_str(&mut e, "Вофисе, ")[0].insert, "В офисе, ");
+        assert_eq!(type_str(&mut e, "незнаю ")[0].insert, "не знаю ");
+        assert_eq!(type_str(&mut e, "кврачу ")[0].insert, "к врачу ");
+        // Real words and wrong-layout words are not touched.
+        assert!(type_str(&mut e, "сделать вопрос сколько ").is_empty());
+        assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
+        // Undo restores and remembers.
+        assert_eq!(type_str(&mut e, "нафайле ")[0].insert, "на файле ");
+        assert_eq!(bs(&mut e), Some(Replacement { delete: 9, insert: "нафайле ".into(), target: Lang::Ru }));
+        assert!(type_str(&mut e, "дальше ").is_empty());
+        assert_eq!(e.take_learned(), vec!["нафайле".to_string()]);
+        assert!(type_str(&mut e, "нафайле ").is_empty());
+        let mut e = engine();
+        assert_eq!(type_str(&mut e, "вофисе ")[0].insert, "в офисе ");
+        assert_eq!(e.undo_last(Lang::Ru).unwrap(), Replacement { delete: 8, insert: "вофисе ".into(), target: Lang::Ru });
+        assert_eq!(e.take_learned(), vec!["вофисе".to_string()]);
+        // With typo fixing on: a missing letter beats a split, a wrong one does not.
+        let mut e = engine();
+        e.options.fix_typos = true;
+        assert_eq!(type_str(&mut e, "отсуда ")[0].insert, "отсюда ");
+        assert_eq!(type_str(&mut e, "котрое ")[0].insert, "которое ");
+        assert_eq!(type_str(&mut e, "наработе ")[0].insert, "на работе ");
+        assert_eq!(type_str(&mut e, "отебе ")[0].insert, "о тебе ");
+        assert_eq!(type_str(&mut e, "чтокой ")[0].insert, "точкой ");
+        // Setting off, or autocorrect off (exception apps): nothing happens.
+        let mut e = engine();
+        e.options.fix_missing_spaces = false;
+        assert!(type_str(&mut e, "вофисе незнаю ").is_empty());
+        let mut e = engine();
+        e.options.autocorrect = false;
+        assert!(type_str(&mut e, "вофисе ").is_empty());
+        // User words win.
+        let mut e = engine_with(&["вофисе"]);
+        assert!(type_str(&mut e, "вофисе ").is_empty());
     }
 }

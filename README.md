@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build-installer.ps1
 ```
 
 Скрипт сам найдёт корень проекта, выполнит `cargo build --release`, создаст
-`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.64.dmg`). Отправьте тестерам этот
+`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.65.dmg`). Отправьте тестерам этот
 **один .dmg**; Rust им не нужен. Образ рассчитан на архитектуру Mac, где он собран
 (Apple Silicon или Intel); универсальная сборка здесь не выполняется.
 Дополнительные упаковщики не нужны; скрипт не скачивает их и не выполняет нотаризацию.
@@ -96,6 +96,13 @@ Cargo при первой сборке может потребоваться д�
   и после принятия прикрепите билет через `xcrun stapler staple`.
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
+
+## Что нового в 0.3.65
+
+- **Свёрнутое окно настроек больше не грузит процессор.** Свёрнутое окно Typed прятал в трей заново на каждом кадре, а каждая такая команда снова будила окно, отсюда ~6% CPU. Теперь окно прячется один раз, а свёрнутое или спрятанное окно ничего не рисует. Пока сейф открыт, раз в минуту проверяется автоблокировка.
+- **Бренды и названия.** Typed знает ≈14,2 тыс. новых латинских названий (телефоны, техника, машины, одежда, софт, приложения, игры, сайты, крипта, еда и напитки, магазины) и ≈6,4 тыс. русских написаний популярных брендов со всеми падежами («реалми», «сяоми», «айфона», «айфоном», «самсунга», «ютубе», «телеграме»). Источники: Wikidata (CC0) и ручной список. `realme` больше не исправляется в `realm`, а `куфдьу` превращается в `realme`. Названия только «известны»: Typed их не трогает, но и не подставляет как исправление. Названия короче 4 букв и те, что в другой раскладке дают настоящее слово, не добавлены, поэтому перевод раскладки работает как раньше (100% на тесте).
+- **Английские слова, отличающиеся одной последней буквой, больше не «исправляются»** (realme → realm, appl → apple). Удвоенная последняя буква по-прежнему исправляется (helloo → hello). На тесте ложных исправлений редких английских слов стало меньше (10,4% → 8,6%), а настоящие опечатки исправляются даже чуть лучше (76,2% → 78,4%).
+- **Пропущенные пробелы после предлогов и «не».** «снейросеткой» → «с нейросеткой», «вофисе» → «в офисе», «кврачу» → «к врачу», «нафайле» → «на файле», «незнаю» → «не знаю». Срабатывает, только когда слова нет ни в одном словаре, вторая часть — частое слово с подходящим к предлогу окончанием, не имя и (кроме «не») не глагол. Настоящие слова не разбиваются (0 из 63 тыс. проверенных словоформ). Отменяется так же, как исправление: Backspace или `Ctrl+Alt+Z`. Выключается галочкой «Расставлять пропущенные пробелы» в «Настройках» (`fix_missing_spaces` в config.json), в приложениях-исключениях не работает.
 
 ## Что нового в 0.3.64
 
@@ -366,7 +373,7 @@ Cargo при первой сборке может потребоваться д�
 ## Что нового в 0.3.19
 
 - Если последнее слово нужно заменить (в том числе из пользовательского словаря), Enter и Tab больше не уходят в приложение раньше замены. Раньше чат отправлял «штсн», а исправленное «incy» улетало вторым сообщением.
-- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.64.dmg`.
+- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.65.dmg`.
 - Установщик для тестеров: `dist\Typed-Setup-0.3.19.exe`. Перед установкой закройте все `layout-keeper.exe` или дайте установщику остановить их сам.
 
 ## Что нового в 0.3.18
@@ -760,7 +767,7 @@ Build **on a Mac**:
 ```
 
 The script locates the repository root, runs `cargo build --release`, and creates
-`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.64.dmg`). Send testers this **one file**;
+`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.65.dmg`). Send testers this **one file**;
 they do not need Rust. The app targets the build Mac's architecture (Apple Silicon or Intel),
 not a universal binary. No extra packager or packaging downloads are needed; Cargo may
 need to fetch dependencies on its first build. The script never notarizes automatically.
@@ -786,6 +793,13 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.65
+
+- **No CPU use while the settings window is minimized.** The minimized window was hidden to the tray again on every frame, and each hide woke the window up again (~6% CPU). It is now hidden once and a minimized or hidden window draws nothing; with the vault open a once-a-minute wake-up keeps the idle lock working.
+- **Brand and product names.** ≈14.2 k new Latin names (phones, electronics, cars, fashion, software, apps, games, websites, crypto, food and drinks, retail) and ≈6.4 k Russian spellings of popular brands with case forms (`реалми`, `сяоми`, `айфона`, `айфоном`, `ютубе`) from Wikidata (CC0) plus curated lists. `realme` is no longer "fixed" to `realm`, and `куфдьу` becomes `realme`. Names are known-only (never offered as fixes); tokens shorter than 4 letters and tokens that read as a real word in the other layout are left out, so wrong-layout conversion is unchanged (100% in the audit).
+- **English: no fix that only adds or drops the last letter** (realme → realm, appl → apple); a doubled last letter is still fixed (helloo → hello). False fixes on rare English words 10.4% → 8.6%, synthetic typos fixed 76.2% → 78.4%.
+- **Missing space after Russian prepositions and «не»:** `снейросеткой` → `с нейросеткой`, `вофисе` → `в офисе`, `незнаю` → `не знаю`. Only for tokens unknown to every list, when the rest is a frequent word with an ending that fits the preposition, not a name and (except after «не») not a verb. Real words are never split (0 of 63 k sampled forms). Undo like any autocorrection; Settings checkbox «Расставлять пропущенные пробелы» (`fix_missing_spaces`), never in exception apps.
 
 ### New in 0.3.64
 
@@ -1056,7 +1070,7 @@ settings does not stop the daemon.
 ### New in 0.3.19
 
 - If the last word needs correcting (including a custom-dictionary word), Enter and Tab are held back until the replacement is typed. Previously a chat would send «штсн», then the corrected «incy» as a second message.
-- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.64.dmg`.
+- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.65.dmg`.
 - Tester installer: `dist\Typed-Setup-0.3.19.exe`. Stop all `layout-keeper.exe` processes first, or let the installer stop them.
 
 ### New in 0.3.18
@@ -1149,7 +1163,7 @@ settings does not stop the daemon.
 - **User words override built-in words**: add `exe` and `учу` typed in the RU layout becomes `exe`, even though `учу` is a real Russian word. A user word on the typed side is protected from conversion. Single tokens only (all Latin or all Cyrillic, no digits).
 - In 0.3.3, single-letter words were never auto-converted; 0.3.4 adds the per-app language setting above.
 - Remembered-apps list shows the program icon and only the exe name; a "… путь" button reveals the full path. Icons come from the exe on Windows; Linux/macOS show a first-letter placeholder.
-- Built-in dictionary: top 40 000 words per language from FrequencyWords plus small curated extras (chat slang, abbreviations, tech terms, rare/old words). Extras never override a known word in the typed layout. Since 0.3.64 a full-form set (3.16 M RU / 810 k EN forms) marks every real word form as known; see `crates/core/data/README.md`. Urban Dictionary content is **not** bundled.
+- Built-in dictionary: top 40 000 words per language from FrequencyWords plus small curated extras (chat slang, abbreviations, tech terms, rare/old words). Extras never override a known word in the typed layout. Since 0.3.64 a full-form set (3.16 M RU / 810 k EN forms) marks every real word form as known, and since 0.3.65 a brand / product name list (Wikidata CC0 + curated); see `crates/core/data/README.md`. Urban Dictionary content is **not** bundled.
 - No installer yet — that comes next together with a design pass.
 
 

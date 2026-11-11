@@ -1,0 +1,120 @@
+# Curated brand / product / company / service names (Latin, one per line, any case).
+# Multi-word names may be written on one line; every token of 4+ letters is added.
+# Phones and electronics
+realme oppo vivo poco redmi xiaomi tecno infinix nothing oneplus huawei honor
+samsung galaxy apple iphone ipad ipados macbook imac airpods airtag homepod watchos macos
+pixel nexus motorola moto nokia sony xperia lenovo thinkpad thinkbook ideapad legion yoga
+asus zenbook vivobook zenfone rog acer aspire predator nitro dell alienware inspiron latitude
+xps hp omen pavilion elitebook probook envy spectre msi gigabyte aorus razer logitech corsair
+steelseries hyperx kingston crucial sandisk seagate wd western digital toshiba lg philips
+panasonic sharp hisense tcl haier xbox playstation nintendo switch gameboy steamdeck oculus
+quest meta garmin fitbit amazfit zepp gopro dji insta360 canon nikon fujifilm olympus leica
+hasselblad bose jbl sennheiser beyerdynamic marshall harman kardon bang olufsen yamaha
+roland korg behringer focusrite shure rode audiotechnica akg skullcandy anker ugreen baseus
+belkin tplink netgear mikrotik ubiquiti zyxel keenetic dlink asustor synology qnap
+intel amd ryzen threadripper epyc radeon nvidia geforce rtx quadro qualcomm snapdragon
+mediatek helio dimensity exynos kirin unisoc arm cortex apple bionic tensor broadcom
+micron hynix kioxia foxconn pegatron wistron meizu zte nubia doogee ulefone blackview
+oukitel cubot umidigi alcatel blackberry htc fairphone essential lava micromax itel
+gionee coolpad leeco letv smartisan iqoo roborock dreame ecovacs irobot roomba dyson
+tefal moulinex bosch siemens miele electrolux whirlpool beko indesit gorenje zanussi
+delonghi krups philips braun gillette oralb kenwood polaris vitek scarlett redmond
+xiaomi mijia aqara yeelight tuya sonoff shelly
+# Cars
+tesla toyota lexus honda acura nissan infiniti mazda subaru mitsubishi suzuki daihatsu
+hyundai kia genesis ssangyong daewoo chevrolet chevy cadillac buick gmc ford lincoln
+chrysler dodge jeep ram fiat alfa romeo lancia maserati ferrari lamborghini pagani
+bugatti porsche audi volkswagen skoda seat cupra bmw mini rolls royce bentley jaguar
+land rover range mercedes benz maybach smart opel vauxhall peugeot citroen renault
+dacia volvo polestar saab koenigsegg mclaren aston martin lotus geely chery haval
+changan byd nio xpeng liauto zeekr lynk tank exeed omoda jaecoo jetour gac dongfeng faw
+hongqi baic jac voyah lixiang lada vesta granta niva largus xray kalina priora gaz
+gazelle uaz kamaz zil moskvich ural harley davidson ducati kawasaki yamaha aprilia
+vespa piaggio triumph husqvarna ktm benelli rivian lucid fisker scania iveco man daf
+# Clothing, fashion, beauty
+nike adidas puma reebok asics mizuno newbalance converse vans fila umbro kappa lacoste
+diadora skechers timberland drmartens crocs birkenstock salomon merrell columbia
+patagonia northface thenorthface arcteryx mammut jackwolfskin quiksilver billabong
+levis wrangler lee diesel guess calvin klein tommy hilfiger ralph lauren gucci prada
+versace armani dolce gabbana chanel dior hermes louis vuitton balenciaga givenchy
+valentino burberry fendi moschino kenzo celine loewe bottega veneta cartier tiffany
+bulgari rolex omega tissot swatch casio gshock seiko citizen breitling tagheuer hublot
+patek philippe audemars longines zara bershka stradivarius pullbear massimo dutti oysho
+mango uniqlo primark topshop asos shein temu zalando lamoda wildberries ozon gloria jeans
+ostin befree sela incity zolla kanzler loreal maybelline garnier nivea dove rexona axe
+lancome clinique esteelauder sephora rivgauche letoile yvesrocher oriflame avon faberlic
+loccitane lush bioderma vichy larocheposay avene cerave eucerin neutrogena
+# Software, apps, web, services
+google gmail youtube android chrome chromebook chromium firefox mozilla thunderbird
+safari opera vivaldi brave edge yandex alisa microsoft windows office outlook word excel
+powerpoint onenote onedrive sharepoint teams skype bing azure github gitlab bitbucket
+linux ubuntu debian fedora redhat centos arch manjaro mint kali gentoo opensuse alpine
+freebsd openbsd raspberry arduino docker kubernetes podman ansible terraform jenkins
+nginx apache postgres postgresql mysql mariadb sqlite mongodb redis elasticsearch kafka
+rabbitmq graphql python javascript typescript java kotlin swift rust golang ruby rails
+django flask fastapi laravel symfony react angular vue svelte nextjs nuxt node nodejs
+deno bun webpack vite babel eslint prettier npm yarn pnpm pip conda anaconda jupyter
+pytorch tensorflow keras numpy pandas matplotlib scikit huggingface openai chatgpt gpt
+claude anthropic gemini bard copilot midjourney dalle stablediffusion grok perplexity
+deepseek mistral llama ollama cursor vscode jetbrains intellij pycharm webstorm goland
+rider clion datagrip android studio xcode eclipse netbeans vim neovim emacs notepad
+sublime atom figma sketch photoshop illustrator indesign lightroom premiere aftereffects
+acrobat adobe autocad revit solidworks blender maya cinema unity unreal godot steam
+epic origin uplay ubisoft battlenet blizzard activision ea bethesda valve rockstar
+gameloft supercell rovio mojang minecraft roblox fortnite pubg dota valorant
+overwatch warcraft starcraft diablo hearthstone counterstrike csgo tarkov genshin
+honkai cyberpunk witcher skyrim fallout halo zelda mario pokemon tetris sims gta
+battlefield apex warzone hogwarts elden baldurs stalker metro mafia tanki
+telegram whatsapp viber signal discord slack zoom webex facebook instagram messenger
+threads twitter tiktok snapchat pinterest reddit tumblr linkedin vkontakte odnoklassniki
+twitch kick rutube dzen netflix hulu disney spotify deezer soundcloud shazam tidal
+napster pandora kinopoisk ivi okko wink amediateka megogo crunchyroll
+amazon alexa kindle aliexpress alibaba taobao ebay etsy walmart costco target bestbuy
+ikea leroy merlin obi castorama auchan carrefour metro lenta magnit pyaterochka perekrestok
+vkusvill dixy spar lidl aldi tesco sainsbury kaufland globus okey mvideo eldorado dns
+citilink svyaznoy technopark yandexmarket sbermarket samokat kuper avito youla
+cian domclick booking airbnb expedia trivago tripadvisor skyscanner aviasales tutu
+ostrovok uber lyft bolt grab gojek didi yango citymobil gett blablacar delimobil
+belkacar whoosh urent paypal venmo stripe revolut wise payoneer qiwi yoomoney sberbank
+tinkoff tbank alfabank vtb raiffeisen gazprombank mastercard visa maestro mir unionpay
+applepay googlepay samsungpay sberpay
+dropbox evernote notion obsidian trello asana jira confluence miro canva airtable
+todoist clickup monday basecamp zapier ifttt mailchimp hubspot salesforce zendesk
+intercom shopify wix tilda wordpress joomla drupal squarespace webflow ghost medium
+substack patreon boosty onlyfans kickstarter indiegogo gofundme wikipedia wikidata
+quora stackoverflow habr pikabu dvach fandom imdb letterboxd goodreads duolingo
+coursera udemy edx skillbox geekbrains stepik khan
+cloudflare akamai digitalocean heroku vercel netlify hetzner ovh linode vultr selectel
+timeweb reg beget aws gcp
+winrar winzip sevenzip ccleaner avast avira kaspersky drweb eset nod norton mcafee
+bitdefender malwarebytes nordvpn expressvpn surfshark protonvpn proton protonmail
+tutanota lastpass bitwarden keepass keepassxc onepassword dashlane authy
+vlc winamp aimp foobar audacity obs handbrake ffmpeg gimp inkscape krita paint
+libreoffice openoffice wps onlyoffice
+mobaxterm putty winscp filezilla termius iterm powershell bash zsh fish tmux
+# Crypto
+bitcoin ethereum ether litecoin dogecoin solana cardano polkadot ripple tether usdt
+usdc binance coinbase kraken bybit okx kucoin huobi htx metamask trustwallet ledger
+trezor tron toncoin chainlink polygon avalanche shiba pepe uniswap opensea
+# Food, drinks, restaurants
+cocacola coca cola pepsi fanta sprite schweppes redbull monster burn adrenaline
+nescafe nespresso jacobs lavazza illy starbucks costa dunkin tchibo lipton greenfield
+ahmad nestle danone activia actimel prostokvashino chudo agusha valio president
+heinz hellmanns maggi knorr barilla mcdonalds burgerking kfc subway dominos papajohns
+pizzahut wendys tacobell chipotle popeyes vkusnoitochka teremok shokoladnitsa
+kofehauz dodo tanuki yakitoria milka snickers twix mars bounty kitkat nutella
+ferrero raffaello kinder haribo oreo lays pringles doritos cheetos skittles mms
+toblerone lindt ritter sport alpen gold babaevsky korkunov heineken carlsberg
+budweiser corona stella artois guinness tuborg baltika zhigulevskoe absolut smirnoff
+finlandia jameson jackdaniels johnnie walker chivas hennessy martell bacardi
+captain morgan jagermeister martini aperol campari moet chandon
+# Misc companies
+gazprom rosneft lukoil rosatom rostelecom mts megafon beeline tele yota motiv
+sber aeroflot pobeda utair rzhd sibur norilsk nornickel severstal rusal
+boeing airbus embraer bombardier lufthansa emirates qatar turkish etihad ryanair
+easyjet wizzair siemens bosch basf bayer pfizer moderna astrazeneca novartis roche
+sanofi johnson procter gamble unilever loreal colgate palmolive henkel ariel tide
+persil fairy domestos vanish finish calgon
+dhl fedex ups usps cdek boxberry pochta
+ikea xerox kodak polaroid lego hasbro mattel barbie playmobil
+spacex starlink neuralink blueorigin nasa roscosmos

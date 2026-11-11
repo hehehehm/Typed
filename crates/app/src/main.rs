@@ -167,7 +167,7 @@ fn real_main() -> Result<(), String> {
         "set" => {
             let (key, val) = match (args.get(1), args.get(2)) {
                 (Some(k), Some(v)) => (k.as_str(), v.as_str()),
-                _ => return Err("usage: layout-keeper set <autocorrect|auto-learn|hotkey|summon-hotkey|undo-hotkey|undo-on-backspace> <value>".into()),
+                _ => return Err("usage: layout-keeper set <autocorrect|auto-learn|hotkey|summon-hotkey|undo-hotkey|undo-on-backspace|fix-missing-spaces> <value>".into()),
             };
             let (mut cfg, path) = load()?;
             match key {
@@ -177,6 +177,7 @@ fn real_main() -> Result<(), String> {
                 "summon-hotkey" | "summon_hotkey" => cfg.summon_hotkey = val.parse::<Hotkey>()?,
                 "undo-hotkey" | "undo_hotkey" => cfg.undo_hotkey = val.parse::<Hotkey>()?,
                 "undo-on-backspace" | "undo_on_backspace" => cfg.undo_on_backspace = on_off(val)?,
+                "fix-missing-spaces" | "fix_missing_spaces" => cfg.fix_missing_spaces = on_off(val)?,
                 _ => return Err(format!("unknown setting '{key}'")),
             }
             cfg.save(&path).map_err(|e| e.to_string())?;
