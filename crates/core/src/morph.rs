@@ -281,8 +281,9 @@ pub fn is_known_form(d: &Dictionary, word: &str) -> bool {
 /// paradigm and a 4+ letter stem, so `системым` (only `системой` backs it) is rejected.
 pub fn candidate_rank(d: &Dictionary, w: &str) -> Option<u32> {
     match d.rank(w) {
-        // A listed form keeps its own rank unless it is too rare to count at all.
-        Some(r) if r < crate::typo::MAX_RANK => Some(r),
+        // A listed form keeps its own rank unless it is in the rarer half of the list,
+        // where the best rank of its forms counts instead.
+        Some(r) if r < crate::typo::TAIL_RANK => Some(r),
         Some(r) => Some(match evidence(d, w) {
             Some((_, sr, stem)) if stem >= MIN_STEM_DIRECT => r.min(sr),
             _ => r,

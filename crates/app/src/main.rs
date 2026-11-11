@@ -11,6 +11,8 @@
 //! layout-keeper convert <text…>       print text re-typed in the other layout (offline helper)
 //! layout-keeper check <word>          show the autocorrect decision for a word
 //! layout-keeper config-path           print the config file path
+//! layout-keeper admin-task on|off     (Windows, as administrator) register / delete the
+//!                                     «Typed» sign-in task used by «Запуск администратором»
 //! ```
 //! Logging: `RUST_LOG=debug layout-keeper` (typed text itself is never logged).
 
@@ -96,6 +98,11 @@ fn real_main() -> Result<(), String> {
     match cmd {
         "run" => {
             let (cfg, path) = load()?;
+            // «Запуск администратором»: a normal instance hands over to the elevated task.
+            #[cfg(windows)]
+            if cfg.run_as_admin && platform::win_admin::hand_over_to_task(&args) {
+                return Ok(());
+            }
             eprintln!("Typed {} — config: {}", env!("CARGO_PKG_VERSION"), path.display());
             log::info!(
                 "autocorrect={} auto_learn={} hotkey={} summon={} remembered_apps={}",
@@ -200,6 +207,8 @@ fn real_main() -> Result<(), String> {
             println!("{}", Config::default_path().display());
             Ok(())
         }
+        #[cfg(windows)]
+        "admin-task" => platform::win_admin::helper_main(&args),
         "-h" | "--help" | "help" => {
             println!("{}", usage());
             Ok(())

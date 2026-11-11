@@ -17,7 +17,7 @@ use crate::controller::{Command, Controller, Input};
 use layout_keeper_core::{layout, HotkeyCode, Key, Lang, Replacement};
 use std::cell::RefCell;
 use std::ptr;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, HANDLE, BOOL, HWND, LPARAM, LRESULT, WPARAM, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, HANDLE, BOOL, HWND, LPARAM, LRESULT, WPARAM, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ};
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
@@ -744,6 +744,10 @@ fn acquire_daemon_mutex() -> Result<Option<DaemonMutex>, String> {
     unsafe {
         let handle = CreateMutexW(ptr::null(), 0, name.as_ptr());
         let error = GetLastError();
+        if handle.is_null() && error == ERROR_ACCESS_DENIED {
+            // Created by a daemon running as administrator: it is already running.
+            return Ok(None);
+        }
         if handle.is_null() {
             return Err(format!("CreateMutexW(LayoutKeeper-daemon) failed: {error}"));
         }
@@ -766,6 +770,8 @@ pub fn daemon_is_running() -> Result<bool, String> {
         }
         let error = GetLastError();
         if error == ERROR_FILE_NOT_FOUND { Ok(false) }
+        // Owned by a daemon running as administrator.
+        else if error == ERROR_ACCESS_DENIED { Ok(true) }
         else { Err(format!("OpenMutexW(LayoutKeeper-daemon) failed: {error}")) }
     }
 }
@@ -802,6 +808,14 @@ fn post_quit_to_process(pid: u32) {
 /// Stop the background `layout-keeper.exe` (no-argument) process, leaving this GUI alive.
 /// Ask it to unhook via WM_QUIT first; only force-kill if it ignores that.
 pub fn stop_daemon() {
+    stop_daemon_except(&[]);
+}
+
+/// Like [`stop_daemon`], also sparing the processes in `keep`. A daemon running as
+/// administrator cannot be opened from a normal process: then the «Typed» task that
+/// started it is asked to end it.
+pub fn stop_daemon_except(keep: &[u32]) {
+    let mut unreachable = false;
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snap == INVALID_HANDLE_VALUE {
@@ -817,7 +831,7 @@ pub fn stop_daemon() {
                     let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
                     String::from_utf16_lossy(&entry.szExeFile[..end])
                 };
-                if name.eq_ignore_ascii_case("layout-keeper.exe") && entry.th32ProcessID != self_pid {
+                if name.eq_ignore_ascii_case("layout-keeper.exe") && entry.th32ProcessID != self_pid && !keep.contains(&entry.th32ProcessID) {
                     pids.push(entry.th32ProcessID);
                 }
                 if Process32NextW(snap, &mut entry) == 0 {
@@ -830,6 +844,7 @@ pub fn stop_daemon() {
             post_quit_to_process(pid);
             let handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZATION_SYNCHRONIZE, 0, pid);
             if handle.is_null() {
+                unreachable = true;
                 continue;
             }
             let waited = WaitForSingleObject(handle, 1500);
@@ -839,6 +854,9 @@ pub fn stop_daemon() {
             }
             CloseHandle(handle);
         }
+    }
+    if unreachable {
+        super::win_admin::end_task();
     }
 }
 
@@ -857,6 +875,10 @@ pub fn acquire_gui_mutex() -> Result<Option<GuiMutex>, String> {
     unsafe {
         let handle = CreateMutexW(ptr::null(), 0, name.as_ptr());
         let error = GetLastError();
+        if handle.is_null() && error == ERROR_ACCESS_DENIED {
+            // A settings window running as administrator holds it.
+            return Ok(None);
+        }
         if handle.is_null() {
             return Err(format!("CreateMutexW(LayoutKeeper-gui) failed: {error}"));
         }

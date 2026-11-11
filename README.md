@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build-installer.ps1
 ```
 
 Скрипт сам найдёт корень проекта, выполнит `cargo build --release`, создаст
-`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.66.dmg`). Отправьте тестерам этот
+`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.67.dmg`). Отправьте тестерам этот
 **один .dmg**; Rust им не нужен. Образ рассчитан на архитектуру Mac, где он собран
 (Apple Silicon или Intel); универсальная сборка здесь не выполняется.
 Дополнительные упаковщики не нужны; скрипт не скачивает их и не выполняет нотаризацию.
@@ -96,6 +96,12 @@ Cargo при первой сборке может потребоваться д�
   и после принятия прикрепите билет через `xcrun stapler staple`.
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
+
+## Что нового в 0.3.67
+
+- **Галочка «Запуск администратором»** (Windows, вкладка «Настройки»). Windows не даёт обычной программе переключать раскладку в программах, запущенных от имени администратора (MobaXterm, PowerShell и т. п.). Поэтому Typed, запущенный с обычного ярлыка, не мог переключать в них язык, а запущенный из PowerShell администратора — мог. С галочкой Typed запускается при входе в Windows через Планировщик заданий (задача «Typed») с правами администратора и без окна с вопросом. Windows спрашивает разрешение один раз — при включении (и при выключении). Обычный ярлык автозагрузки при включённой галочке сам передаёт запуск этой задаче, поэтому Typed по-прежнему работает в одном экземпляре. Если Typed почему-то работает без прав, в «Настройках» появится предупреждение и кнопка «Перезапустить с правами администратора». Снятая галочка удаляет задачу, со следующего входа Typed запускается как раньше. Деинсталлятор тоже удаляет задачу. В config.json это поле `run_as_admin`.
+- **Опечатки исправляются и в более редкие слова.** Раньше вариантом исправления могли быть только 20 тыс. самых частых слов, хотя в списке их 40 тыс. Поэтому «ярдык» не становился «ярлык» (оно ≈30 700-е по частоте), так же как minute, serve, member и тысячи других. Теперь в расчёт идёт весь список. Более редкая половина побеждает, только если опечатка внутри слова и последние две буквы совпадают: так незнакомые имена не превращаются в другие редкие слова. На тесте из ≈9 тыс. опечаток правильно исправляется RU 58,4% → 76,2%, EN 40,2% → 72,4%. Исправлений не на то слово стало меньше: RU 4,0% → 1,5%, EN 6,6% → 2,2%. Настоящие слова из полного словаря по-прежнему не трогаются.
+- Версия видна в заголовке окна: «Typed (ver. 0.3.67)».
 
 ## Что нового в 0.3.66
 
@@ -377,7 +383,7 @@ Cargo при первой сборке может потребоваться д�
 ## Что нового в 0.3.19
 
 - Если последнее слово нужно заменить (в том числе из пользовательского словаря), Enter и Tab больше не уходят в приложение раньше замены. Раньше чат отправлял «штсн», а исправленное «incy» улетало вторым сообщением.
-- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.66.dmg`.
+- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.67.dmg`.
 - Установщик для тестеров: `dist\Typed-Setup-0.3.19.exe`. Перед установкой закройте все `layout-keeper.exe` или дайте установщику остановить их сам.
 
 ## Что нового в 0.3.18
@@ -771,7 +777,7 @@ Build **on a Mac**:
 ```
 
 The script locates the repository root, runs `cargo build --release`, and creates
-`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.66.dmg`). Send testers this **one file**;
+`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.67.dmg`). Send testers this **one file**;
 they do not need Rust. The app targets the build Mac's architecture (Apple Silicon or Intel),
 not a universal binary. No extra packager or packaging downloads are needed; Cargo may
 need to fetch dependencies on its first build. The script never notarizes automatically.
@@ -797,6 +803,12 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.67
+
+- **«Запуск администратором» checkbox** (Windows, Settings). Windows does not let a normal process switch the layout in apps running as administrator (MobaXterm, an elevated PowerShell…), which is why Typed started from a normal shortcut did not switch there while one started from an elevated PowerShell did. With the box ticked Typed starts at sign-in through a Task Scheduler task («Typed») with the highest rights and no UAC prompt; Windows asks once when you tick (and untick) it. A normal start (startup shortcut, the settings window) hands over to the task, so there is still one daemon. If the daemon runs without rights anyway, Settings shows a warning and a «Перезапустить с правами администратора» button. Unticking deletes the task (normal autostart from the next sign-in); the uninstaller deletes it too. Config: `run_as_admin`.
+- **Typos are fixed into rarer words too.** Fix targets were capped at the 20 000 most frequent words although the list has 40 000, so `ярдык` never became `ярлык` (rank ≈30 700), nor `minute`, `serve`, `member`… Now the whole list counts; the rarer half wins only when the slip is inside the word (last two letters kept), so unknown names don't turn into other rare words. Synthetic typos (≈9 k) fixed right: RU 58.4% → 76.2%, EN 40.2% → 72.4%; fixed into a wrong word: RU 4.0% → 1.5%, EN 6.6% → 2.2%. Real words from the full-form sets are still never touched.
+- The window title shows the version: «Typed (ver. 0.3.67)».
 
 ### New in 0.3.66
 
@@ -1078,7 +1090,7 @@ settings does not stop the daemon.
 ### New in 0.3.19
 
 - If the last word needs correcting (including a custom-dictionary word), Enter and Tab are held back until the replacement is typed. Previously a chat would send «штсн», then the corrected «incy» as a second message.
-- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.66.dmg`.
+- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.67.dmg`.
 - Tester installer: `dist\Typed-Setup-0.3.19.exe`. Stop all `layout-keeper.exe` processes first, or let the installer stop them.
 
 ### New in 0.3.18

@@ -1,5 +1,5 @@
 ﻿#ifndef MyAppVersion
-  #define MyAppVersion "0.3.66"
+  #define MyAppVersion "0.3.67"
 #endif
 #ifndef BuildDir
   #define BuildDir "..\..\target\release"
@@ -75,12 +75,37 @@ Filename: "{app}\layout-keeper.exe"; Parameters: "gui"; WorkingDir: "{app}"; Des
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM layout-keeper.exe /T"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "CloseTypedDaemon"
 
 [Code]
+// «Запуск администратором» (0.3.67+) registers the Task Scheduler task "Typed".
+function TypedTaskExists: Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(ExpandConstant('{sys}\schtasks.exe'), '/Query /TN "Typed"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
 procedure StopTypedProcesses;
 var
   ResultCode: Integer;
 begin
+  // A daemon started by the task runs as administrator: taskkill from this
+  // non-elevated setup cannot end it, the task itself can.
+  if TypedTaskExists then
+    Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "Typed"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM layout-keeper.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(400);
+end;
+
+// Uninstall: delete the task. It was created with administrator rights, so if a plain
+// delete fails, ask Windows once (UAC) to delete it as administrator.
+procedure DeleteTypedTask;
+var
+  ResultCode: Integer;
+begin
+  if not TypedTaskExists then
+    Exit;
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "Typed" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if TypedTaskExists then
+    ShellExec('runas', ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "Typed" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 // Uninstall entry written by every Typed / LayoutKeeper installer.
@@ -164,7 +189,13 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
+  begin
     StopTypedProcesses;
+    // A new setup removes the previous version silently: keep the task then, so an
+    // update does not switch «Запуск администратором» off (same exe path).
+    if not UninstallSilent then
+      DeleteTypedTask;
+  end;
 end;
 
 [InstallDelete]

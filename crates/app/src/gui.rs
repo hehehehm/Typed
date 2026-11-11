@@ -89,7 +89,15 @@ struct App {
     welcome_dont_show: bool,
     logo_textures: [Option<egui::TextureHandle>; 3],
     logo_fade_textures: [Option<egui::TextureHandle>; 3],
+    /// «Запуск администратором» being switched: (wanted value, helper result when done).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    admin_job: Option<(bool, AdminJobResult)>,
+    /// Last check whether the daemon runs as administrator, and when it was made.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    daemon_admin: (Option<bool>, Option<Instant>),
 }
+
+type AdminJobResult = Arc<Mutex<Option<Result<(), String>>>>;
 
 #[derive(PartialEq, Clone, Copy)]
 enum HotkeySlot {
@@ -634,6 +642,8 @@ impl App {
                 "Отмена совпадает с другим сочетанием — сработает только отмена.",
             );
         }
+        #[cfg(windows)]
+        self.admin_section(ui);
         ui.separator();
         ui.heading("Оформление");
         changed |= ui.checkbox(&mut self.cfg.light_theme, "Светлый фон").changed();
@@ -644,8 +654,70 @@ impl App {
         changed |= self.logo_picker(ui);
         ui.separator();
         ui.add(egui::Label::new(egui::RichText::new(format!("Конфиг: {}", self.path.display())).small()).wrap());
+        ui.small(WINDOW_TITLE);
         if changed {
             self.save();
+        }
+    }
+
+    /// «Запуск администратором» (Windows): see `platform::win_admin`.
+    #[cfg(windows)]
+    fn admin_section(&mut self, ui: &mut egui::Ui) {
+        use crate::platform::win_admin;
+        ui.separator();
+        // Finished helper (the UAC prompt runs off the UI thread).
+        let done = self.admin_job.as_ref().and_then(|(on, r)| r.lock().ok().and_then(|mut g| g.take()).map(|r| (*on, r)));
+        if let Some((on, result)) = done {
+            self.admin_job = None;
+            self.daemon_admin = (None, None);
+            match result {
+                Ok(()) => {
+                    self.cfg.run_as_admin = on;
+                    self.save();
+                    self.status = if on {
+                        "Готово: Typed перезапущен с правами администратора и так будет запускаться при входе в Windows.".into()
+                    } else {
+                        "Готово: задача удалена. Со следующего входа в Windows Typed запускается как обычно.".into()
+                    };
+                }
+                Err(e) if e == "cancelled" => self.status = "Windows не дал прав администратора — настройка не изменена.".into(),
+                Err(e) => self.status = format!("Не получилось изменить запуск администратором: {e}"),
+            }
+        }
+        let busy = self.admin_job.is_some();
+        let mut want = self.cfg.run_as_admin;
+        let resp = ui.add_enabled(!busy, egui::Checkbox::new(&mut want, "Запуск администратором"));
+        if resp.changed() && !busy {
+            let result: AdminJobResult = Arc::new(Mutex::new(None));
+            let slot = result.clone();
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let r = win_admin::run_helper_elevated(want);
+                if let Ok(mut g) = slot.lock() {
+                    *g = Some(r);
+                }
+                ctx.request_repaint();
+            });
+            self.admin_job = Some((want, result));
+            self.status = "Windows спросит разрешение (один раз)…".into();
+        }
+        ui.small("Нужно, чтобы раскладка переключалась и в программах, запущенных от имени администратора (MobaXterm, PowerShell и т. п.): Windows не даёт обычной программе менять в них раскладку. Typed будет запускаться при входе через Планировщик заданий, без окна с вопросом. Windows спросит разрешение только при включении и выключении.");
+        if self.cfg.run_as_admin && !busy {
+            let stale = self.daemon_admin.1.map_or(true, |t| t.elapsed() > Duration::from_secs(3));
+            if stale {
+                self.daemon_admin = (win_admin::other_instance_elevated(), Some(Instant::now()));
+            }
+            if self.daemon_admin.0 == Some(false) {
+                ui.colored_label(warn_color(ui), "Typed сейчас работает без прав администратора — в окнах администратора раскладка не переключится.");
+                if ui.button("Перезапустить с правами администратора").clicked() {
+                    crate::platform::stop_daemon();
+                    match win_admin::run_task() {
+                        Ok(()) => self.status = "Перезапускаю Typed с правами администратора…".into(),
+                        Err(e) => self.status = format!("Не удалось запустить задачу «{}»: {e}. Снимите и снова поставьте галочку.", win_admin::TASK_NAME),
+                    }
+                    self.daemon_admin = (None, None);
+                }
+            }
         }
     }
 
@@ -790,6 +862,7 @@ impl App {
         ui.add_space(10.0);
         ui.style_mut().visuals.override_text_color = Some(body);
         ui.add(egui::Label::new(egui::RichText::new("Typed").color(heading).size(28.0)).halign(egui::Align::Center));
+        ui.add(egui::Label::new(egui::RichText::new(concat!("ver. ", env!("CARGO_PKG_VERSION"))).color(body).small()).halign(egui::Align::Center));
         ui.add_space(8.0);
         ui.add(
             egui::Label::new(egui::RichText::new(
@@ -1196,6 +1269,8 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         welcome_dont_show: false,
         logo_textures: [None, None, None],
         logo_fade_textures: [None, None, None],
+        admin_job: None,
+        daemon_admin: (None, None),
         tray: crate::tray::start(logo_index),
         allow_close: false,
         ui_visible: !start_hidden,

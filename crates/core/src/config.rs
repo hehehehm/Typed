@@ -337,6 +337,10 @@ pub struct Config {
     /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
     #[serde(default = "default_true")]
     pub fix_missing_spaces: bool,
+    /// Windows: start Typed with administrator rights (a «Typed» Task Scheduler task at
+    /// sign-in), so layouts also switch in apps that run as administrator.
+    #[serde(default)]
+    pub run_as_admin: bool,
 }
 
 impl Default for Config {
@@ -365,6 +369,7 @@ impl Default for Config {
             undo_on_backspace: true,
             never_correct: Vec::new(),
             fix_missing_spaces: true,
+            run_as_admin: false,
         }
     }
 }
@@ -663,6 +668,7 @@ mod tests {
         assert_eq!(c.launch_count("firefox"), 2);
         assert!(c.remove_app("firefox"));
         assert_eq!(c.launch_count("firefox"), 0);
+        assert!(!old.run_as_admin);
         let light = Config::from_json(r#"{"light_theme":true}"#).unwrap();
         assert!(light.light_theme);
         assert_eq!(Config::from_json(&light.to_json()).unwrap(), light);

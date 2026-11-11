@@ -3,6 +3,8 @@
 //!
 //! Conservative on purpose: words of 4+ letters only, natural casing only, and only when
 //! one candidate clearly wins (the only one, or far more frequent than the runner-up).
+//! Fix targets come from the whole 40 000-word list; the rarer half wins only when the
+//! slip keeps the last two letters.
 //! Two edits are tried only for long words (8+ letters) that have no one-edit candidate.
 
 use crate::dict::{self, Dictionary};
@@ -13,8 +15,13 @@ use crate::morph;
 pub const MIN_LEN: usize = 4;
 /// Minimum letters for a two-edit fix.
 pub const MIN_LEN_2: usize = 8;
-/// Candidates rarer than this are ignored (names and junk live in the long tail).
-pub const MAX_RANK: u32 = 20_000;
+/// Candidates rarer than this are ignored. Since 0.3.67 this is the whole 40 000-word
+/// list: up to 0.3.66 it was 20 000 (the old list size), so every word ranked
+/// 20 000–40 000 (`ярлык`, `minute`, `serve`) could never be a fix and `ярдык` stayed.
+pub const MAX_RANK: u32 = 40_000;
+/// Candidates ranked from here on (the rarer half of the list, where names live) count
+/// only when the slip keeps the typed word's last two letters ([`tail_ok`]).
+pub const TAIL_RANK: u32 = 20_000;
 /// The winner must be this many times more frequent than the runner-up.
 pub const DOMINANCE: u32 = 20;
 
@@ -115,6 +122,9 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
         }
         .filter(|&r| r < MAX_RANK)
     };
+    // A rare candidate always competes (it can veto a wrong fix: `minut` is not `mint`
+    // when `minute` exists), but wins only when [`tail_ok`].
+    let can_win = |r: u32, cand: &str| r < TAIL_RANK || tail_ok(&lower, cand);
     let mut pick = Pick::new(&lower);
     for cand in edits1(&lower, &alphabet) {
         if cand.chars().count() < MIN_LEN - 1 {
@@ -136,8 +146,9 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
         if let Some(r) = rank(&cand) {
             // Two neighbour letters swapped is the most common slip: such a fix counts
             // as SWAP_BONUS times more frequent (`компьютре` → `компьютер`, not `компьютере`).
+            let ok = can_win(r, &cand);
             let r = if is_swap(&lower, &cand) { r / SWAP_BONUS } else { r };
-            pick.offer(r, cand);
+            pick.offer(r, cand, ok);
         }
     }
     // A letter typed two places off (`чтокой` → `точкой`, `tihs` style slips across one
@@ -148,7 +159,8 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
                 continue;
             }
             if let Some(r) = rank(&cand) {
-                pick.offer(r, cand);
+                let ok = can_win(r, &cand);
+                pick.offer(r, cand, ok);
             }
         }
     }
@@ -183,7 +195,8 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
                         && (!swaps_only || same_letters(&fv))
                         && morph::reinflect_ok(d, &f, safe)
                     {
-                        pick.offer(r, f);
+                        let ok = can_win(r, &f);
+                        pick.offer(r, f, ok);
                         offered = true;
                     }
                 }
@@ -202,12 +215,20 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
                 && distance_kb(&lower, &cv, 2, lang) <= 2
                 && (!swaps_only || same_letters(&cv))
             {
-                pick.offer(r, cand.to_string());
+                pick.offer(r, cand.to_string(), can_win(r, cand));
             }
         }
     }
     let w = pick.winner()?;
     Some(match_case(word, &w))
+}
+
+/// A rarer candidate (rank [`TAIL_RANK`]+) must keep the typed last two letters: the
+/// slip is inside the word (`ярдык` → `ярлык`), while a changed or dropped ending turns
+/// unknown names and forms into other rare words (`айса` → `айс`, `minut` → `mint`).
+fn tail_ok(typed: &[char], cand: &str) -> bool {
+    let cv: Vec<char> = cand.chars().collect();
+    typed.len() >= 2 && cv.len() >= 2 && typed[typed.len() - 2..] == cv[cv.len() - 2..]
 }
 
 /// Two-edit fixes must touch the stem: the words differ before their last two letters
@@ -321,7 +342,7 @@ fn substitution_ok(typed: &[char], cand: &str, lang: Lang) -> bool {
 /// English word built from a listed one with a common suffix or prefix
 /// (`typos`, `installer`, `uninstall`, `hiding`): not a typo.
 pub fn en_known_form(d: &Dictionary, w: &str) -> bool {
-    let known = |b: &str| b.chars().count() >= 3 && d.rank(b).is_some_and(|r| r < MAX_RANK * 2);
+    let known = |b: &str| b.chars().count() >= 3 && d.rank(b).is_some_and(|r| r < TAIL_RANK * 2);
     for suf in ["s", "es", "ed", "d", "ing", "er", "ers", "est", "ly", "ness", "able", "ment", "ments"] {
         if let Some(base) = w.strip_suffix(suf) {
             if known(base) || known(&format!("{base}e")) {
@@ -391,7 +412,7 @@ struct Pick {
 
 #[derive(Default)]
 struct Ranked {
-    best: Option<(u32, String)>,
+    best: Option<(u32, String, bool)>,
     second: Option<u32>,
 }
 
@@ -405,12 +426,13 @@ impl Pick {
         self.same.best.is_none() && self.other.best.is_none()
     }
 
-    fn offer(&mut self, r: u32, cand: String) {
+    /// `ok`: the candidate may win; otherwise it only competes (see `can_win`).
+    fn offer(&mut self, r: u32, cand: String, ok: bool) {
         let cv: Vec<char> = cand.chars().collect();
         if cv.ends_with(&self.suffix) {
-            self.same.offer(r, cand);
+            self.same.offer(r, cand, ok);
         } else {
-            self.other.offer(r, cand);
+            self.other.offer(r, cand, ok);
         }
     }
 
@@ -424,20 +446,23 @@ impl Pick {
 }
 
 impl Ranked {
-    fn offer(&mut self, r: u32, cand: String) {
+    fn offer(&mut self, r: u32, cand: String, ok: bool) {
         match &self.best {
-            Some((_, bw)) if *bw == cand => {}
-            Some((br, _)) if r < *br => {
+            Some((_, bw, _)) if *bw == cand => {}
+            Some((br, _, _)) if r < *br => {
                 self.second = Some(self.second.map_or(*br, |s| s.min(*br)));
-                self.best = Some((r, cand));
+                self.best = Some((r, cand, ok));
             }
             Some(_) => self.second = Some(self.second.map_or(r, |s| s.min(r))),
-            None => self.best = Some((r, cand)),
+            None => self.best = Some((r, cand, ok)),
         }
     }
 
     fn winner(self) -> Option<String> {
-        let (r, w) = self.best?;
+        let (r, w, ok) = self.best?;
+        if !ok {
+            return None;
+        }
         if let Some(s) = self.second {
             if r.saturating_add(1).saturating_mul(DOMINANCE) > s.saturating_add(1) {
                 return None;
@@ -590,6 +615,21 @@ mod tests {
         // Ordinary slips inside the word are still fixed.
         assert_eq!(suggest("wrold", Lang::En).as_deref(), Some("world"));
         assert_eq!(suggest("becuase", Lang::En).as_deref(), Some("because"));
+    }
+
+    #[test]
+    fn rare_half_of_the_list_0_3_67() {
+        // Up to 0.3.66 words ranked 20 000+ (`ярлык` is ~30 700) were never fixes.
+        assert_eq!(suggest("ярдык", Lang::Ru).as_deref(), Some("ярлык"));
+        assert_eq!(suggest("Ярдык", Lang::Ru).as_deref(), Some("Ярлык"));
+        assert_eq!(suggest("ярдыки", Lang::Ru).as_deref(), Some("ярлыки"));
+        assert!(tail_ok(&"ярдык".chars().collect::<Vec<_>>(), "ярлык"));
+        // A rare fix that changes the ending does not win.
+        assert!(!tail_ok(&"айса".chars().collect::<Vec<_>>(), "айс"));
+        // Real words still stay.
+        for ok in ["ярлык", "ярлыки", "скидывать"] {
+            assert_eq!(suggest(ok, Lang::Ru), None, "{ok}");
+        }
     }
 
     #[test]

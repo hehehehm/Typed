@@ -9,6 +9,8 @@ pub use linux::{probe, type_text};
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
+pub mod win_admin;
+#[cfg(target_os = "windows")]
 pub use windows::{acquire_gui_mutex, ensure_daemon_running, probe, raise_settings_window, run, stop_daemon, type_text, wake_settings_window_async};
 
 #[cfg(target_os = "macos")]
