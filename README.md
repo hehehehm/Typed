@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build-installer.ps1
 ```
 
 Скрипт сам найдёт корень проекта, выполнит `cargo build --release`, создаст
-`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.65.dmg`). Отправьте тестерам этот
+`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.66.dmg`). Отправьте тестерам этот
 **один .dmg**; Rust им не нужен. Образ рассчитан на архитектуру Mac, где он собран
 (Apple Silicon или Intel); универсальная сборка здесь не выполняется.
 Дополнительные упаковщики не нужны; скрипт не скачивает их и не выполняет нотаризацию.
@@ -96,6 +96,10 @@ Cargo при первой сборке может потребоваться д�
   и после принятия прикрепите билет через `xcrun stapler staple`.
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
+
+## Что нового в 0.3.66
+
+- Свёрнутое или спрятанное в трей окно настроек больше не грузит процессор и видеокарту: пока его не видно, оно просыпается не чаще 4 раз в секунду.
 
 ## Что нового в 0.3.65
 
@@ -373,7 +377,7 @@ Cargo при первой сборке может потребоваться д�
 ## Что нового в 0.3.19
 
 - Если последнее слово нужно заменить (в том числе из пользовательского словаря), Enter и Tab больше не уходят в приложение раньше замены. Раньше чат отправлял «штсн», а исправленное «incy» улетало вторым сообщением.
-- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.65.dmg`.
+- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.66.dmg`.
 - Установщик для тестеров: `dist\Typed-Setup-0.3.19.exe`. Перед установкой закройте все `layout-keeper.exe` или дайте установщику остановить их сам.
 
 ## Что нового в 0.3.18
@@ -767,7 +771,7 @@ Build **on a Mac**:
 ```
 
 The script locates the repository root, runs `cargo build --release`, and creates
-`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.65.dmg`). Send testers this **one file**;
+`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.66.dmg`). Send testers this **one file**;
 they do not need Rust. The app targets the build Mac's architecture (Apple Silicon or Intel),
 not a universal binary. No extra packager or packaging downloads are needed; Cargo may
 need to fetch dependencies on its first build. The script never notarizes automatically.
@@ -794,7 +798,11 @@ settings does not stop the daemon.
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
 
-### New in 0.3.65
+### New in 0.3.66
+
+- The hidden or minimized settings window no longer burns CPU/GPU: while invisible it wakes at most 4 times a second.
+
+## New in 0.3.65
 
 - **No CPU use while the settings window is minimized.** The minimized window was hidden to the tray again on every frame, and each hide woke the window up again (~6% CPU). It is now hidden once and a minimized or hidden window draws nothing; with the vault open a once-a-minute wake-up keeps the idle lock working.
 - **Brand and product names.** ≈14.2 k new Latin names (phones, electronics, cars, fashion, software, apps, games, websites, crypto, food and drinks, retail) and ≈6.4 k Russian spellings of popular brands with case forms (`реалми`, `сяоми`, `айфона`, `айфоном`, `ютубе`) from Wikidata (CC0) plus curated lists. `realme` is no longer "fixed" to `realm`, and `куфдьу` becomes `realme`. Names are known-only (never offered as fixes); tokens shorter than 4 letters and tokens that read as a real word in the other layout are left out, so wrong-layout conversion is unchanged (100% in the audit).
@@ -1070,7 +1078,7 @@ settings does not stop the daemon.
 ### New in 0.3.19
 
 - If the last word needs correcting (including a custom-dictionary word), Enter and Tab are held back until the replacement is typed. Previously a chat would send «штсн», then the corrected «incy» as a second message.
-- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.65.dmg`.
+- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.66.dmg`.
 - Tester installer: `dist\Typed-Setup-0.3.19.exe`. Stop all `layout-keeper.exe` processes first, or let the installer stop them.
 
 ### New in 0.3.18

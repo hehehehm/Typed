@@ -38,6 +38,9 @@ pub(crate) fn is_self(app: &str) -> bool {
         .is_some_and(|p| p == a)
 }
 
+/// Shortest gap between frames while the window is hidden or minimized.
+const IDLE_FRAME: Duration = Duration::from_millis(250);
+
 pub(crate) fn hide_window(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -79,6 +82,9 @@ struct App {
     ui_visible: bool,
     /// Dock icon / reopen hook applied once after the native window exists.
     chrome_ready: bool,
+    /// Throttle for frames while hidden or minimized (see `IDLE_FRAME`).
+    last_idle_frame: Instant,
+    idle_frames: u64,
     welcome_open: bool,
     welcome_dont_show: bool,
     logo_textures: [Option<egui::TextureHandle>; 3],
@@ -1002,6 +1008,18 @@ impl eframe::App for App {
             // timed repaint; restoring the window sends its own events.
             // Hidden to the tray: do not paint or resize. A 200ms repaint here was
             // leaking gigabytes of GPU memory on Windows while the window was invisible.
+            // Something can still wake eframe in a loop while the window is hidden or
+            // minimized (Windows keeps sending events; eframe paints on each). Whatever the
+            // source, cap idle frames at 4 per second so it stays near 0% CPU / GPU.
+            let since = self.last_idle_frame.elapsed();
+            if since < IDLE_FRAME {
+                std::thread::sleep(IDLE_FRAME - since);
+            }
+            self.last_idle_frame = Instant::now();
+            self.idle_frames += 1;
+            if self.idle_frames % 240 == 0 {
+                log::debug!("hidden GUI woke {} times", self.idle_frames);
+            }
             // An unlocked vault still needs its idle lock: one cheap wake a minute.
             self.vault.tick(ctx, self.cfg.vault_idle_minutes);
             if self.vault.is_unlocked() {
@@ -1182,6 +1200,8 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         allow_close: false,
         ui_visible: !start_hidden,
         chrome_ready: false,
+        last_idle_frame: Instant::now(),
+        idle_frames: 0,
     };
     let viewport = {
         let mut vp = egui::ViewportBuilder::default()
