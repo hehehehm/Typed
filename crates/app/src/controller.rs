@@ -575,6 +575,9 @@ mod tests {
         let mut c = ctl();
         c.tick(Some(r"c:\users\x\appdata\local\typed\layout-keeper.exe"), Some(Lang::Ru));
         assert!(typ(&mut c, "ghbdtn ").is_empty());
+        let mut c = ctl();
+        c.tick(Some(r"c:\users\x\appdata\local\typed\typed.exe"), Some(Lang::Ru));
+        assert!(typ(&mut c, "ghbdtn ").is_empty());
     }
 
     #[test]
@@ -668,9 +671,11 @@ mod tests {
 
 }
 
-/// Our own GUI: `layout-keeper.exe` on Windows, `layout-keeper-bin` / `app.layoutkeeper` on macOS.
+/// Our own GUI: `typed.exe` (before 0.3.68 `layout-keeper.exe`) on Windows,
+/// `layout-keeper-bin` / `app.layoutkeeper` on macOS.
 fn is_own_app(app: &str) -> bool {
     let a = app.to_ascii_lowercase();
-    a.contains("layout-keeper.exe") || a.contains("layout-keeper-bin") || a.contains("app.layoutkeeper")
+    a == "typed.exe" || a.ends_with("\\typed.exe") || a.ends_with("/typed") || a.ends_with("\\typed")
+        || a.contains("layout-keeper.exe") || a.contains("layout-keeper-bin") || a.contains("app.layoutkeeper")
         || a.ends_with("/layout-keeper") || a.ends_with("\\layout-keeper")
 }

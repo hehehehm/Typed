@@ -805,7 +805,7 @@ fn post_quit_to_process(pid: u32) {
     }
 }
 
-/// Stop the background `layout-keeper.exe` (no-argument) process, leaving this GUI alive.
+/// Stop the background `typed.exe` (or pre-0.3.68 `layout-keeper.exe`) daemon process, leaving this GUI alive.
 /// Ask it to unhook via WM_QUIT first; only force-kill if it ignores that.
 pub fn stop_daemon() {
     stop_daemon_except(&[]);
@@ -831,7 +831,7 @@ pub fn stop_daemon_except(keep: &[u32]) {
                     let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
                     String::from_utf16_lossy(&entry.szExeFile[..end])
                 };
-                if name.eq_ignore_ascii_case("layout-keeper.exe") && entry.th32ProcessID != self_pid && !keep.contains(&entry.th32ProcessID) {
+                if super::win_admin::is_typed_exe_name(&name) && entry.th32ProcessID != self_pid && !keep.contains(&entry.th32ProcessID) {
                     pids.push(entry.th32ProcessID);
                 }
                 if Process32NextW(snap, &mut entry) == 0 {

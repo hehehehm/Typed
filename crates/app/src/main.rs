@@ -1,20 +1,20 @@
 //! Typed (type daemon) desktop daemon + CLI.
 //!
 //! ```text
-//! layout-keeper [run]                 start the background daemon (default)
-//! layout-keeper gui                 settings window (edits config.json) + encrypted vault tab
-//! layout-keeper vault status          whether vault.bin exists (never prints secrets)
-//! layout-keeper status                config path, settings, focused app and layout now
-//! layout-keeper set-app <id> <en|ru>  remember a layout for an app
-//! layout-keeper remove-app <id>       forget an app
-//! layout-keeper list-apps             show remembered apps
-//! layout-keeper convert <text…>       print text re-typed in the other layout (offline helper)
-//! layout-keeper check <word>          show the autocorrect decision for a word
-//! layout-keeper config-path           print the config file path
-//! layout-keeper admin-task on|off     (Windows, as administrator) register / delete the
+//! typed [run]                 start the background daemon (default)
+//! typed gui                 settings window (edits config.json) + encrypted vault tab
+//! typed vault status          whether vault.bin exists (never prints secrets)
+//! typed status                config path, settings, focused app and layout now
+//! typed set-app <id> <en|ru>  remember a layout for an app
+//! typed remove-app <id>       forget an app
+//! typed list-apps             show remembered apps
+//! typed convert <text…>       print text re-typed in the other layout (offline helper)
+//! typed check <word>          show the autocorrect decision for a word
+//! typed config-path           print the config file path
+//! typed admin-task on|off     (Windows, as administrator) register / delete the
 //!                                     «Typed» sign-in task used by «Запуск администратором»
 //! ```
-//! Logging: `RUST_LOG=debug layout-keeper` (typed text itself is never logged).
+//! Logging: `RUST_LOG=debug typed` (typed text itself is never logged).
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -38,21 +38,21 @@ fn usage() -> &'static str {
     "Typed — per-app keyboard layout memory and wrong-layout autocorrect (local only)
 
 USAGE:
-  layout-keeper [run]                 start the daemon (default)
-  layout-keeper gui                   open the settings window (run the daemon separately)
-  layout-keeper vault status          is there an encrypted vault file (manage it in `gui` → Сейф)
-  layout-keeper status                show config path, settings, focused app/layout
-  layout-keeper set-app <app-id> <en|ru>
-  layout-keeper remove-app <app-id>
-  layout-keeper list-apps
-  layout-keeper set <autocorrect|auto-learn> <on|off>
-  layout-keeper set hotkey <Combo>            e.g. Pause, ShiftShift, Ctrl+Shift+P
-  layout-keeper set summon-hotkey <Combo>     e.g. Ctrl+Shift+V (opens settings on the vault tab)
-  layout-keeper set undo-hotkey <Combo>       e.g. Ctrl+Alt+Z (undo the last autocorrection, never fix that word again)
-  layout-keeper set undo-on-backspace on|off  Backspace right after an autocorrection undoes it
-  layout-keeper convert <text...>     re-type text in the other layout (e.g. ghbdtn -> привет)
-  layout-keeper check <word>          explain the autocorrect decision for a word
-  layout-keeper config-path
+  typed [run]                 start the daemon (default)
+  typed gui                   open the settings window (run the daemon separately)
+  typed vault status          is there an encrypted vault file (manage it in `gui` → Сейф)
+  typed status                show config path, settings, focused app/layout
+  typed set-app <app-id> <en|ru>
+  typed remove-app <app-id>
+  typed list-apps
+  typed set <autocorrect|auto-learn> <on|off>
+  typed set hotkey <Combo>            e.g. Pause, ShiftShift, Ctrl+Shift+P
+  typed set summon-hotkey <Combo>     e.g. Ctrl+Shift+V (opens settings on the vault tab)
+  typed set undo-hotkey <Combo>       e.g. Ctrl+Alt+Z (undo the last autocorrection, never fix that word again)
+  typed set undo-on-backspace on|off  Backspace right after an autocorrection undoes it
+  typed convert <text...>     re-type text in the other layout (e.g. ghbdtn -> привет)
+  typed check <word>          explain the autocorrect decision for a word
+  typed config-path
 
 ENV: LAYOUT_KEEPER_CONFIG=<file> overrides the config path; RUST_LOG=debug for verbose logs."
 }
@@ -119,7 +119,7 @@ fn real_main() -> Result<(), String> {
                 let p = layout_keeper_core::vault::default_path();
                 let present = p.exists();
                 println!("vault file:   {} ({})", p.display(), if present { "present" } else { "absent" });
-                println!("encryption:   Argon2id + XChaCha20-Poly1305; unlock and manage it in `layout-keeper gui` → Сейф");
+                println!("encryption:   Argon2id + XChaCha20-Poly1305; unlock and manage it in `typed gui` → Сейф");
                 Ok(())
             }
             Some(other) => Err(format!("unknown vault subcommand '{other}' (only `vault status`; secrets are never taken on the command line)")),
@@ -141,7 +141,7 @@ fn real_main() -> Result<(), String> {
         "set-app" => {
             let (id, l) = match (args.get(1), args.get(2)) {
                 (Some(i), Some(l)) => (i, l),
-                _ => return Err("usage: layout-keeper set-app <app-id> <en|ru>".into()),
+                _ => return Err("usage: typed set-app <app-id> <en|ru>".into()),
             };
             let lang = Lang::parse(l).ok_or_else(|| format!("unknown layout '{l}' (en|ru)"))?;
             let (mut cfg, path) = load()?;
@@ -151,7 +151,7 @@ fn real_main() -> Result<(), String> {
             Ok(())
         }
         "remove-app" => {
-            let id = args.get(1).ok_or("usage: layout-keeper remove-app <app-id>")?;
+            let id = args.get(1).ok_or("usage: typed remove-app <app-id>")?;
             let (mut cfg, path) = load()?;
             if cfg.remove_app(id) {
                 cfg.save(&path).map_err(|e| e.to_string())?;
@@ -174,7 +174,7 @@ fn real_main() -> Result<(), String> {
         "set" => {
             let (key, val) = match (args.get(1), args.get(2)) {
                 (Some(k), Some(v)) => (k.as_str(), v.as_str()),
-                _ => return Err("usage: layout-keeper set <autocorrect|auto-learn|hotkey|summon-hotkey|undo-hotkey|undo-on-backspace|fix-missing-spaces> <value>".into()),
+                _ => return Err("usage: typed set <autocorrect|auto-learn|hotkey|summon-hotkey|undo-hotkey|undo-on-backspace|fix-missing-spaces> <value>".into()),
             };
             let (mut cfg, path) = load()?;
             match key {
@@ -198,7 +198,7 @@ fn real_main() -> Result<(), String> {
             Ok(())
         }
         "check" => {
-            let w = args.get(1).ok_or("usage: layout-keeper check <word>")?;
+            let w = args.get(1).ok_or("usage: typed check <word>")?;
             let (cfg, _) = load()?;
             println!("{:?}", Engine::new(cfg.engine_options()).decide(w));
             Ok(())
@@ -214,7 +214,7 @@ fn real_main() -> Result<(), String> {
             Ok(())
         }
         "-V" | "--version" => {
-            println!("layout-keeper {}", env!("CARGO_PKG_VERSION"));
+            println!("typed {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         other => Err(format!("unknown command '{other}'\n\n{}", usage())),

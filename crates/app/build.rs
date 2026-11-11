@@ -20,7 +20,7 @@ fn main() {
         res.set("ProductName", "Typed");
         res.set("FileDescription", "Typed");
         res.set("InternalName", "Typed");
-        res.set("OriginalFilename", "layout-keeper.exe");
+        res.set("OriginalFilename", "typed.exe");
         res.set("CompanyName", "Typed");
         res.set("LegalCopyright", "Typed");
         res.set("Comments", "Typed");

@@ -155,7 +155,7 @@ fn nsstring(s: &str) -> Id {
 
 fn is_own_app(id: &str) -> bool {
     let a = id.to_ascii_lowercase();
-    a == "app.layoutkeeper" || a.contains("layoutkeeper") || a.contains("layout-keeper")
+    a == "app.layoutkeeper" || a.contains("layoutkeeper") || a.contains("layout-keeper") || a.ends_with("/typed")
 }
 
 pub fn accessibility_trusted() -> bool {

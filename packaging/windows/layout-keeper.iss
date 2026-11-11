@@ -1,5 +1,5 @@
 ﻿#ifndef MyAppVersion
-  #define MyAppVersion "0.3.67"
+  #define MyAppVersion "0.3.68"
 #endif
 #ifndef BuildDir
   #define BuildDir "..\..\target\release"
@@ -27,10 +27,10 @@ SolidCompression=yes
 WizardStyle=modern
 ShowLanguageDialog=auto
 CloseApplications=yes
-CloseApplicationsFilter=layout-keeper.exe
+CloseApplicationsFilter=typed.exe,layout-keeper.exe
 RestartApplications=no
 SetupIconFile=..\..\assets\typed.ico
-UninstallDisplayIcon={app}\layout-keeper.exe
+UninstallDisplayIcon={app}\typed.exe
 ; User data is NEVER deleted, neither by this setup nor by its uninstaller, nor by the
 ; previous-version removal in [Code]: config.json, vault.bin and typed.chk live in
 ; %APPDATA%\typed (legacy: %APPDATA%\layout-keeper), i.e. AppData\Roaming, while the
@@ -56,26 +56,27 @@ Name: "desktopicon"; Description: "{cm:DesktopIcon}"; Flags: unchecked
 Name: "startup"; Description: "{cm:Startup}"
 
 [Files]
-Source: "{#BuildDir}\layout-keeper.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Since 0.3.68 the program is typed.exe (was layout-keeper.exe, removed in [InstallDelete]).
+Source: "{#BuildDir}\typed.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "start-hidden.vbs"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Settings ensure the background daemon is running; never start a second visible daemon.
-Name: "{group}\Typed"; Filename: "{app}\layout-keeper.exe"; Parameters: "gui"; WorkingDir: "{app}"
-Name: "{userdesktop}\Typed"; Filename: "{app}\layout-keeper.exe"; Parameters: "gui"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Typed"; Filename: "{app}\typed.exe"; Parameters: "gui"; WorkingDir: "{app}"
+Name: "{userdesktop}\Typed"; Filename: "{app}\typed.exe"; Parameters: "gui"; WorkingDir: "{app}"; Tasks: desktopicon
 Name: "{userstartup}\Typed"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\start-hidden.vbs"""; WorkingDir: "{app}"; Tasks: startup
 
 [Run]
-Filename: "{app}\layout-keeper.exe"; Parameters: "gui"; WorkingDir: "{app}"; Description: "{cm:OpenSettings}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\typed.exe"; Parameters: "gui"; WorkingDir: "{app}"; Description: "{cm:OpenSettings}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; Safety net after files are removed. The real stop happens in [Code] below,
 ; before deletion: the daemon has no window, so only /F actually ends it.
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM layout-keeper.exe /T"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "CloseTypedDaemon"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM typed.exe /T"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "CloseTypedDaemon"
 
 [Code]
-// «Запуск администратором» (0.3.67+) registers the Task Scheduler task "Typed".
+// «Запуск администратором» (0.3.68+) registers the Task Scheduler task "Typed".
 function TypedTaskExists: Boolean;
 var
   ResultCode: Integer;
@@ -91,6 +92,8 @@ begin
   // non-elevated setup cannot end it, the task itself can.
   if TypedTaskExists then
     Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "Typed"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM typed.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Before 0.3.68 the program was layout-keeper.exe.
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM layout-keeper.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(400);
 end;
@@ -186,6 +189,23 @@ begin
   Result := '';
 end;
 
+// After an update from a version before 0.3.68 the "Typed" task (Запуск администратором)
+// still starts the removed layout-keeper.exe: re-register it for typed.exe. That needs
+// administrator rights, so Windows asks once, and only in that case.
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  Exe: String;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  Exe := ExpandConstant('{app}\typed.exe');
+  if not TypedTaskExists then
+    Exit;
+  if Exec(Exe, 'admin-task needs-refresh', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+    ShellExec('runas', Exe, 'admin-task refresh', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
@@ -199,6 +219,8 @@ begin
 end;
 
 [InstallDelete]
+; 0.3.68: the program was renamed layout-keeper.exe → typed.exe.
+Type: files; Name: "{app}\layout-keeper.exe"
 Type: files; Name: "{localappdata}\LayoutKeeper\layout-keeper.exe"
 Type: files; Name: "{localappdata}\LayoutKeeper\LICENSE"
 Type: files; Name: "{localappdata}\LayoutKeeper\start-hidden.vbs"

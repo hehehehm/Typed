@@ -7,7 +7,8 @@ license.workspace = true
 description = "Typed"
 
 [[bin]]
-name = "layout-keeper"
+# Since 0.3.68 the program file is `typed` / `typed.exe` (was `layout-keeper`).
+name = "typed"
 path = "src/main.rs"
 
 [dependencies]

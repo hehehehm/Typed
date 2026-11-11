@@ -21,7 +21,7 @@ VERSION="$(awk '
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.+-]+)?$ ]] || fail 'Cannot read a valid [workspace.package] version from Cargo.toml.'
 
 cargo build --release
-BIN="$REPO_ROOT/target/release/layout-keeper"
+BIN="$REPO_ROOT/target/release/typed"
 [[ -f "$BIN" ]] || fail "Built binary not found: $BIN. Build on macOS without overriding the target or target directory."
 
 DIST="$REPO_ROOT/dist"

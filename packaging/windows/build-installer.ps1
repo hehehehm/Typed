@@ -54,7 +54,7 @@ try {
     }
 
     $buildDir = Join-Path $repoRoot 'target\release'
-    $exe = Join-Path $buildDir 'layout-keeper.exe'
+    $exe = Join-Path $buildDir 'typed.exe'
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
         throw "Не найден Windows-бинарник: $exe. Запускайте сборку на Windows без переопределения target."
     }

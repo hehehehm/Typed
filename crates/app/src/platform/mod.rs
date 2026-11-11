@@ -288,7 +288,7 @@ fn is_typed_gui_process(pid: u32) -> bool {
 #[cfg(unix)]
 fn stop_daemon_signal(sig: i32) {
     let me = std::process::id();
-    for name in ["layout-keeper", "layout-keeper-bin"] {
+    for name in ["typed", "layout-keeper", "layout-keeper-bin"] {
         let output = std::process::Command::new("pgrep").arg("-x").arg(name).output();
         let Ok(output) = output else {
             continue;

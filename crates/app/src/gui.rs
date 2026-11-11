@@ -1,4 +1,4 @@
-//! Settings window (`layout-keeper gui`). A separate process that only edits the same
+//! Settings window (`typed gui`). A separate process that only edits the same
 //! `config.json` the daemon watches; the daemon picks changes up within ~1 s.
 //! The keyboard hook is never touched from here.
 
@@ -94,7 +94,7 @@ struct App {
     admin_job: Option<(bool, AdminJobResult)>,
     /// Last check whether the daemon runs as administrator, and when it was made.
     #[cfg_attr(not(windows), allow(dead_code))]
-    daemon_admin: (Option<bool>, Option<Instant>),
+    daemon_admin: (Option<bool>, bool, Option<Instant>),
 }
 
 type AdminJobResult = Arc<Mutex<Option<Result<(), String>>>>;
@@ -669,7 +669,7 @@ impl App {
         let done = self.admin_job.as_ref().and_then(|(on, r)| r.lock().ok().and_then(|mut g| g.take()).map(|r| (*on, r)));
         if let Some((on, result)) = done {
             self.admin_job = None;
-            self.daemon_admin = (None, None);
+            self.daemon_admin = (None, true, None);
             match result {
                 Ok(()) => {
                     self.cfg.run_as_admin = on;
@@ -703,11 +703,28 @@ impl App {
         }
         ui.small("Нужно, чтобы раскладка переключалась и в программах, запущенных от имени администратора (MobaXterm, PowerShell и т. п.): Windows не даёт обычной программе менять в них раскладку. Typed будет запускаться при входе через Планировщик заданий, без окна с вопросом. Windows спросит разрешение только при включении и выключении.");
         if self.cfg.run_as_admin && !busy {
-            let stale = self.daemon_admin.1.map_or(true, |t| t.elapsed() > Duration::from_secs(3));
+            let stale = self.daemon_admin.2.map_or(true, |t| t.elapsed() > Duration::from_secs(5));
             if stale {
-                self.daemon_admin = (win_admin::other_instance_elevated(), Some(Instant::now()));
+                self.daemon_admin = (win_admin::other_instance_elevated(), win_admin::task_points_here(), Some(Instant::now()));
             }
-            if self.daemon_admin.0 == Some(false) {
+            if !self.daemon_admin.1 {
+                // No task, or it still starts the pre-0.3.68 layout-keeper.exe.
+                ui.colored_label(warn_color(ui), "Задача запуска администратором устарела или удалена.");
+                if ui.button("Обновить задачу").clicked() {
+                    let result: AdminJobResult = Arc::new(Mutex::new(None));
+                    let slot = result.clone();
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        let r = win_admin::run_helper_elevated(true);
+                        if let Ok(mut g) = slot.lock() {
+                            *g = Some(r);
+                        }
+                        ctx.request_repaint();
+                    });
+                    self.admin_job = Some((true, result));
+                    self.status = "Windows спросит разрешение (один раз)…".into();
+                }
+            } else if self.daemon_admin.0 == Some(false) {
                 ui.colored_label(warn_color(ui), "Typed сейчас работает без прав администратора — в окнах администратора раскладка не переключится.");
                 if ui.button("Перезапустить с правами администратора").clicked() {
                     crate::platform::stop_daemon();
@@ -715,7 +732,7 @@ impl App {
                         Ok(()) => self.status = "Перезапускаю Typed с правами администратора…".into(),
                         Err(e) => self.status = format!("Не удалось запустить задачу «{}»: {e}. Снимите и снова поставьте галочку.", win_admin::TASK_NAME),
                     }
-                    self.daemon_admin = (None, None);
+                    self.daemon_admin = (None, true, None);
                 }
             }
         }
@@ -1218,7 +1235,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         Ok(()) => String::new(),
         Err(e) => {
             log::warn!("cannot start background daemon: {e}");
-            "Не удалось запустить демон. Запустите layout-keeper без параметров.".into()
+            "Не удалось запустить демон. Запустите typed.exe без параметров.".into()
         }
     };
     let path = Config::default_path();
@@ -1270,7 +1287,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         logo_textures: [None, None, None],
         logo_fade_textures: [None, None, None],
         admin_job: None,
-        daemon_admin: (None, None),
+        daemon_admin: (None, true, None),
         tray: crate::tray::start(logo_index),
         allow_close: false,
         ui_visible: !start_hidden,

@@ -4,9 +4,9 @@
 //! apps running as administrator (UIPI). With the setting on, a Task Scheduler task
 //! «Typed» starts the daemon with the highest rights at sign-in, without a UAC prompt.
 //! Creating or deleting that task needs administrator rights once: the settings window
-//! starts `layout-keeper admin-task on|off` through the "runas" verb (one UAC prompt).
+//! starts `typed admin-task on|off` through the "runas" verb (one UAC prompt).
 //!
-//! Any non-elevated `layout-keeper run` (the startup-folder shortcut, the settings window
+//! Any non-elevated `typed run` (the startup-folder shortcut, the settings window
 //! starting a missing daemon) hands over to the task while the setting is on, so there is
 //! still exactly one daemon (its mutex guards the rest). The task passes `--from-task`,
 //! which never hands over again, so a task that could not elevate cannot loop.
@@ -28,6 +28,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
 /// Task Scheduler task name.
 pub const TASK_NAME: &str = "Typed";
+
+/// Our process image: `typed.exe`, or `layout-keeper.exe` before 0.3.68.
+pub fn is_typed_exe_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("typed.exe") || name.eq_ignore_ascii_case("layout-keeper.exe")
+}
 /// Argument the task passes to `run`: never hand over to the task again.
 pub const FROM_TASK_ARG: &str = "--from-task";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -65,7 +70,7 @@ pub fn is_elevated() -> bool {
     token_elevated(unsafe { GetCurrentProcess() }).unwrap_or(false)
 }
 
-/// Is another `layout-keeper.exe` (the daemon) elevated? `None` when none runs.
+/// Is another `typed.exe` (the daemon) elevated? `None` when none runs.
 /// From a normal process an elevated one's token cannot even be opened: that counts as yes.
 pub fn other_instance_elevated() -> Option<bool> {
     let me = unsafe { GetCurrentProcessId() };
@@ -81,7 +86,7 @@ pub fn other_instance_elevated() -> Option<bool> {
             loop {
                 let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
                 let name = String::from_utf16_lossy(&entry.szExeFile[..end]);
-                if name.eq_ignore_ascii_case("layout-keeper.exe") && entry.th32ProcessID != me {
+                if is_typed_exe_name(&name) && entry.th32ProcessID != me {
                     let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.th32ProcessID);
                     let el = if h.is_null() {
                         GetLastError() == ERROR_ACCESS_DENIED
@@ -122,6 +127,45 @@ fn schtasks(args: &[&str]) -> Result<(), String> {
 
 pub fn task_exists() -> bool {
     schtasks(&["/Query", "/TN", TASK_NAME]).is_ok()
+}
+
+/// Program the task starts (`<Command>` of its XML), `None` without a task.
+pub fn task_command() -> Option<String> {
+    let out = Command::new("schtasks.exe")
+        .args(["/Query", "/TN", TASK_NAME, "/XML"])
+        .stdin(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    command_from_xml(&decode(&out.stdout))
+}
+
+/// schtasks prints the XML as UTF-16 or as 8-bit text depending on the console.
+fn decode(b: &[u8]) -> String {
+    let zeros = b.iter().filter(|&&c| c == 0).count();
+    if b.len() >= 2 && zeros * 3 > b.len() {
+        let units: Vec<u16> = b.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect();
+        String::from_utf16_lossy(&units).trim_start_matches('\u{feff}').to_string()
+    } else {
+        String::from_utf8_lossy(b).into_owned()
+    }
+}
+
+fn command_from_xml(xml: &str) -> Option<String> {
+    let start = xml.find("<Command>")? + "<Command>".len();
+    let end = start + xml[start..].find("</Command>")?;
+    let c = xml[start..end].trim().trim_matches('"');
+    Some(c.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\""))
+}
+
+/// The task exists and starts this very program (not the pre-0.3.68 `layout-keeper.exe`
+/// or another copy).
+pub fn task_points_here() -> bool {
+    let (Some(cmd), Ok(exe)) = (task_command(), std::env::current_exe()) else { return false };
+    cmd.eq_ignore_ascii_case(&exe.display().to_string())
 }
 
 /// Start the elevated daemon through the task (no UAC prompt).
@@ -211,10 +255,15 @@ pub fn delete_task() -> Result<(), String> {
     schtasks(&["/Delete", "/TN", TASK_NAME, "/F"])
 }
 
-/// A normal `layout-keeper run` with the setting on: start the task instead and report
+/// A normal `typed run` with the setting on: start the task instead and report
 /// `true` (the caller exits). Never from the task itself, never when already elevated.
 pub fn hand_over_to_task(args: &[String]) -> bool {
     if args.iter().any(|a| a == FROM_TASK_ARG) || is_elevated() || !task_exists() {
+        return false;
+    }
+    if !task_points_here() {
+        // E.g. still `layout-keeper.exe` after the 0.3.68 rename: that file is gone.
+        log::warn!("run_as_admin: the «{TASK_NAME}» task starts another program; running without administrator rights");
         return false;
     }
     match run_task() {
@@ -229,15 +278,29 @@ pub fn hand_over_to_task(args: &[String]) -> bool {
     }
 }
 
-/// `layout-keeper admin-task on|off [--user DOMAIN\name] [--keep <pid>]` (run elevated):
-/// on — register the task, stop every other Typed process except `--keep` (the settings
-/// window) and start the elevated daemon through the task; off — delete the task.
+/// `typed admin-task on|off|refresh|needs-refresh [--user DOMAIN\name] [--keep <pid>]`:
+/// on (elevated) — register the task, stop every other Typed process except `--keep` (the
+/// settings window) and start the elevated daemon through the task; off (elevated) —
+/// delete the task; refresh (elevated, used by the installer) — if the task exists,
+/// re-register it for this program and start it; needs-refresh (no rights needed) —
+/// succeeds only when the task exists but starts another program.
 /// The daemon already running keeps its rights until it is restarted (sign-in).
 pub fn helper_main(args: &[String]) -> Result<(), String> {
     let on = match args.get(1).map(String::as_str) {
         Some("on") => true,
         Some("off") => false,
-        _ => return Err("usage: layout-keeper admin-task on|off [--user DOMAIN\\name] [--keep <pid>]".into()),
+        Some("needs-refresh") => {
+            return if task_exists() && !task_points_here() { Ok(()) } else { Err("the task is up to date or absent".into()) };
+        }
+        Some("refresh") => {
+            if !task_exists() {
+                return Ok(());
+            }
+            let user = args.iter().position(|a| a == "--user").and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(current_user);
+            create_task(&user)?;
+            return run_task();
+        }
+        _ => return Err("usage: typed admin-task on|off|refresh|needs-refresh [--user DOMAIN\\name] [--keep <pid>]".into()),
     };
     let opt = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     if on {
@@ -302,10 +365,13 @@ pub fn run_helper_elevated(on: bool) -> Result<(), String> {
 mod tests {
     #[test]
     fn task_xml_escapes_and_never_times_out() {
-        let x = super::task_xml(r"C:\A&B\layout-keeper.exe", r"C:\A&B", r"PC\Даша");
-        assert!(x.contains(r"C:\A&amp;B\layout-keeper.exe"));
+        let x = super::task_xml(r"C:\A&B\typed.exe", r"C:\A&B", r"PC\Даша");
+        assert!(x.contains(r"C:\A&amp;B\typed.exe"));
         assert!(x.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
         assert!(x.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(x.contains("run --from-task"));
+        assert_eq!(super::command_from_xml(&x).as_deref(), Some(r"C:\A&B\typed.exe"));
+        let utf16: Vec<u8> = "\u{feff}<Command>\"C:\\x\\typed.exe\"</Command>".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        assert_eq!(super::command_from_xml(&super::decode(&utf16)).as_deref(), Some(r"C:\x\typed.exe"));
     }
 }

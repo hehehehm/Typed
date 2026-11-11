@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build-installer.ps1
 ```
 
 Скрипт сам найдёт корень проекта, выполнит `cargo build --release`, создаст
-`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.67.dmg`). Отправьте тестерам этот
+`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.68.dmg`). Отправьте тестерам этот
 **один .dmg**; Rust им не нужен. Образ рассчитан на архитектуру Mac, где он собран
 (Apple Silicon или Intel); универсальная сборка здесь не выполняется.
 Дополнительные упаковщики не нужны; скрипт не скачивает их и не выполняет нотаризацию.
@@ -96,6 +96,11 @@ Cargo при первой сборке может потребоваться д�
   и после принятия прикрепите билет через `xcrun stapler staple`.
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
+
+## Что нового в 0.3.68
+
+- **Свёрнутое в трей окно настроек больше не занимает процессор.** Настоящая причина 6% CPU была не в Typed, а в оконной библиотеке eframe 0.29.1: Windows не присылает спрятанному окну событий перерисовки, а eframe после любой просьбы перерисовать окно переводил цикл событий в режим «опрашивать без остановки» и ждал этой перерисовки вечно. Одно ядро процессора крутилось вхолостую (6,25% = одно ядро из 16), поэтому прошлые ограничители кадров внутри Typed не помогали: до них дело просто не доходило. В Typed встроена исправленная копия eframe 0.29.1 (`third_party/eframe`, перенос исправления из egui PR #7905): спрятанное или свёрнутое окно рисуется напрямую не чаще 4 раз в секунду и только по запросу, цикл событий спит. Трей, вызов по `Ctrl+Shift+V`, закрытие крестиком в трей, «Выход» и автоблокировка сейфа работают как раньше.
+- **Программа теперь называется `typed.exe`** (раньше `layout-keeper.exe`). Установщик сам останавливает старый `layout-keeper.exe` и задачу «Typed», удаляет старый файл и переводит ярлыки, автозагрузку и деинсталлятор на `typed.exe`. Если включён «Запуск администратором», задача после обновления перерегистрируется на `typed.exe` (Windows один раз спросит разрешение). Если задача всё же осталась старой, в «Настройках» появится кнопка «Обновить задачу». Конфиг и сейф остаются в `%APPDATA%\typed`, установка — в `%LOCALAPPDATA%\Typed`.
 
 ## Что нового в 0.3.67
 
@@ -383,7 +388,7 @@ Cargo при первой сборке может потребоваться д�
 ## Что нового в 0.3.19
 
 - Если последнее слово нужно заменить (в том числе из пользовательского словаря), Enter и Tab больше не уходят в приложение раньше замены. Раньше чат отправлял «штсн», а исправленное «incy» улетало вторым сообщением.
-- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.67.dmg`.
+- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.68.dmg`.
 - Установщик для тестеров: `dist\Typed-Setup-0.3.19.exe`. Перед установкой закройте все `layout-keeper.exe` или дайте установщику остановить их сам.
 
 ## Что нового в 0.3.18
@@ -487,40 +492,40 @@ Cargo при первой сборке может потребоваться д�
 ```bash
 cargo test                       # тесты ядра и контроллера
 cargo build --release
-./target/release/layout-keeper   # = layout-keeper run
+./target/release/typed   # = typed run
 ```
 
 Команды:
 
 | Команда | Что делает |
 |---|---|
-| `layout-keeper` / `layout-keeper run` | запустить фоновый процесс (путь к конфигу печатается при старте) |
-| `layout-keeper gui` | открыть окно настроек (демон запускается отдельно) |
-| `layout-keeper status` | конфиг, настройки, активное приложение и текущая раскладка |
-| `layout-keeper set-app <app-id> <en\|ru>` | запомнить раскладку для приложения |
-| `layout-keeper remove-app <app-id>` | забыть приложение |
-| `layout-keeper list-apps` | список запомненных приложений |
-| `layout-keeper set autocorrect on\|off` | включить/выключить автоисправление |
-| `layout-keeper set auto-learn on\|off` | авто-запоминание ручных переключений |
-| `layout-keeper set hotkey <Combo>` | горячая клавиша ручной конвертации (`Pause`, `Ctrl+Shift+P`, …) |
-| `layout-keeper set summon-hotkey <Combo>` | вызов окна настроек на вкладке «Сейф» (по умолчанию `Ctrl+Shift+V`) |
-| `layout-keeper convert <текст>` | перепечатать текст в другой раскладке (`ghbdtn` → `привет`) |
-| `layout-keeper check <слово>` | показать решение автокоррекции и причину |
+| `typed` / `typed run` | запустить фоновый процесс (путь к конфигу печатается при старте) |
+| `typed gui` | открыть окно настроек (демон запускается отдельно) |
+| `typed status` | конфиг, настройки, активное приложение и текущая раскладка |
+| `typed set-app <app-id> <en\|ru>` | запомнить раскладку для приложения |
+| `typed remove-app <app-id>` | забыть приложение |
+| `typed list-apps` | список запомненных приложений |
+| `typed set autocorrect on\|off` | включить/выключить автоисправление |
+| `typed set auto-learn on\|off` | авто-запоминание ручных переключений |
+| `typed set hotkey <Combo>` | горячая клавиша ручной конвертации (`Pause`, `Ctrl+Shift+P`, …) |
+| `typed set summon-hotkey <Combo>` | вызов окна настроек на вкладке «Сейф» (по умолчанию `Ctrl+Shift+V`) |
+| `typed convert <текст>` | перепечатать текст в другой раскладке (`ghbdtn` → `привет`) |
+| `typed check <слово>` | показать решение автокоррекции и причину |
 
 Работающий процесс подхватывает изменения конфига (через CLI или вручную) примерно за секунду.
-Логи идут в stderr: `RUST_LOG=debug layout-keeper` — подробнее (длины слов и решения, **не сами слова**).
+Логи идут в stderr: `RUST_LOG=debug typed` — подробнее (длины слов и решения, **не сами слова**).
 
 Автозапуск: Windows — ярлык в `shell:startup`; macOS — LaunchAgent (`~/Library/LaunchAgents`);
-Linux — `~/.config/autostart/layout-keeper.desktop` или systemd user unit. Трея пока нет.
+Linux — `~/.config/autostart/typed.desktop` или systemd user unit. Трея пока нет.
 
-## Графические настройки (`layout-keeper gui`)
+## Графические настройки (`typed gui`)
 
 Окно настроек — отдельный процесс: он только редактирует тот же `config.json`, а работающий демон
-(`layout-keeper` / `layout-keeper run`) подхватывает изменения примерно за секунду. Демон с
+(`typed` / `typed run`) подхватывает изменения примерно за секунду. Демон с
 перехватом клавиатуры нужно держать запущенным отдельно — окно его не заменяет.
 
 ```powershell
-.\target\release\layout-keeper.exe gui
+.\target\release\typed.exe gui
 ```
 
 * **Текущее приложение** — окно следит за активной программой (своё окно пропускает). Переключитесь
@@ -533,7 +538,7 @@ Linux — `~/.config/autostart/layout-keeper.desktop` или systemd user unit. 
 
 ## Сейф паролей и карт (с версии 0.3.0)
 
-Откройте окно через `layout-keeper gui` или глобальную клавишу вызова (по умолчанию `Ctrl+Shift+K`) → вкладка **«Сейф»**.
+Откройте окно через `typed gui` или глобальную клавишу вызова (по умолчанию `Ctrl+Shift+K`) → вкладка **«Сейф»**.
 Типичный сценарий: кликните в поле ввода, нажмите клавишу вызова, затем кнопку вставки логина или карты.
 
 * **Локально и зашифровано.** Файл `vault.bin` лежит рядом с `config.json`
@@ -555,7 +560,7 @@ Linux — `~/.config/autostart/layout-keeper.desktop` или systemd user unit. 
   как «Текущее приложение». Если фокус оказался на самом LayoutKeeper или на другой программе — ничего не набирается.
 * Набирает сам процесс окна настроек (SendInput на Windows, XTest на Linux X11, CGEvent на macOS), без буфера обмена,
   без связи с демоном и без сети. На Windows/macOS демон игнорирует эти нажатия (помечены), автозамена их не трогает.
-* `layout-keeper vault status` — только есть ли файл сейфа. Команд с паролями в аргументах нет намеренно.
+* `typed vault status` — только есть ли файл сейфа. Команд с паролями в аргументах нет намеренно.
 * Ограничения: в окна, запущенные от администратора, Windows набирать не даёт; на Linux символы должны
   набираться в одной раскладке (только латиница или только кириллица), а демон видит XTest-нажатия как обычные;
   на Wayland подстановка не работает. Отдельный менеджер паролей (Bitwarden, KeePassXC) безопаснее:
@@ -584,21 +589,21 @@ Linux — `~/.config/autostart/layout-keeper.desktop` или systemd user unit. 
   назначенная раскладка. Внутри приложения можно временно переключиться, чтобы что-то набрать —
   после первых ~3 секунд стабилизации фокуса утилита не возвращает раскладку насильно, но и **назначение не перезаписывает**. В следующий раз
   при переходе в приложение снова включится назначенная раскладка.
-* Изменить назначение можно только явно: `layout-keeper set-app`, `remove-app` или в окне `gui`.
+* Изменить назначение можно только явно: `typed set-app`, `remove-app` или в окне `gui`.
 * Авто-обучение (`auto_learn`, для новых конфигов **выключено**): если включено, заполняет раскладку
   только для приложений, у которых назначения ещё нет (по ручному переключению или по раскладке, на
   которой приложение оставили). Уже назначенное оно **никогда** не перезаписывает.
 * Обновление с 0.1.0: в существующем `config.json` останется `"auto_learn": true` — новое значение по
   умолчанию касается только новых файлов. Но правило «не перезаписывать назначенное» работает
   сразу, так что уже назначенные приложения после обновления не собьются. Чтобы новые приложения
-  тоже не запоминались сами, выключите автозапоминание в `gui` или `layout-keeper set auto-learn off`.
+  тоже не запоминались сами, выключите автозапоминание в `gui` или `typed set auto-learn off`.
 * Исключения (`exception_apps`, подстрока, без учёта регистра): менеджеры паролей, терминалы,
   удалённые рабочие столы/VM. В этих приложениях **автозамена и горячая клавиша конвертации
   никогда не срабатывают**. Память раскладки работает как обычно: язык можно назначить в `gui`
   или `set-app`, и он будет ставиться при каждом открытии. Список можно править во вкладке «Исключения» окна `gui`.
 
 Конфиг (`config.json`): Linux `~/.config/typed/`, macOS `~/Library/Application Support/typed/`,
-Windows `%APPDATA%\typed\`. При первом запуске файлы копируются из прежней папки `layout-keeper`, если новых ещё нет. Переопределить путь: `LAYOUT_KEEPER_CONFIG=/path/config.json`.
+Windows `%APPDATA%\typed\`. При первом запуске файлы копируются из прежней папки `typed`, если новых ещё нет. Переопределить путь: `LAYOUT_KEEPER_CONFIG=/path/config.json`.
 
 ```json
 {
@@ -650,20 +655,20 @@ CC-BY-SA-4.0), вшиты в бинарник, работают офлайн (~4
 **Ручная конвертация** (`hotkey`): конвертирует текущее слово или, если оно пустое, последнее
 завершённое (вместе с разделителем) — независимо от словаря. Повторное нажатие возвращает назад,
 так же отменяется и неудачная автозамена. Сочетание задаётся в окне настроек или через
-`layout-keeper set hotkey …`. Старые значения `Pause`, `ShiftShift` и `CtrlAltSpace` по-прежнему
+`typed set hotkey …`. Старые значения `Pause`, `ShiftShift` и `CtrlAltSpace` по-прежнему
 понимаются; можно указать любое безопасное сочетание вроде `Ctrl+Shift+P`. Буква или цифра без
 Ctrl/Alt/Win не принимается, чтобы не перехватывать обычный ввод. По умолчанию: `Pause` на
 Windows/Linux, оба Shift на macOS.
 
 **Вызов окна** (`summon_hotkey`, по умолчанию `Ctrl+Shift+V`): поднимает уже открытые настройки
-на вкладке «Сейф» или запускает `layout-keeper gui --vault`. Работает и в приложениях из списка исключений (в отличие от
+на вкладке «Сейф» или запускает `typed gui --vault`. Работает и в приложениях из списка исключений (в отличие от
 конвертации слова), чтобы можно было подставить логин или карту из сейфа.
 
 **Отмена автоисправления** (`undo_hotkey`, по умолчанию `Ctrl+Alt+Z`, на macOS `Ctrl+Option+Z`).
 Сразу после исправления возвращает набранное слово и заносит его в `never_correct`, после этого
 Typed его не трогает. `Ctrl+Shift+Z` не используется, потому что во многих программах это «Повторить».
 Backspace сразу после исправления тоже отменяет его (`undo_on_backspace`, по умолчанию включено).
-CLI: `layout-keeper set undo-hotkey <Combo>`, `layout-keeper set undo-on-backspace on|off`.
+CLI: `typed set undo-hotkey <Combo>`, `typed set undo-on-backspace on|off`.
 
 На Windows наши горячие клавиши поглощаются; на Linux (XRecord только наблюдает) и macOS
 (listen-only tap) нажатие дойдёт и до приложения — для Pause/Shift это безвредно, для буквенных
@@ -722,7 +727,7 @@ crates/core/            библиотека layout_keeper_core (без ОС-з�
   src/config.rs         конфиг JSON, исключения, горячая клавиша
   src/ffi.rs            C ABI для будущих IME (Android/iOS/IBus)
   data/                 словари + лицензия
-crates/app/             бинарник layout-keeper
+crates/app/             бинарник typed (typed.exe)
   src/main.rs           CLI
   src/controller.rs     общая логика: память по приложениям, обучение, команды (с тестами)
   src/platform/linux.rs X11: EWMH, XKB, XRecord, XTest
@@ -777,7 +782,7 @@ Build **on a Mac**:
 ```
 
 The script locates the repository root, runs `cargo build --release`, and creates
-`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.67.dmg`). Send testers this **one file**;
+`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.68.dmg`). Send testers this **one file**;
 they do not need Rust. The app targets the build Mac's architecture (Apple Silicon or Intel),
 not a universal binary. No extra packager or packaging downloads are needed; Cargo may
 need to fetch dependencies on its first build. The script never notarizes automatically.
@@ -803,6 +808,11 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.68
+
+- **No CPU use while the settings window sits in the tray — the real cause.** It was eframe 0.29.1, not Typed's own frames: Windows never sends redraw events to a hidden window, and after any repaint request eframe put the event loop into `ControlFlow::Poll`, waiting forever for that redraw — one core spinning (6.25% = 1 of 16 cores). That is why the in-app frame limiters of 0.3.65/0.3.66 changed nothing. Typed now builds a patched eframe 0.29.1 (`third_party/eframe`, backport of egui PR #7905): hidden or minimized windows are painted directly, at most 4 times a second and only on request, and the event loop sleeps. Tray, `Ctrl+Shift+V` summon, X-to-tray, Exit and the vault idle lock are unchanged.
+- **The program file is now `typed.exe`** (was `layout-keeper.exe`). The installer stops the old `layout-keeper.exe` and the «Typed» task, deletes the old file and points shortcuts, autostart and the uninstaller at `typed.exe`. With «Запуск администратором» on, the task is re-registered for `typed.exe` after the update (one UAC prompt); if it is still stale, Settings shows «Обновить задачу». Config and vault stay in `%APPDATA%\typed`, install dir `%LOCALAPPDATA%\Typed`.
 
 ### New in 0.3.67
 
@@ -1090,7 +1100,7 @@ settings does not stop the daemon.
 ### New in 0.3.19
 
 - If the last word needs correcting (including a custom-dictionary word), Enter and Tab are held back until the replacement is typed. Previously a chat would send «штсн», then the corrected «incy» as a second message.
-- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.67.dmg`.
+- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.68.dmg`.
 - Tester installer: `dist\Typed-Setup-0.3.19.exe`. Stop all `layout-keeper.exe` processes first, or let the installer stop them.
 
 ### New in 0.3.18
@@ -1195,7 +1205,7 @@ settings does not stop the daemon.
   layout inside the app never overwrites it (manual changes are left alone after the ~3-second focus grace period). Change it only via `set-app`/`remove-app` or the GUI.
   `auto_learn` (off for new configs) only fills in apps that have no assignment yet.
   Exception apps skip autocorrect only; their assigned layout is still remembered and applied.
-* **Settings GUI** — `layout-keeper gui` (egui): assign the focused app EN/RU, edit/remove remembered
+* **Settings GUI** — `typed gui` (egui): assign the focused app EN/RU, edit/remove remembered
   apps, toggles, and hotkeys (press-to-assign, plus presets). Separate process that edits the same
   `config.json`; the daemon reloads in ~1 s. A global summon hotkey (default `Ctrl+Shift+V`) focuses
   or starts this window on the Vault tab so the vault can fill the field you just left.
@@ -1207,7 +1217,7 @@ settings does not stop the daemon.
   current or last word regardless of dictionaries; press again to undo. Configure it in the GUI
   or with `set hotkey Ctrl+Shift+P`.
 
-Build: `cargo test && cargo build --release`. Run: `layout-keeper` (`status`, `set-app <id> <en|ru>`,
+Build: `cargo test && cargo build --release`. Run: `typed` (`status`, `set-app <id> <en|ru>`,
 `list-apps`, `convert`, `check`, `set …`).
 
 Platforms: Linux X11 implemented and tested under Xvfb; Windows and macOS implemented against the
@@ -1220,7 +1230,7 @@ current/last-word buffer and is never written to disk or logged at info level.
 License: MIT (word lists CC-BY-SA-4.0).
 
 ### Vault (0.3.0)
-Optional local encrypted vault for logins and cards in `layout-keeper gui` → "Сейф" tab.
+Optional local encrypted vault for logins and cards in `typed gui` → "Сейф" tab.
 `vault.bin` next to `config.json`; Argon2id + XChaCha20-Poly1305; the master password cannot be recovered.
 Unlocked only in GUI memory; locks on close/idle timeout. Entries are added only manually — the keyboard hook
 never harvests input. Lists show labels/usernames and card last 4 only; CVC is optional. Filling happens only on
