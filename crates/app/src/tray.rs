@@ -1,5 +1,10 @@
-//! System tray / menu-bar icon for the settings window.
-//! Closing or minimizing hides the window; the icon brings it back.
+//! System tray / menu-bar icon.
+//!
+//! * Windows (since 0.3.69): the icon lives in the background daemon (`typed.exe` with no
+//!   arguments). Its commands open the settings window — a separate `typed.exe gui`
+//!   process that exits whenever it is closed or minimized — or quit both processes.
+//! * macOS: the key tap runs inside Typed.app, so the menu-bar icon stays in that process;
+//!   closing or minimizing hides the window and the icon brings it back.
 
 use eframe::egui;
 use std::sync::mpsc::Receiver;
@@ -17,12 +22,13 @@ pub enum TrayCmd {
 pub struct TrayHandle {
     hwnd: isize,
     thread: Option<JoinHandle<()>>,
-    rx: Receiver<TrayCmd>,
+    rx: Option<Receiver<TrayCmd>>,
 }
 
+#[allow(dead_code)]
 impl TrayHandle {
     pub fn try_recv(&self) -> Option<TrayCmd> {
-        self.rx.try_recv().ok()
+        self.rx.as_ref()?.try_recv().ok()
     }
 
     pub fn set_repaint(&self, ctx: egui::Context) {
@@ -85,20 +91,24 @@ impl Drop for TrayHandle {
 
 static REPAINT: Mutex<Option<egui::Context>> = Mutex::new(None);
 
+/// Settings-window tray (macOS menu bar; elsewhere there is none in the GUI process).
+#[allow(dead_code)]
 pub fn start(logo_index: u8) -> Option<TrayHandle> {
-    #[cfg(windows)]
-    {
-        return win::start(logo_index);
-    }
     #[cfg(target_os = "macos")]
     {
         return mac::start(logo_index);
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(target_os = "macos"))]
     {
         let _ = logo_index;
         None
     }
+}
+
+/// Windows daemon tray: `handler` runs on the tray thread for every menu / click command.
+#[cfg(windows)]
+pub fn start_daemon_tray(logo_index: u8, handler: fn(TrayCmd)) -> Option<TrayHandle> {
+    win::start(logo_index, handler)
 }
 
 #[allow(dead_code)]
@@ -113,7 +123,7 @@ pub fn wake_gui() {
 #[cfg(windows)]
 mod win {
     use super::*;
-    use std::sync::mpsc::{self, Sender};
+    use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -125,6 +135,7 @@ mod win {
     use windows_sys::Win32::UI::Shell::{
         Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
     };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ChangeWindowMessageFilterEx, KillTimer, SetTimer, MSGFLT_ALLOW, WM_TIMER};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
         DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
@@ -147,11 +158,42 @@ mod win {
     const SWP_SHOWWINDOW: u32 = 0x0040;
     const SW_HIDE: i32 = 0;
     const HWND_TOPMOST: HWND = -1isize as HWND;
-
+    /// The daemon re-reads the logo choice from config.json this often.
+    const LOGO_TIMER: usize = 1;
+    const LOGO_POLL_MS: u32 = 2000;
 
     struct TrayState {
-        tx: Sender<TrayCmd>,
+        handler: fn(TrayCmd),
         hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON,
+        logo: u8,
+        config_mtime: Option<std::time::SystemTime>,
+    }
+
+    /// Logo chosen in the settings window (config.json), if the file changed since `seen`.
+    fn config_logo(seen: &mut Option<std::time::SystemTime>) -> Option<u8> {
+        let path = layout_keeper_core::Config::default_path();
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if mtime.is_none() || mtime == *seen {
+            return None;
+        }
+        *seen = mtime;
+        let cfg = std::fs::read_to_string(&path).ok().and_then(|s| layout_keeper_core::Config::from_json(&s).ok())?;
+        Some(crate::logos::index(cfg.logo_style))
+    }
+
+    /// Remove the icon and free the state; safe to call twice.
+    fn cleanup(hwnd: HWND) {
+        unsafe {
+            let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+            if !raw.is_null() {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                let state = Box::from_raw(raw);
+                let data = nid(hwnd, state.hicon);
+                Shell_NotifyIconW(NIM_DELETE, &data);
+                DestroyIcon(state.hicon);
+                KillTimer(hwnd, LOGO_TIMER);
+            }
+        }
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -226,22 +268,14 @@ mod win {
     }
 
     fn send_cmd(hwnd: HWND, cmd: TrayCmd) {
-        unsafe {
+        let handler = unsafe {
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
             if raw.is_null() {
                 return;
             }
-            let _ = (*raw).tx.send(cmd);
-        }
-        // Hidden egui windows stop painting, so commands would sit unread.
-        // Quit must not synchronously ShowWindow/AttachThreadInput: the GUI
-        // later joins this tray thread and that pair deadlocks.
-        if cmd == TrayCmd::Quit {
-            crate::platform::wake_settings_window_async();
-        } else {
-            crate::platform::raise_settings_window();
-        }
-        super::wake_gui();
+            (*raw).handler
+        };
+        handler(cmd);
     }
 
     fn hicon_from_png(bytes: &[u8]) -> Option<windows_sys::Win32::UI::WindowsAndMessaging::HICON> {
@@ -260,6 +294,7 @@ mod win {
             };
             let old = (*raw).hicon;
             (*raw).hicon = new_icon;
+            (*raw).logo = index;
             let data = nid(hwnd, new_icon);
             Shell_NotifyIconW(NIM_MODIFY, &data);
             DestroyIcon(old);
@@ -326,18 +361,23 @@ mod win {
                 apply_icon(hwnd, wparam as u8);
                 0
             }
-            WM_CLOSE => {
-                unsafe {
+            WM_TIMER if wparam == LOGO_TIMER => {
+                let changed = unsafe {
                     let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
-                    if !raw.is_null() {
-                        let state = Box::from_raw(raw);
-                        let data = nid(hwnd, state.hicon);
-                        Shell_NotifyIconW(NIM_DELETE, &data);
-                        DestroyIcon(state.hicon);
-                        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    if raw.is_null() {
+                        None
+                    } else {
+                        config_logo(&mut (*raw).config_mtime).filter(|&l| l != (*raw).logo)
                     }
-                    DestroyWindow(hwnd);
+                };
+                if let Some(l) = changed {
+                    apply_icon(hwnd, l);
                 }
+                0
+            }
+            WM_CLOSE => {
+                cleanup(hwnd);
+                unsafe { DestroyWindow(hwnd) };
                 0
             }
             WM_DESTROY => {
@@ -348,7 +388,7 @@ mod win {
         }
     }
 
-    fn setup(tx: Sender<TrayCmd>, logo_index: u8) -> Result<HWND, String> {
+    fn setup(handler: fn(TrayCmd), logo_index: u8) -> Result<HWND, String> {
         let hicon = hicon_from_png(crate::logos::icon_png(crate::logos::from_index(logo_index)))
             .ok_or_else(|| "CreateIconIndirect failed".to_string())?;
 
@@ -386,8 +426,17 @@ mod win {
                 DestroyIcon(hicon);
                 return Err("CreateWindowExW(TypedTrayWnd) failed".into());
             }
-            let state = Box::new(TrayState { tx, hicon });
+            let mut config_mtime = None;
+            let _ = config_logo(&mut config_mtime);
+            let state = Box::new(TrayState { handler, hicon, logo: logo_index, config_mtime });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+            // A daemon running as administrator (the «Typed» task) must still receive
+            // Explorer's tray clicks and its restart broadcast (UIPI filters them otherwise).
+            let taskbar_created = RegisterWindowMessageW(wide("TaskbarCreated").as_ptr());
+            for m in [CALLBACK, taskbar_created, WM_CONTEXTMENU] {
+                ChangeWindowMessageFilterEx(hwnd, m, MSGFLT_ALLOW, std::ptr::null_mut());
+            }
+            SetTimer(hwnd, LOGO_TIMER, LOGO_POLL_MS, None);
             let data = nid(hwnd, hicon);
             let mut added = false;
             for _ in 0..8 {
@@ -425,15 +474,19 @@ mod win {
         }
     }
 
-    pub fn start(logo_index: u8) -> Option<TrayHandle> {
-        let (cmd_tx, cmd_rx) = mpsc::channel();
+    pub fn start(logo_index: u8, handler: fn(TrayCmd)) -> Option<TrayHandle> {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<isize, String>>();
         let thread = thread::Builder::new()
             .name("typed-tray".into())
-            .spawn(move || match setup(cmd_tx, logo_index) {
+            .spawn(move || match setup(handler, logo_index) {
                 Ok(hwnd) => {
                     let _ = ready_tx.send(Ok(hwnd as isize));
                     message_loop();
+                    // A WM_QUIT posted to every thread (`stop_daemon` from another
+                    // process) ends the loop before WM_CLOSE: remove the icon anyway,
+                    // or a dead icon stays in the tray until the mouse passes over it.
+                    cleanup(hwnd);
+                    unsafe { DestroyWindow(hwnd) };
                 }
                 Err(e) => {
                     log::warn!("system tray: {e}");
@@ -445,7 +498,7 @@ mod win {
             Ok(Ok(hwnd)) => Some(TrayHandle {
                 hwnd,
                 thread: Some(thread),
-                rx: cmd_rx,
+                rx: None,
             }),
             Ok(Err(e)) => {
                 log::warn!("system tray unavailable: {e}");
@@ -658,7 +711,7 @@ mod mac {
                 Some(TrayHandle {
                     hwnd: item as isize,
                     thread: None,
-                    rx,
+                    rx: Some(rx),
                 })
             })();
             objc_autoreleasePoolPop(pool);

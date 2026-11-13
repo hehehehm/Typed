@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build-installer.ps1
 ```
 
 Скрипт сам найдёт корень проекта, выполнит `cargo build --release`, создаст
-`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.68.dmg`). Отправьте тестерам этот
+`dist/Typed.app` и **`dist/Typed-<версия>.dmg`** (сейчас `dist/Typed-0.3.71.dmg`). Отправьте тестерам этот
 **один .dmg**; Rust им не нужен. Образ рассчитан на архитектуру Mac, где он собран
 (Apple Silicon или Intel); универсальная сборка здесь не выполняется.
 Дополнительные упаковщики не нужны; скрипт не скачивает их и не выполняет нотаризацию.
@@ -96,6 +96,34 @@ Cargo при первой сборке может потребоваться д�
   и после принятия прикрепите билет через `xcrun stapler staple`.
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
+
+## Что нового в 0.3.71
+
+- **Знак в начале или в конце слова больше не принимается за «пароль».** «тучесдщгвЖ» (Shift+; в конце = «Ж») раньше считался словом со странным регистром и оставался; теперь такое слово переводится в другую раскладку («тучесдщгвЖ» → «nextcloud:»), но больше ничего с ним не делается (без исправления опечаток и разделения).
+- **Смена раскладки посреди слова — от 3 букв.** «prщ» → «pro», «зкщ»-подобные короткие слова по-прежнему не трогаются, если похоже на русское окончание.
+- **Частица без пробела: бы, же, ли.** «надобы» → «надо бы», «гдеже» → «где же», «былоли» → «было ли», и то же в чужой раскладке: «yflj,s» → «надо бы», «,skjkb» → «было ли». Слова «чтобы», «также», «даже», «неужели», «либо», «были», «могли» не трогаются; имена («джоли», «барли») и «обоже» тоже.
+- **Новое название продукта:** «чцшлш» → «xwiki».
+- **Две перестановки соседних букв в длинном слове.** «удосбвта» → «удобства» (буквы те же, только переставлены; от 8 букв).
+- **Слова через дефис в чужой раскладке.** «dct-nfrb» → «все-таки», «rnj-nj» → «кто-то», «bp-pf» → «из-за», «rfr-yb,elm» → «как-нибудь», «цудд-лтщцт» → «well-known». Настоящие составные слова в своей раскладке («well-known», «e-mail», «кто-то») и короткие повторы («гы-гы») не трогаются.
+- **Лишний мягкий знак после ж/ш/ч/щ.** «клавишь» → «клавиш», «карандашь» → «карандаш», «клапвишь» → «клавиш» (ещё и лишняя соседняя клавиша). «мышь», «ночь», «делаешь» не трогаются.
+- **«-ить» вместо «-ит».** «услышить» → «услышит», «увидить» → «увидит», если у глагола другой инфинитив («услышать»); «зеркалить», «динамить» не трогаются.
+- **Ошибка в первой букве длинного слова.** «жлементы» → «элементы»: для русских слов от 8 букв — в одно из 20 000 частых слов (было 10 000).
+- **Пропущенная первая буква.** «траница» → «страница» (от 6 букв, только в частое слово).
+- **Пропущенная буква в редкой форме** «рзделено» → «разделено» и **буква не на своём месте** «опциаонльно» → «опционально» (от 10 букв).
+- Не исправляются (намеренно): «буде» и «зи» (настоящие редкие слова), «коды», «верз» (4 буквы и две правки до «вверх»), «архим» (м и в не соседние клавиши), «ухора» (рядом частое «ура», а «узора» нет в частотном списке), «lowfps».
+
+## Что нового в 0.3.70
+
+- **Раскладка переключилась посреди слова.** Слово, в котором есть и латинские, и русские буквы, раньше всегда оставалось как есть. Теперь Typed перечитывает буквы одного алфавита в другой раскладке и исправляет слово, если получается настоящее слово (или, при включённом исправлении опечаток, единственное исправление): «приdtn» → «привет», «спаcb,j» → «спасибо», «гkfpf[» → «глазах», «wщrld» → «world». Знаки на месте букв учитываются («[» = «х», «.» = «ю»), точка в конце обычного слова остаётся («приdtn.» → «привет.»). Не трогаются: английское частое слово с русским окончанием («keyами», «gitом», «Windowsе»), одна буква другим алфавитом после настоящего слова («sheы»), странный регистр («PRы») и слова с цифрами. Если подходят оба прочтения, слово остаётся. На тесте ≈10 тыс. таких слов исправлено верно RU 99,6%, EN 100%, неверно — 0.
+- **Опечатка в первой букве и в словах из 4 букв.** «ъотя» → «хотя», «Ъотя» → «Хотя»: для слов из 4 букв — только в одно из 1000 самых частых слов (для слов от 5 букв граница прежняя, 10 000). Слова из 2–3 букв не затрагиваются.
+- «исправлят» по-прежнему не исправляется: на одну правку от него «исправляет», «исправлять» и «исправят», и выбрать по частоте нельзя, поэтому Typed не угадывает.
+
+## Что нового в 0.3.69
+
+- **Опечатки исправляются по полному словарю.** Раньше вариант исправления искался только среди 40 тыс. частых слов, поэтому «привественный» не становилось «приветственный». Теперь, если среди частых слов ничего не нашлось, Typed ищет любую настоящую словоформу на расстоянии одной опечатки (от 5 букв, только строчными: слова с большой буквы чаще всего имена). Частые слова по-прежнему в приоритете (`definatly` → `definitely`, а не `defiantly`). Первая буква и окончание сохраняются; если подходящих слов несколько или рядом (в двух опечатках) есть частое слово, Typed ничего не трогает. На тесте опечатки в редких словах исправляются правильно в RU 0,5% → 70,6%, EN 0% → 69%; задержка на слово почти не изменилась (в среднем 2,5 мс RU, 0,4 мс EN).
+- **Опечатка в первой букве.** «шлавный» → «главный»: первую букву можно заменить на соседнюю клавишу, если остальное слово совпадает, в нём от 5 букв и получается одно из 10 тыс. самых частых слов.
+- **Кнопка «Показать приветственный экран»** во вкладке «Настройки».
+- **Windows: окно настроек больше не висит в памяти.** Значок в трее теперь у фоновой программы. Крестик или «свернуть» полностью закрывают окно настроек, сейф при этом блокируется. В диспетчере задач, пока окно закрыто, остаётся один процесс «Typed». Щелчок по значку в трее, «Открыть» / «Сейф» в его меню или `Ctrl+Shift+V` снова открывают окно. «Выход» в меню значка закрывает и окно, и фоновую программу. Значок теперь виден сразу после входа в Windows, даже если окно не открывали. В macOS окно по-прежнему прячется в строку меню, но сейф при этом тоже блокируется.
 
 ## Что нового в 0.3.68
 
@@ -380,7 +408,7 @@ Cargo при первой сборке может потребоваться д�
 
 ## Что нового в 0.3.20
 
-- Окно Typed сворачивается в трей: крестик и кнопка «свернуть» прячут его, на панели задач кнопки не остаётся. Щелчок по значку в трее открывает окно снова; пункт «Выход» закрывает его. Фоновый демон при этом продолжает работать.
+- Значок Typed в трее принадлежит фоновой программе. В Windows (с 0.3.69) крестик и кнопка «свернуть» полностью закрывают окно настроек (сейф при этом блокируется), а Typed продолжает работать в фоне. Щелчок по значку в трее или `Ctrl+Shift+V` открывают окно снова; пункт «Выход» закрывает и окно, и фоновую программу. В macOS окно прячется в строку меню, сейф блокируется, значок в Dock и в строке меню открывают его снова.
 - Для ярлыков, трея и панели задач у мелких размеров значка своя упрощённая версия — солнце над водой, которое читается и в 16 пикселях. Большой логотип с бликами на воде не менялся.
 - Ярлыки в меню «Пуск» и на рабочем столе называются просто **Typed**.
 - Установщик для тестеров: `dist\Typed-Setup-0.3.20.exe`. Перед установкой закройте все `layout-keeper.exe` или дайте установщику остановить их сам.
@@ -388,7 +416,7 @@ Cargo при первой сборке может потребоваться д�
 ## Что нового в 0.3.19
 
 - Если последнее слово нужно заменить (в том числе из пользовательского словаря), Enter и Tab больше не уходят в приложение раньше замены. Раньше чат отправлял «штсн», а исправленное «incy» улетало вторым сообщением.
-- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.68.dmg`.
+- Скрипт пакета для macOS: `packaging/macos/build-dmg.sh` собирает `dist/Typed.app` и `dist/Typed-0.3.71.dmg`.
 - Установщик для тестеров: `dist\Typed-Setup-0.3.19.exe`. Перед установкой закройте все `layout-keeper.exe` или дайте установщику остановить их сам.
 
 ## Что нового в 0.3.18
@@ -782,7 +810,7 @@ Build **on a Mac**:
 ```
 
 The script locates the repository root, runs `cargo build --release`, and creates
-`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.68.dmg`). Send testers this **one file**;
+`dist/Typed.app` and **`dist/Typed-<version>.dmg`** (currently `dist/Typed-0.3.71.dmg`). Send testers this **one file**;
 they do not need Rust. The app targets the build Mac's architecture (Apple Silicon or Intel),
 not a universal binary. No extra packager or packaging downloads are needed; Cargo may
 need to fetch dependencies on its first build. The script never notarizes automatically.
@@ -808,6 +836,34 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.71
+
+- **A sign at the edge no longer makes a word "password-like".** `тучесдщгвЖ` (Shift+; = «Ж» at the end) now converts (`nextcloud:`), but gets no typo fix or split.
+- **Layout switched mid-word, from 3 letters:** `prщ` → `pro`.
+- **Glued particles бы / же / ли:** «надобы» → «надо бы», and in the other layout `yflj,s` → «надо бы», `,skjkb` → «было ли». Real words (чтобы, также, неужели, были…) and names stay.
+- **New product name:** `чцшлш` → `xwiki`.
+- **Two neighbour swaps in a long word:** «удосбвта» → «удобства» (same letters, 8+).
+- **Hyphenated words in the wrong layout:** `dct-nfrb` → «все-таки», `rnj-nj` → «кто-то», `bp-pf` → «из-за», `цудд-лтщцт` → `well-known`. Real compounds in their own layout and short reduplications («гы-гы») stay.
+- **A stray soft sign after ж/ш/ч/щ:** «клавишь» → «клавиш», «клапвишь» → «клавиш».
+- **«-ить» for «-ит»:** «услышить» → «услышит» when the verb's infinitive is another word.
+- **Wrong first key in a long Russian word:** «жлементы» → «элементы» (8+ letters, top 20 000 words).
+- **A left-out first letter:** «траница» → «страница» (6+ letters, frequent words only).
+- **Rare forms:** a left-out letter «рзделено» → «разделено», a letter two places off «опциаонльно» → «опционально» (10+ letters).
+- Deliberately left alone: «буде», «зи», «коды», «верз», «архим», «ухора», `lowfps`.
+
+### New in 0.3.70
+
+- **Layout switched mid-word.** A word with both Latin and Cyrillic letters used to be left alone. Now Typed re-reads the letters of one script in the other layout and fixes the word when the result is a real word (or, with typo fixes on, a unique fix): `приdtn` → `привет`, `спаcb,j` → `спасибо`, `гkfpf[` → `глазах`, `wщrld` → `world`. Signs on letter keys count (`[` = х, `.` = ю); a period after an ordinary word stays (`приdtn.` → `привет.`). Left alone: a frequent English word with a Russian case ending (`keyами`, `gitом`, `Windowsе`), a single other-script letter after a real word (`sheы`), odd casing (`PRы`) and tokens with digits; if both readings fit, nothing changes. On ≈10 k such words: fixed right RU 99.6%, EN 100%, wrong 0.
+- **First-letter slips in 4-letter words.** `ъотя` → `хотя`, `Ъотя` → `Хотя`: for 4-letter words only into one of the 1 000 most frequent words (5+ letters keep the 10 000 limit). 2–3 letter words are not affected.
+- `исправлят` is still left alone: `исправляет`, `исправлять` and `исправят` are all one edit away with no frequency to choose by, so Typed doesn't guess.
+
+### New in 0.3.69
+
+- **Typos are fixed from the full dictionary.** Fix candidates used to come only from the 40 000 frequent words, so `привественный` never became `приветственный`. Now, when no frequent word fits, Typed looks for any real word form one slip away (5+ letters, lowercase only — capitalised unknown words are mostly names). Frequent words keep priority (`definatly` → `definitely`, not `defiantly`). The first letter and the ending are kept; with several candidates, or a frequent word within two slips, nothing is changed. Typos in rare words fixed right: RU 0.5% → 70.6%, EN 0% → 69%; per-word latency is about the same (mean 2.5 ms RU, 0.4 ms EN).
+- **A slip in the first letter.** `шлавный` → `главный`: the first letter may be replaced by a neighbour key when the rest of the word matches, the word has 5+ letters and the result is one of the 10 000 most frequent words.
+- **«Показать приветственный экран» button** in Settings.
+- **Windows: the settings window no longer stays in memory.** The tray icon now belongs to the background program. The close and minimize buttons fully quit the settings window and lock the vault; while it is closed Task Manager shows a single «Typed» process. The tray icon, «Открыть» / «Сейф» in its menu, or `Ctrl+Shift+V` open it again. «Выход» in the icon menu quits both the window and the background program. The icon is now there right after sign-in, even if the window was never opened. On macOS the window still hides to the menu bar, and the vault now locks when it does.
 
 ### New in 0.3.68
 
@@ -1092,7 +1148,7 @@ settings does not stop the daemon.
 
 ### New in 0.3.20
 
-- The Typed window minimizes to the tray: the close and minimize buttons hide it, and it no longer stays on the taskbar. Click the tray icon to open the window again; “Выход” quits it. The background daemon keeps running.
+- The tray icon belongs to the background program. On Windows (since 0.3.69) the close and minimize buttons fully quit the settings window (the vault locks) while Typed keeps running in the background. Clicking the tray icon or `Ctrl+Shift+V` opens the window again; “Выход” quits both the window and the background program. On macOS the window hides to the menu bar (the vault locks); the Dock and menu-bar icons bring it back.
 - Shortcuts, the tray and the taskbar use a simplified small icon — a sun over water that stays readable at 16 pixels. The large painted water logo is unchanged.
 - Start Menu and desktop shortcuts are named simply **Typed**.
 - Tester installer: `dist\Typed-Setup-0.3.20.exe`. Stop all `layout-keeper.exe` processes first, or let the installer stop them.
@@ -1100,7 +1156,7 @@ settings does not stop the daemon.
 ### New in 0.3.19
 
 - If the last word needs correcting (including a custom-dictionary word), Enter and Tab are held back until the replacement is typed. Previously a chat would send «штсн», then the corrected «incy» as a second message.
-- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.68.dmg`.
+- macOS package script: `packaging/macos/build-dmg.sh` builds `dist/Typed.app` and `dist/Typed-0.3.71.dmg`.
 - Tester installer: `dist\Typed-Setup-0.3.19.exe`. Stop all `layout-keeper.exe` processes first, or let the installer stop them.
 
 ### New in 0.3.18

@@ -47,7 +47,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, ASFW_ANY, BringWindowToTop, PostMessageW, PostThreadMessageW, SendMessageTimeoutW, SMTO_ABORTIFHUNG, SetForegroundWindow, SetTimer, SetWindowsHookExW, ShowWindowAsync,
     TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, SW_RESTORE, SW_SHOW, WH_KEYBOARD_LL,
     WH_MOUSE_LL, WM_APP, WM_INPUTLANGCHANGEREQUEST, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_NULL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+    WM_CLOSE, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
 
 /// Marker in `dwExtraInfo` of our own synthetic input.
@@ -904,22 +904,6 @@ pub fn raise_settings_window() -> bool {
     }
 }
 
-/// Wake a hidden settings window without blocking the caller (used on tray Quit).
-pub fn wake_settings_window_async() -> bool {
-    let mut title: Vec<u16> = crate::brand::WINDOW_TITLE.encode_utf16().collect();
-    title.push(0);
-    unsafe {
-        let hwnd = FindWindowW(ptr::null(), title.as_ptr());
-        if hwnd.is_null() {
-            return false;
-        }
-        ShowWindowAsync(hwnd, SW_SHOW);
-        ShowWindowAsync(hwnd, SW_RESTORE);
-        PostMessageW(hwnd, WM_NULL, 0, 0);
-        true
-    }
-}
-
 fn keep_daemon_responsive() {
     unsafe {
         let process = GetCurrentProcess();
@@ -936,6 +920,80 @@ fn keep_daemon_responsive() {
     }
 }
 
+/// Thread running the daemon's message loop (the tray's «Выход» posts WM_QUIT to it).
+static DAEMON_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Tray commands, on the tray thread of the daemon (since 0.3.69 the icon lives here, so
+/// the settings process can exit whenever its window is closed or minimized).
+fn on_tray_cmd(cmd: crate::tray::TrayCmd) {
+    use crate::tray::TrayCmd;
+    match cmd {
+        TrayCmd::Show => show_settings(false),
+        TrayCmd::ShowVault => show_settings(true),
+        TrayCmd::Quit => quit_everything(),
+    }
+}
+
+/// «Выход»: close the settings window (its process locks the vault and exits), then stop
+/// this daemon. Anything still alive after the grace period is ended by `stop_daemon_except`.
+fn quit_everything() {
+    let mut title: Vec<u16> = crate::brand::WINDOW_TITLE.encode_utf16().collect();
+    title.push(0);
+    unsafe {
+        let hwnd = FindWindowW(ptr::null(), title.as_ptr());
+        if !hwnd.is_null() {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            for _ in 0..30 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if FindWindowW(ptr::null(), title.as_ptr()).is_null() {
+                    break;
+                }
+            }
+        }
+    }
+    stop_daemon_except(&[]);
+    let tid = DAEMON_THREAD.load(std::sync::atomic::Ordering::SeqCst);
+    if tid != 0 {
+        unsafe { PostThreadMessageW(tid, WM_QUIT, 0, 0) };
+    } else {
+        std::process::exit(0);
+    }
+}
+
+/// Raise the settings window, or start a new settings process if none is open.
+fn show_settings(vault: bool) {
+    if vault {
+        crate::platform::request_open_vault();
+    } else {
+        crate::platform::request_show_gui();
+    }
+    let mut title: Vec<u16> = crate::brand::WINDOW_TITLE.encode_utf16().collect();
+    title.push(0);
+    unsafe {
+        let hwnd = FindWindowW(ptr::null(), title.as_ptr());
+        if !hwnd.is_null() {
+            force_foreground(hwnd);
+            return;
+        }
+        // We just got the click / hotkey, so we may hand the foreground to the new window.
+        AllowSetForegroundWindow(ASFW_ANY);
+    }
+    if vault {
+        crate::platform::spawn_settings_gui_vault();
+    } else {
+        crate::platform::spawn_settings_gui();
+    }
+}
+
+fn tray_logo() -> u8 {
+    let path = layout_keeper_core::Config::default_path();
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| layout_keeper_core::Config::from_json(&s).ok())
+        .map(|c| crate::logos::index(c.logo_style))
+        .unwrap_or_else(|| crate::logos::index(Default::default()))
+}
+
 pub fn run(ctl: Controller) -> Result<(), String> {
     let Some(_daemon_mutex) = acquire_daemon_mutex()? else {
         log::info!("Typed daemon already running; not installing duplicate hooks");
@@ -944,6 +1002,7 @@ pub fn run(ctl: Controller) -> Result<(), String> {
     keep_daemon_responsive();
     unsafe {
         let thread_id = GetCurrentThreadId();
+        DAEMON_THREAD.store(thread_id, std::sync::atomic::Ordering::SeqCst);
         STATE.with(|s| {
             *s.borrow_mut() =
                 Some(State { ctl, pending: vec![], thread_id, lshift: false, rshift: false, swallow_up: None, word_lang: None })
@@ -958,6 +1017,7 @@ pub fn run(ctl: Controller) -> Result<(), String> {
         let ev_fg = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, ptr::null_mut(), Some(win_event_proc), 0, 0, WINEVENT_OUTOFCONTEXT);
         let ev_min = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, ptr::null_mut(), Some(win_event_proc), 0, 0, WINEVENT_OUTOFCONTEXT);
         log::info!("running on Windows (WH_KEYBOARD_LL)");
+        let tray = crate::tray::start_daemon_tray(tray_logo(), on_tray_cmd);
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
             match msg.message {
@@ -991,6 +1051,7 @@ pub fn run(ctl: Controller) -> Result<(), String> {
         if !ms.is_null() {
             UnhookWindowsHookEx(ms);
         }
+        drop(tray);
     }
     Ok(())
 }
@@ -1029,17 +1090,7 @@ pub fn type_text(text: &str) -> Result<(), String> {
 
 
 fn summon_gui() {
-    crate::platform::request_open_vault();
-    let mut title: Vec<u16> = crate::brand::WINDOW_TITLE.encode_utf16().collect();
-    title.push(0);
-    unsafe {
-        let hwnd = FindWindowW(ptr::null(), title.as_ptr());
-        if !hwnd.is_null() {
-            force_foreground(hwnd);
-            return;
-        }
-    }
-    crate::platform::spawn_settings_gui_vault();
+    show_settings(true);
 }
 
 fn force_foreground(hwnd: HWND) {

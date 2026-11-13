@@ -653,6 +653,11 @@ impl App {
         ui.small("Он появится в окне, в трее и в переключателе окон.");
         changed |= self.logo_picker(ui);
         ui.separator();
+        if ui.button("Показать приветственный экран").clicked() {
+            // Shown now; «Не показывать снова» keeps its saved state until «Далее».
+            self.welcome_dont_show = self.cfg.hide_welcome;
+            self.welcome_open = true;
+        }
         ui.add(egui::Label::new(egui::RichText::new(format!("Конфиг: {}", self.path.display())).small()).wrap());
         ui.small(WINDOW_TITLE);
         if changed {
@@ -919,9 +924,7 @@ impl App {
             if ui.add(next).clicked() {
                 self.welcome_open = false;
                 self.cfg.welcome_gen = layout_keeper_core::config::CURRENT_WELCOME_GEN;
-                if self.welcome_dont_show {
-                    self.cfg.hide_welcome = true;
-                }
+                self.cfg.hide_welcome = self.welcome_dont_show;
                 self.save();
             }
             ui.add_space(12.0);
@@ -1038,6 +1041,11 @@ fn lang_name(l: Lang) -> &'static str {
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.vault.lock();
+        // Windows (since 0.3.69): the settings process exits on every close / minimize
+        // and the daemon (with the tray icon) keeps running; the tray's «Выход» stops both.
+        // macOS / Linux: the window is the app (macOS) or there is no tray (Linux), so
+        // quitting it stops the key handling too, as before.
+        #[cfg(not(windows))]
         crate::platform::stop_daemon();
     }
 
@@ -1075,14 +1083,24 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             hide_window(ctx);
             self.ui_visible = false;
+            self.vault.lock();
         }
         let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        // Windows: minimizing quits the settings process like the close button does
+        // (the daemon's tray icon / summon hotkey start it again).
+        if cfg!(windows) && minimized && !self.allow_close {
+            self.allow_close = true;
+            self.vault.lock();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         // Only on the transition: a hidden window can keep reporting `minimized`, and
         // re-sending the hide commands every frame woke eframe again and again (≈6% CPU
         // while minimized, 0% while open).
         if can_hide && minimized && self.ui_visible {
             hide_window(ctx);
             self.ui_visible = false;
+            self.vault.lock();
         }
         let want_vault = crate::platform::take_open_vault_request();
         let want_show = crate::platform::take_show_gui_request();
@@ -1192,23 +1210,49 @@ impl eframe::App for App {
 }
 
 pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
+    // Windows (since 0.3.69): a hidden settings window is never kept — the tray lives in
+    // the daemon. `gui --hidden` (older shortcuts) only makes sure the daemon runs.
     #[cfg(windows)]
-    let _gui_mutex = match platform::acquire_gui_mutex() {
-        Ok(None) => {
-            if open_vault {
-                platform::request_open_vault();
-            } else {
-                platform::request_show_gui();
+    if start_hidden {
+        return platform::ensure_daemon_running();
+    }
+    #[cfg(windows)]
+    let _gui_mutex = {
+        let mut guard = None;
+        // A settings process that is just exiting (window closed a moment ago) still holds
+        // the lock for a few milliseconds: wait for it instead of asking it to show itself.
+        for attempt in 0..20 {
+            match platform::acquire_gui_mutex() {
+                Ok(Some(g)) => {
+                    guard = Some(g);
+                    break;
+                }
+                Ok(None) => {
+                    if platform::raise_settings_window() || attempt == 19 {
+                        if open_vault {
+                            platform::request_open_vault();
+                        } else {
+                            platform::request_show_gui();
+                        }
+                        platform::raise_settings_window();
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => {
+                    log::warn!("cannot take GUI single-instance lock: {e}");
+                    break;
+                }
             }
-            platform::raise_settings_window();
-            return Ok(());
         }
-        Ok(Some(guard)) => Some(guard),
-        Err(e) => {
-            log::warn!("cannot take GUI single-instance lock: {e}");
-            None
-        }
+        guard
     };
+    // A fresh settings process answers its own launch: stale requests are not needed.
+    #[cfg(windows)]
+    {
+        let _ = platform::take_show_gui_request();
+        let _ = platform::take_open_vault_request();
+    }
     #[cfg(target_os = "macos")]
     let _gui_lock = match platform::acquire_gui_lock() {
         Ok(None) => {
@@ -1288,7 +1332,8 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         logo_fade_textures: [None, None, None],
         admin_job: None,
         daemon_admin: (None, true, None),
-        tray: crate::tray::start(logo_index),
+        // Windows: the tray icon belongs to the daemon (see `tray`).
+        tray: if cfg!(windows) { None } else { crate::tray::start(logo_index) },
         allow_close: false,
         ui_visible: !start_hidden,
         chrome_ready: false,

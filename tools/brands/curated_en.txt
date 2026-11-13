@@ -81,7 +81,7 @@ applepay googlepay samsungpay sberpay
 dropbox evernote notion obsidian trello asana jira confluence miro canva airtable
 todoist clickup monday basecamp zapier ifttt mailchimp hubspot salesforce zendesk
 intercom shopify wix tilda wordpress joomla drupal squarespace webflow ghost medium
-substack patreon boosty onlyfans kickstarter indiegogo gofundme wikipedia wikidata
+substack patreon boosty onlyfans kickstarter indiegogo gofundme wikipedia wikidata xwiki
 quora stackoverflow habr pikabu dvach fandom imdb letterboxd goodreads duolingo
 coursera udemy edx skillbox geekbrains stepik khan
 cloudflare akamai digitalocean heroku vercel netlify hetzner ovh linode vultr selectel

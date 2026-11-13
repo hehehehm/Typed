@@ -15,6 +15,10 @@
 //!    verb form (`порулить`, `задолбал` are words): tags in `data/ru_split_tags.txt`;
 //! 6. among several splits a ranked rest beats a full-form one, then the longest wins.
 //!
+//! Particles glued to the END of a word (since 0.3.70: `надобы` → `надо бы`, `гдеже` →
+//! `где же`, `знаешьли` → `знаешь ли`): see [`split_particle`]; tried only when no
+//! function word fits at the start.
+//!
 //! Only the space is inserted, so the typed casing stays (`Вофисе` → `В офисе`).
 //! English is not handled: `a`/`I`/`to`/`in` glued to words collide with too many real
 //! words and names.
@@ -92,6 +96,43 @@ pub const MIN_REST_ONE: usize = 5;
 /// Shortest rest after a conjunction or particle (`а`, `и`, `но`, `что`…; not `не`).
 pub const MIN_REST_CONJ: usize = 5;
 
+/// Particles that follow a word (`надо бы`, `где же`, `знаешь ли`). Colloquial `б`
+/// (`надоб`) is left out: too many words end in б.
+pub const PARTICLES: [&str; 3] = ["бы", "же", "ли"];
+/// The word before a glued particle must be this frequent (`надо` is ≈90th).
+pub const PARTICLE_STEM_RANK: u32 = 2_000;
+/// Shortest word before a glued particle (`как бы`, `где же`).
+pub const MIN_PARTICLE_STEM: usize = 3;
+/// A 3-letter word before a particle must be this frequent: `мог бы`, `тот же`, but
+/// `джоли`, `барли`, `рэйли` are names, not `джо ли`.
+pub const SHORT_PARTICLE_STEM_RANK: u32 = 600;
+/// Prepositions that look like frequent words: `обоже` is `о боже`, not `обо же`.
+const PREPOSITION_STEMS: [&str; 6] = ["обо", "ото", "изо", "подо", "предо", "передо"];
+
+/// `надобы` → `надо бы`: a frequent word (not a name) + a glued particle. The caller has
+/// checked that the whole token is not a word (`чтобы`, `также`, `неужели`, `были` stay).
+fn split_particle(d: &Dictionary, chars: &[char], lower: &[char], min_stem: usize) -> Option<String> {
+    for p in PARTICLES {
+        let pv: Vec<char> = p.chars().collect();
+        if !lower.ends_with(&pv) || lower.len() < pv.len() + min_stem {
+            continue;
+        }
+        let n = lower.len() - pv.len();
+        let stem: String = lower[..n].iter().collect();
+        let max_rank = if n <= 3 { SHORT_PARTICLE_STEM_RANK } else { PARTICLE_STEM_RANK };
+        if tag(&stem) == Some('n')
+            || PREPOSITION_STEMS.contains(&stem.as_str())
+            || !d.rank_exact(&stem).is_some_and(|r| r < max_rank)
+        {
+            continue;
+        }
+        let head: String = chars[..n].iter().collect();
+        let tail: String = chars[n..].iter().collect();
+        return Some(format!("{head} {tail}"));
+    }
+    None
+}
+
 /// Personal pronouns after a preposition (`у него`, `к ней`, `с ними`): any length.
 const PRONOUNS: [&str; 30] = [
     "него", "нее", "ней", "них", "ним", "ними", "нему", "нем", "меня", "мне", "мной", "тебя",
@@ -132,8 +173,15 @@ pub fn split_glued(d: &Dictionary, token: &str, lang: Lang) -> Option<String> {
         return None;
     }
     let lower = Dictionary::normalize(token);
-    if !is_glued(&lower) && (d.is_word(&lower) || morph::is_known_form(d, &lower)) {
+    let glued = is_glued(&lower);
+    if !glued && d.is_word(&lower) {
         return None;
+    }
+    // A guessed inflection (`жизнили` looks like a form of nothing real, but the guesser
+    // accepts it) blocks the prefix splits; a particle after a 4+ letter word still splits.
+    if !glued && morph::is_known_form(d, &lower) {
+        let lv: Vec<char> = lower.chars().collect();
+        return split_particle(d, &chars, &lv, MIN_PARTICLE_STEM + 1);
     }
     let lv: Vec<char> = lower.chars().collect();
     // (ranked, rest length) — larger is better.
@@ -203,7 +251,9 @@ pub fn split_glued(d: &Dictionary, token: &str, lang: Lang) -> Option<String> {
         }
         offer((ranked, rl));
     }
-    let (_, pl) = best?;
+    let Some((_, pl)) = best else {
+        return split_particle(d, &chars, &lv, MIN_PARTICLE_STEM);
+    };
     let head: String = chars[..pl].iter().collect();
     let tail: String = chars[pl..].iter().collect();
     Some(format!("{head} {tail}"))
@@ -251,6 +301,26 @@ mod tests {
         ("пронего", "про него"),
         ("каксобака", "как собака"),
     ];
+
+    #[test]
+    fn splits_glued_particles() {
+        for (typed, want) in [
+            ("надобы", "надо бы"), ("Надобы", "Надо бы"), ("какбы", "как бы"),
+            ("еслибы", "если бы"), ("чтоли", "что ли"), ("гдеже", "где же"), ("могбы", "мог бы"), ("тотже", "тот же"),
+            ("былоли", "было ли"), ("хочули", "хочу ли"), ("похожели", "похоже ли"), ("знаешьли", "знаешь ли"),
+        ] {
+            assert_eq!(suggest(typed, Lang::Ru).as_deref(), Some(want), "{typed}");
+        }
+        // Real words with those endings, and rare stems.
+        for w in [
+            "чтобы", "также", "даже", "уже", "неужели", "либо", "дали", "были", "могли", "тоже",
+            "грибы", "рыбы", "вроде", "ножи", "вели", "пошли", "надоб", "джоли", "барли",
+            "рэйли", "силли", "делли", "донли", "барбы", "обоже", "столи", "проли", "развели",
+            "почтили", "нимбы",
+        ] {
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+        }
+    }
 
     #[test]
     fn splits_glued_function_words() {

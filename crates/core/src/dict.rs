@@ -201,6 +201,41 @@ impl Dictionary {
         self.sorted.get(i).is_some_and(|w| w.starts_with(prefix))
     }
 
+    /// Ranked words starting with `prefix` (normalised), from the sorted list.
+    pub fn starting_with<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = (&'a str, u32)> + 'a {
+        let i = self.sorted.partition_point(|w| w.as_str() < prefix);
+        self.sorted[i..]
+            .iter()
+            .take_while(move |w| w.starts_with(prefix))
+            .filter_map(move |w| self.ranks.get(w).map(|&r| (w.as_str(), r)))
+    }
+
+    /// Words of the full-form set within `max` edits (Levenshtein plus swaps of two
+    /// neighbour letters) of `word` (normalised letters), starting with one of `first`
+    /// letters. A walk of the fst that stops as soon as a branch exceeds `max`, so it
+    /// visits only a tiny part of the 3 M forms. At most `limit` results.
+    pub fn full_forms_near(&self, word: &str, max: usize, first: &[char], limit: usize) -> Vec<String> {
+        let Some(set) = &self.known else { return Vec::new() };
+        if !FULL_FORMS.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        let Some(key) = key_bytes(word) else { return Vec::new() };
+        let firsts: Vec<u8> = first.iter().filter_map(|c| key_bytes(&c.to_string())).flatten().collect();
+        let fst = set.as_fst();
+        let n = key.len();
+        let row0: Vec<usize> = (0..=n).collect();
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        let mut path: Vec<u8> = Vec::new();
+        let root = fst.root();
+        for t in root.transitions() {
+            if !firsts.contains(&t.inp) {
+                continue;
+            }
+            near_walk(fst, fst.node(t.addr), t.inp, &key, max, &row0, None, 0, &mut path, &mut out, limit);
+        }
+        out.into_iter().map(|k| key_to_word(&k)).collect()
+    }
+
     pub fn contains(&self, word: &str) -> bool {
         self.rank(word).is_some()
     }
@@ -300,4 +335,62 @@ mod tests {
         assert!(get(Lang::En).unseen_bigrams("ghbdtn") > 0);
         assert!(get(Lang::Ru).unseen_bigrams("зуфсу") > 0);
     }
+}
+
+/// Inverse of [`key_bytes`].
+pub fn key_to_word(k: &[u8]) -> String {
+    k.iter()
+        .map(|&b| if b >= 0xE0 { char::from_u32(b as u32 - 0xE0 + 'а' as u32).unwrap_or('?') } else { b as char })
+        .collect()
+}
+
+/// One step of [`Dictionary::full_forms_near`]: extend the path with byte `b`, compute the
+/// next edit-distance row (optimal string alignment), recurse while it can still match.
+#[allow(clippy::too_many_arguments)]
+fn near_walk(
+    fst: &fst::raw::Fst<&'static [u8]>,
+    node: fst::raw::Node<'_>,
+    b: u8,
+    key: &[u8],
+    max: usize,
+    prev: &[usize],
+    prev2: Option<&[usize]>,
+    prev_b: u8,
+    path: &mut Vec<u8>,
+    out: &mut Vec<Vec<u8>>,
+    limit: usize,
+) {
+    if out.len() >= limit {
+        return;
+    }
+    let n = key.len();
+    let i = path.len() + 1; // length of the candidate prefix incl. b
+    let mut row = vec![0usize; n + 1];
+    row[0] = i;
+    let mut row_min = row[0];
+    for j in 1..=n {
+        let cost = usize::from(key[j - 1] != b);
+        let mut v = (prev[j] + 1).min(row[j - 1] + 1).min(prev[j - 1] + cost);
+        if let Some(p2) = prev2 {
+            if j > 1 && key[j - 1] == prev_b && key[j - 2] == b {
+                v = v.min(p2[j - 2] + 1);
+            }
+        }
+        row[j] = v;
+        row_min = row_min.min(v);
+    }
+    if row_min > max {
+        return;
+    }
+    path.push(b);
+    if node.is_final() && row[n] <= max && path.as_slice() != key {
+        out.push(path.clone());
+    }
+    for t in node.transitions() {
+        near_walk(fst, fst.node(t.addr), t.inp, key, max, &row, Some(prev), b, path, out, limit);
+        if out.len() >= limit {
+            break;
+        }
+    }
+    path.pop();
 }

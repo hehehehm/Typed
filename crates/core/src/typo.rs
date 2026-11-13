@@ -87,18 +87,107 @@ pub fn suggest(word: &str, lang: Lang) -> Option<String> {
 }
 
 pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
+    suggest_impl(d, word, lang, false)
+}
+
+/// Audit helper: like [`suggest_in`], but treats `word` as unknown even when it is a real
+/// word (as if it were a name or slang missing from every dictionary). Never returns the
+/// word itself. Used to measure how often unknown words would be changed.
+#[doc(hidden)]
+pub fn suggest_as_unknown(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
+    suggest_impl(d, word, lang, true).filter(|f| Dictionary::normalize(f) != Dictionary::normalize(word))
+}
+
+fn suggest_impl(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
+    suggest_one(d, word, lang, assume_unknown)
+        .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
+        .or_else(|| verb_soft_sign(d, word, lang, assume_unknown))
+}
+
+/// `-ить` / `-еть` written for `-ит` / `-ет` (`услышить` → `услышит`): the typed form is in
+/// no list (the inflection guesser alone accepts it as an infinitive), the form without ь
+/// is a verb form of 6+ letters whose infinitive is not the typed word.
+fn verb_soft_sign(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
+    let lower = Dictionary::normalize(word);
+    let base = lower.strip_suffix('ь').filter(|b| lang == Lang::Ru && (b.ends_with("ит") || b.ends_with("ет")))?;
+    if base.chars().count() < MIN_LEN_VERB_SOFT_SIGN || !word.chars().all(char::is_alphabetic) || word.ends_with('Ь') {
+        return None;
+    }
+    if (!assume_unknown && d.is_word(&lower)) || !d.is_word(base) {
+        return None;
+    }
+    // The form without ь must be a verb (its 3rd person plural exists: `услышат`, not
+    // the noun `динамит`), and for `-ить` the verb's infinitive is another one
+    // (`услышать`, `увидеть`; `зеркалить` is the infinitive of `зеркалит`).
+    let stem = &base[..base.len() - "ит".len()];
+    let known = |end: &str| d.is_word(&format!("{stem}{end}"));
+    let verb = if lower.ends_with("ить") {
+        (known("ят") || known("ат")) && (known("еть") || known("ать") || known("ять"))
+    } else {
+        known("ут") || known("ют")
+    };
+    if !verb {
+        return None;
+    }
+    Some(word.chars().take(word.chars().count() - 1).collect())
+}
+
+/// Minimum letters (without ь) for [`verb_soft_sign`]: short ones are often names.
+pub const MIN_LEN_VERB_SOFT_SIGN: usize = 6;
+
+/// A soft sign after ж/ш/ч/щ at the end of an unknown word (`клавишь`, `хорош`-style
+/// spelling slip) when the word without it is a known form (`клавиш`) or has a fix of its
+/// own (`клапвишь` → `клапвиш` → `клавиш`). Real words with that ending (`мышь`, `ночь`,
+/// `делаешь`, `режь`) are known and never get here.
+fn hush_soft_sign(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
+    let lower = Dictionary::normalize(word);
+    let base = lower.strip_suffix('ь').filter(|b| lang == Lang::Ru && b.ends_with(['ж', 'ш', 'ч', 'щ']))?;
+    if base.chars().count() < MIN_LEN || !word.chars().all(char::is_alphabetic) || word.ends_with('Ь') {
+        return None;
+    }
+    if !assume_unknown && (d.is_word(&lower) || morph::is_known_form(d, &lower)) {
+        return None;
+    }
+    let typed_base: String = word.chars().take(word.chars().count() - 1).collect();
+    if d.is_word(base) || morph::is_known_form(d, base) {
+        return Some(typed_base); // as typed: `гадёнышь` → `гадёныш`
+    }
+    // Otherwise only an extra key pressed together with its neighbour (`клапвиш`: п next
+    // to а) is fixed in the rest; changed or added letters stay (`лефковичь` is a
+    // surname, not `левкович`).
+    let fix = suggest_one(d, &typed_base, lang, false)?;
+    let (bv, fv): (Vec<char>, Vec<char>) = (base.chars().collect(), Dictionary::normalize(&fix).chars().collect());
+    if fv.len() + 1 != bv.len() || !fv.last().is_some_and(|c| "жшчщ".contains(*c)) {
+        return None;
+    }
+    let at = bv.iter().zip(&fv).take_while(|(a, b)| a == b).count();
+    let mut rest = bv.clone();
+    rest.remove(at);
+    let extra = bv[at];
+    // Any of the equal letters could be the extra one (`клаапвиш`); check its neighbours.
+    let near = |i: usize| (i > 0 && adjacent_keys(extra, bv[i - 1], lang)) || (i + 1 < bv.len() && adjacent_keys(extra, bv[i + 1], lang));
+    let mut i = at;
+    let mut ok = near(i);
+    while !ok && i + 1 < bv.len() && bv[i + 1] == extra {
+        i += 1;
+        ok = near(i);
+    }
+    (rest == fv && ok).then_some(fix)
+}
+
+fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
     let chars: Vec<char> = word.chars().collect();
-    if chars.len() < MIN_LEN || !chars.iter().all(|c| c.is_alphabetic()) || d.is_word(word) {
+    if chars.len() < MIN_LEN || !chars.iter().all(|c| c.is_alphabetic()) || (!assume_unknown && d.is_word(word)) {
         return None;
     }
     let lower_s = Dictionary::normalize(word);
     // A Russian form missing from the list but inflected from a known word
     // (`коррекцию` from `коррекция`) is not a typo.
-    if lang == Lang::Ru && morph::is_known_form(d, &lower_s) {
+    if !assume_unknown && lang == Lang::Ru && morph::is_known_form(d, &lower_s) {
         return None;
     }
     // English forms missing from the list (`typos`, `installer`, `uninstall`).
-    if lang == Lang::En && en_known_form(d, &lower_s) {
+    if !assume_unknown && lang == Lang::En && en_known_form(d, &lower_s) {
         return None;
     }
     let lower: Vec<char> = lower_s.chars().collect();
@@ -133,7 +222,14 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
         // A wrong letter counts only when its key is next to the right one, or (6+
         // letters) for vowel / voiced-voiceless slips: `оцени` must not become `олени`
         // (ц and л are far apart), `recieve` not `relieve`.
-        if !substitution_ok(&lower, &cand, lang) || !first_letter_kept(&lower, &cand) {
+        let first_slip = first_key_slip(&lower, &cand, lang);
+        // The first letter left out (`траница` → `страница`): 6+ typed letters, and the
+        // same frequency limit as a wrong first key.
+        let first_missing = lower.len() >= MIN_LEN_FIRST_MISSING && {
+            let cv: Vec<char> = cand.chars().collect();
+            cv.len() == lower.len() + 1 && cv[1..] == lower[..]
+        };
+        if !substitution_ok(&lower, &cand, lang) || !(first_letter_kept(&lower, &cand) || first_slip || first_missing) {
             continue;
         }
         // Never change just the ending of a form: `удаляю` / `удалю`, `файлами` / `файлам`.
@@ -143,7 +239,8 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
         if lang == Lang::En && (en_affix_only(&lower_s, &cand) || en_end_letter_only(&lower_s, &cand)) {
             continue;
         }
-        if let Some(r) = rank(&cand) {
+        let limit = if first_missing { first_slip_rank(lower.len() + 1, lang) } else { first_slip_rank(lower.len(), lang) };
+        if let Some(r) = rank(&cand).filter(|&r| !(first_slip || first_missing) || r < limit) {
             // Two neighbour letters swapped is the most common slip: such a fix counts
             // as SWAP_BONUS times more frequent (`компьютре` → `компьютер`, not `компьютере`).
             let ok = can_win(r, &cand);
@@ -165,17 +262,35 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
         }
     }
     // Two edits: 8+ letters, or 7 letters when the edits are two swaps of neighbour
-    // letters (`влкдаки` → `вкладки`: same letters, just shuffled).
+    // letters (`влкдаки` → `вкладки`: same letters, just shuffled). A rare candidate with
+    // exactly the typed letters (8+) wins without [`tail_ok`]: the ending only had its
+    // letters reordered, nothing was added or dropped (`удосбвта` → `удобства`).
+    // One-slip candidates (above) block the full-form search below; two-slip ones only
+    // when one of them can win (`рзделено`: the rare `разделены` two slips away loses,
+    // the form `разделено` one slip away wins).
+    let near_offered = !pick.is_empty();
     if pick.is_empty() && lower.len() >= MIN_LEN_2 - 1 {
         let swaps_only = lower.len() < MIN_LEN_2;
         let mut sorted_typed = lower.clone();
         sorted_typed.sort_unstable();
+        // 8+ letters: a reordered ending wins without [`tail_ok`]; at 7 letters such
+        // shuffles turn names into words (`баркину` → `банкиру`, `fannell` → `flannel`).
+        let shuffled = |f: &[char]| lower.len() >= MIN_LEN_2 && {
+            let mut v = f.to_vec();
+            v.sort_unstable();
+            v == sorted_typed
+        };
         let same_letters = |f: &[char]| {
             let mut v = f.to_vec();
             v.sort_unstable();
             v == sorted_typed
         };
-        for (cand, r) in d.iter() {
+        // Only words that can keep the first letter (or swap the first two): a slice of
+        // the sorted list instead of all 40 000 words.
+        let first: String = lower[..1].iter().collect();
+        let swapped: String = [lower[1], lower[0]].iter().collect();
+        let pool = d.starting_with(&first).chain(d.starting_with(&swapped).filter(|_| lower[0] != lower[1]));
+        for (cand, r) in pool {
             if r >= MAX_RANK || !first_letter_kept(&lower, cand) {
                 continue;
             }
@@ -195,7 +310,7 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
                         && (!swaps_only || same_letters(&fv))
                         && morph::reinflect_ok(d, &f, safe)
                     {
-                        let ok = can_win(r, &f);
+                        let ok = can_win(r, &f) || shuffled(&fv);
                         pick.offer(r, f, ok);
                         offered = true;
                     }
@@ -215,12 +330,126 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
                 && distance_kb(&lower, &cv, 2, lang) <= 2
                 && (!swaps_only || same_letters(&cv))
             {
-                pick.offer(r, cand.to_string(), can_win(r, cand));
+                pick.offer(r, cand.to_string(), can_win(r, cand) || shuffled(&cv));
             }
+        }
+    }
+    // Nothing in the frequency list (one or two slips away): any real word form one slip
+    // away; frequency-list fixes keep priority (`definatly` → `definitely`, not `defiantly`);
+    // `привественный` → `приветственный`, a form outside the 40 000-word list.
+    // Not for Capitalised / UPPER words: unknown ones are mostly names.
+    let lowercase = chars.iter().all(|c| c.is_lowercase());
+    let undecided = pick.is_empty() || (!near_offered && pick.clone().winner().is_none());
+    if undecided && lower.len() >= FULL_MIN_LEN && lowercase && !frequent_within_two(d, &lower) {
+        let mut found = full_candidates(d, &lower, &lower_s, lang);
+        // Past a losing two-slip candidate only a left-out letter is put back
+        // (`рзделено` → `разделено`); a dropped one is not (`контингенте` stays).
+        if !pick.is_empty() {
+            found.retain(|c| c.chars().count() == lower.len() + 1);
+        }
+        if !found.is_empty() {
+            return full_winner(&lower, found).map(|w| match_case(word, &w));
         }
     }
     let w = pick.winner()?;
     Some(match_case(word, &w))
+}
+
+/// A frequent word (rank under [`TAIL_RANK`]) two slips away makes a rare one-slip fix
+/// a guess: `пирвте` is `привет` with two swaps, not the rare form `пирате`.
+fn frequent_within_two(d: &Dictionary, lower: &[char]) -> bool {
+    let first: String = lower[..1].iter().collect();
+    let swapped: String = [lower[1], lower[0]].iter().collect();
+    let pool = d.starting_with(&first).chain(d.starting_with(&swapped).filter(|_| lower[0] != lower[1]));
+    let found = pool.filter(|&(_, r)| r < TAIL_RANK).any(|(w, _)| {
+        let n = w.chars().count();
+        n + 2 >= lower.len() && n <= lower.len() + 2 && {
+            let cv: Vec<char> = w.chars().collect();
+            distance(lower, &cv, 2) <= 2
+        }
+    });
+    found
+}
+
+/// Minimum letters for a fix taken from the full-form set (outside the frequency list).
+pub const FULL_MIN_LEN: usize = 5;
+
+/// Search at most this many full-form neighbours (more means the word is too ambiguous).
+const FULL_LIMIT: usize = 16;
+
+/// Real word forms (full-form set) one slip away that pass the same safety rules as
+/// list fixes: first letter kept, neighbour-key or sound-alike letters, not just another
+/// ending of the same word, last two letters kept. Two slips are not searched here: on
+/// the holdout they fixed nothing more and changed far more unknown words (+12 points).
+fn full_candidates(d: &Dictionary, lower: &[char], lower_s: &str, lang: Lang) -> Vec<String> {
+    let max = 1;
+    let mut first = vec![lower[0]];
+    if lower.len() > 1 && lower[1] != lower[0] {
+        first.push(lower[1]);
+    }
+    let mut out = Vec::new();
+    for cand in d.full_forms_near(lower_s, max, &first, FULL_LIMIT) {
+        let cv: Vec<char> = cand.chars().collect();
+        if cv.len() < FULL_MIN_LEN - 1 || !first_letter_kept(lower, &cand) {
+            continue;
+        }
+        if !substitution_ok(lower, &cand, lang) {
+            continue;
+        }
+        if distance_kb(lower, &cv, max, lang) > max {
+            continue;
+        }
+        if lang == Lang::Ru && morph::only_ending_differs(lower_s, &cand) {
+            continue;
+        }
+        if lang == Lang::En && (en_affix_only(lower_s, &cand) || en_end_letter_only(lower_s, &cand)) {
+            continue;
+        }
+        if !tail_ok(lower, &cand) {
+            continue;
+        }
+        out.push(cand);
+    }
+    // A letter typed two places off in a long word (`опциаонльно` → `опционально`):
+    // moved, not swapped across one (that turns real rare words into others).
+    if out.is_empty() && lower.len() >= MIN_LEN_FULL_MOVE {
+        for cand in moves2(lower) {
+            let cv: Vec<char> = cand.chars().collect();
+            let moved = (0..lower.len().saturating_sub(2)).any(|i| {
+                let mut v = lower.to_vec();
+                let c = v.remove(i);
+                v.insert(i + 2, c);
+                let mut u = lower.to_vec();
+                let c = u.remove(i + 2);
+                u.insert(i, c);
+                v == cv || u == cv
+            });
+            if moved
+                && first_letter_kept(lower, &cand)
+                && d.in_full_forms(&cand)
+                && tail_ok(lower, &cand)
+                && !(lang == Lang::Ru && morph::only_ending_differs(lower_s, &cand))
+                && !out.contains(&cand)
+            {
+                out.push(cand);
+            }
+        }
+    }
+    out
+}
+
+
+/// Full-form fixes carry no frequency, so only an unambiguous one wins: the only
+/// candidate, or the only one that swaps two neighbour letters.
+fn full_winner(lower: &[char], found: Vec<String>) -> Option<String> {
+    if found.len() == 1 {
+        return found.into_iter().next();
+    }
+    let swaps: Vec<&String> = found.iter().filter(|c| is_swap(lower, c)).collect();
+    if swaps.len() == 1 {
+        return Some(swaps[0].clone());
+    }
+    None
 }
 
 /// A rarer candidate (rank [`TAIL_RANK`]+) must keep the typed last two letters: the
@@ -267,6 +496,35 @@ fn first_letter_kept(typed: &[char], cand: &str) -> bool {
         (Some(a), Some(b)) if a == b => true,
         _ => cv.len() == typed.len() && cv.len() >= 2 && cv[0] == typed[1] && cv[1] == typed[0],
     }
+}
+
+/// A wrong first letter is fixed only into a word this frequent (`шлавный` → `главный`).
+pub const FIRST_SLIP_RANK: u32 = 10_000;
+/// The same for 4-letter words (`ъотя` → `хотя`): only the most frequent ones, since
+/// short unknown tokens are often names and abbreviations.
+pub const FIRST_SLIP_RANK_SHORT: u32 = 1_000;
+
+/// The same for Russian 8+ letter words (`жлементы` → `элементы`, rank 12 409): a long
+/// word rarely has a real neighbour that differs in the first key alone. Not English: its
+/// list misses many real words that would turn into others (`cemented` → `demented`,
+/// `desisted` → `resisted`).
+pub const FIRST_SLIP_RANK_LONG: u32 = 20_000;
+
+/// Rank limit for a first-letter fix of a `len`-letter word.
+pub fn first_slip_rank(len: usize, lang: Lang) -> u32 {
+    match len {
+        0..=4 => FIRST_SLIP_RANK_SHORT,
+        8.. if lang == Lang::Ru => FIRST_SLIP_RANK_LONG,
+        _ => FIRST_SLIP_RANK,
+    }
+}
+
+/// `cand` differs from `typed` only in the first letter, and the two keys are neighbours
+/// (ш and г): such a slip is fixed, but only into a frequent word ([`FIRST_SLIP_RANK`];
+/// 4-letter words [`FIRST_SLIP_RANK_SHORT`]); `упускать` / `пускать`-style different words are still never touched.
+fn first_key_slip(typed: &[char], cand: &str, lang: Lang) -> bool {
+    let cv: Vec<char> = cand.chars().collect();
+    typed.len() >= 4 && cv.len() == typed.len() && cv[1..] == typed[1..] && cv[0] != typed[0] && adjacent_keys(typed[0], cv[0], lang)
 }
 
 /// Rank divisor for a fix that only swaps two neighbour letters.
@@ -379,6 +637,12 @@ pub const SUFFIX_LEN: usize = 3;
 /// Minimum letters for two-places-off moves.
 pub const MIN_LEN_MOVE: usize = 6;
 
+/// Minimum letters for a full-form fix of a letter typed two places off (`опциаонльно`).
+pub const MIN_LEN_FULL_MOVE: usize = 10;
+
+/// Minimum typed letters for putting back a left-out first letter (`траница`).
+pub const MIN_LEN_FIRST_MISSING: usize = 6;
+
 /// One letter moved two places (`чтокой` → `точкой`) or two letters one apart swapped.
 fn moves2(w: &[char]) -> Vec<String> {
     let n = w.len();
@@ -404,13 +668,14 @@ fn moves2(w: &[char]) -> Vec<String> {
 
 /// Candidates keeping the typed word's last letters (its case ending) beat the rest:
 /// among them the most frequent must clearly win; only without any do the others count.
+#[derive(Clone)]
 struct Pick {
     suffix: Vec<char>,
     same: Ranked,
     other: Ranked,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Ranked {
     best: Option<(u32, String, bool)>,
     second: Option<u32>,
@@ -579,6 +844,50 @@ mod tests {
     fn user_cases_0_3_62() {
         // Two neighbour swaps in a 7-letter word.
         assert_eq!(suggest("влкдаки", Lang::Ru).as_deref(), Some("вкладки"));
+        // Two swaps that reorder the ending: a rare word with the same letters wins
+        // without keeping the typed last two letters (8+ letters only).
+        assert_eq!(suggest("удосбвта", Lang::Ru).as_deref(), Some("удобства"));
+        assert_eq!(suggest("Удосбвта", Lang::Ru).as_deref(), Some("Удобства"));
+        assert_eq!(suggest("удосбтва", Lang::Ru).as_deref(), Some("удобства"));
+        // 7-letter shuffles still keep the ending rule: names stay.
+        assert_eq!(suggest("баркину", Lang::Ru), None);
+        assert_eq!(suggest("fannell", Lang::En), None);
+        // A rare full form one insertion away, lowercase only.
+        assert_eq!(suggest("подстветка", Lang::Ru).as_deref(), Some("подсветка"));
+    }
+
+    #[test]
+    fn slips_from_a_long_message() {
+        // A left-out letter in a rare form, past a losing two-slip candidate (`разделены`).
+        assert_eq!(suggest("рзделено", Lang::Ru).as_deref(), Some("разделено"));
+        // A letter typed two places off in a long rare form.
+        assert_eq!(suggest("опциаонльно", Lang::Ru).as_deref(), Some("опционально"));
+        // A left-out first letter, frequent target.
+        assert_eq!(suggest("траница", Lang::Ru).as_deref(), Some("страница"));
+        assert_eq!(suggest("Траница", Lang::Ru).as_deref(), Some("Страница"));
+        // `-ить` for `-ит`: only when the verb's infinitive is another word.
+        assert_eq!(suggest("услышить", Lang::Ru).as_deref(), Some("услышит"));
+        assert_eq!(suggest("увидить", Lang::Ru).as_deref(), Some("увидит"));
+        assert_eq!(suggest("ккайф", Lang::Ru).as_deref(), Some("кайф"));
+        // Left alone: real words, names / slang verbs, too short or too far.
+        for w in ["буде", "коды", "зи", "динамить", "зеркалить", "верз", "архим", "ухора", "контингенте"] {
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+        }
+        assert_eq!(suggest("lowfps", Lang::En), None);
+    }
+
+    #[test]
+    fn soft_sign_after_a_hushing_letter() {
+        assert_eq!(suggest("клавишь", Lang::Ru).as_deref(), Some("клавиш"));
+        assert_eq!(suggest("Клавишь", Lang::Ru).as_deref(), Some("Клавиш"));
+        assert_eq!(suggest("гадёнышь", Lang::Ru).as_deref(), Some("гадёныш"));
+        assert_eq!(suggest("карандашь", Lang::Ru).as_deref(), Some("карандаш"));
+        // ь dropped and an extra neighbour key removed: п was pressed with а.
+        assert_eq!(suggest("клапвишь", Lang::Ru).as_deref(), Some("клавиш"));
+        // Real words keep their ь; other changes to the rest are not made.
+        for w in ["мышь", "ночь", "делаешь", "плачь", "режь", "вещь", "лефковичь"] {
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+        }
         // Never the non-word «системым» (noun stem + adjective ending).
         assert_eq!(suggest("ситстемрым", Lang::Ru).as_deref(), Some("системным"));
         // Correct verb forms missing from the list stay, every time.
@@ -628,6 +937,36 @@ mod tests {
         assert!(!tail_ok(&"айса".chars().collect::<Vec<_>>(), "айс"));
         // Real words still stay.
         for ok in ["ярлык", "ярлыки", "скидывать"] {
+            assert_eq!(suggest(ok, Lang::Ru), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn full_forms_and_first_letter_0_3_69() {
+        // Forms outside the 40 000-word list are fixes too.
+        assert_eq!(suggest("привественный", Lang::Ru).as_deref(), Some("приветственный"));
+        assert_eq!(suggest("ярдык", Lang::Ru).as_deref(), Some("ярлык"));
+        // A neighbour key for the first letter, into a frequent word.
+        assert_eq!(suggest("шлавный", Lang::Ru).as_deref(), Some("главный"));
+        // 8+ Russian letters: the target may be rarer (элементы is rank 12 409).
+        assert_eq!(suggest("жлементы", Lang::Ru).as_deref(), Some("элементы"));
+        assert_eq!(suggest("Жлементы", Lang::Ru).as_deref(), Some("Элементы"));
+        // English keeps the 10 000 limit: `cemented` is a word missing from the list.
+        assert_eq!(suggest("cemented", Lang::En), None);
+        assert_eq!(suggest("Шлавный", Lang::Ru).as_deref(), Some("Главный"));
+        // 4-letter words too, into the 1 000 most frequent ones.
+        assert_eq!(suggest("ъотя", Lang::Ru).as_deref(), Some("хотя"));
+        assert_eq!(suggest("Ъотя", Lang::Ru).as_deref(), Some("Хотя"));
+        // Three forms one letter away (исправляет / исправлять / исправят) and no
+        // frequency to choose by: left alone rather than guessed.
+        assert_eq!(suggest("исправлят", Lang::Ru), None);
+        assert_eq!(suggest("тсправлят", Lang::Ru), None);
+        // Still left alone.
+        assert_eq!(suggest("скидывать", Lang::Ru), None);
+        assert_eq!(suggest("скидываешь", Lang::Ru), None);
+        assert_eq!(suggest("realme", Lang::En), None);
+        assert_eq!(suggest("helloo", Lang::En).as_deref(), Some("hello"));
+        for ok in ["упускать", "входной", "приветственный"] {
             assert_eq!(suggest(ok, Lang::Ru), None, "{ok}");
         }
     }

@@ -7,7 +7,9 @@
 //! ## Decision rules (in order)
 //! 1. Shortcut keys (Ctrl/Alt/Super/Cmd held) never reach the buffer — they reset it.
 //! 2. URLs, e-mails, paths (`@`, `://`, `www.`, `\`), tokens with digits (configurable),
-//!    mixed Latin+Cyrillic tokens and weird casing (`hElLo`, password-like) are kept.
+//!    and weird casing (`hElLo`, password-like) are kept. Mixed Latin+Cyrillic tokens
+//!    are kept unless re-reading one script in the other layout gives a known word (or,
+//!    with typo fixes, a unique fix): `приdtn` → `привет`, see `mixed_decision`.
 //! 2a. File names: `name.ext` with a known extension typed on the Russian layout
 //!     (`мфгдеюишт`, `ю` = the `.` key) → `vault.bin`; correct Latin file names are kept.
 //! 3. Too short (< `min_word_len` letters) → keep, except single letters when enabled:
@@ -55,6 +57,13 @@ fn is_single_letter_word(lang: Lang, c: char) -> bool {
 /// Words of 1–3 letters only count as dictionary hits if they are this frequent
 /// (subtitle-derived lists contain short junk like "ет").
 pub const SHORT_WORD_MAX_RANK: u32 = 3000;
+
+/// Each half of a hyphenated word typed in the wrong layout (`dct-nfrb` = `все-таки`)
+/// must be at least this frequent (4+ letters; shorter halves use [`SHORT_WORD_MAX_RANK`]).
+pub const HYPHEN_PART_MAX_RANK: u32 = 20_000;
+
+/// Russian particles that only follow a hyphen (`кто-то`, `дай-ка`, `все-таки`).
+const HYPHEN_PARTICLES: [&str; 6] = ["то", "либо", "нибудь", "таки", "ка", "де"];
 /// Shortest token whose membership in the full-form set keeps it unchanged.
 pub const FULL_FORM_MIN_LEN: usize = 4;
 /// Shortest token converted only because the other layout gives a full-form-set word.
@@ -84,6 +93,18 @@ pub struct EngineOptions {
 
 /// `Decision::Convert` reason for a typo fix (kept for undo).
 pub const TYPO_REASON: &str = "typo fix";
+/// Layout switched in the middle of a word (`приdtn` → `привет`).
+pub const MIXED_REASON: &str = "layout switched mid-word";
+/// Letters a mixed Latin+Cyrillic word needs before it is read as one word.
+const MIXED_MIN_LETTERS: usize = 3;
+/// One-letter Russian case endings (`iPhoneа`, `sheы`, `Windowsе`): such a letter after a
+/// Latin word is kept as an ending, never re-read on the Latin layout.
+const CASE_ENDING_LETTERS: &str = "аеёиоуыюяй";
+/// A 3-letter mixed token (`prщ` → `pro`) converts only into a word this frequent.
+const MIXED_SHORT_MAX_RANK: u32 = 5_000;
+/// English words this frequent, followed by a short Cyrillic ending, are read as a name
+/// with a Russian case ending (`keyами`), never re-read as Russian.
+const BRAND_PREFIX_RANK: u32 = 20_000;
 /// `Decision::Convert` reason for an inserted missing space (undoable like a typo fix).
 pub const SPACE_REASON: &str = "missing space after a function word";
 
@@ -182,6 +203,17 @@ fn looks_like_url_or_email(t: &str) -> bool {
 fn natural_case(letters: &[char]) -> bool {
     let up = letters.iter().filter(|c| c.is_uppercase()).count();
     up == 0 || up == letters.len() || (up == 1 && letters[0].is_uppercase())
+}
+
+/// The letters without the ones at either end that are signs on the other layout
+/// (Ж = `:`, Э = `"`, Б = `<`, Ю = `>`, Х = `{`, Ъ = `}`): `тучесдщгвЖ` is `nextcloud:`,
+/// and its capital Ж is just Shift for the colon, not password-like casing. Capitals in
+/// the middle still count (`пароЛь`). Leaves at least one letter.
+fn edge_signs_trimmed(letters: &[char], src: Lang) -> &[char] {
+    let sign = |c: &char| !layout::convert_char(*c, src).is_alphabetic();
+    let start = letters.iter().take_while(|c| sign(c)).count();
+    let end = letters.len() - letters[start..].iter().rev().take_while(|c| sign(c)).count();
+    if start < end { &letters[start..end] } else { letters }
 }
 
 fn trim_non_letters(s: &str) -> &str {
@@ -456,6 +488,9 @@ impl Engine {
             return Decision::Keep("contains digits");
         }
         let Some(src) = layout::detect_script(token) else {
+            if let Some(d) = self.mixed_decision(token) {
+                return d;
+            }
             return Decision::Keep("no letters or mixed scripts");
         };
         let core = trim_non_letters(token);
@@ -496,7 +531,7 @@ impl Engine {
             }
             return Decision::Keep("too short");
         }
-        if !natural_case(&letters) {
+        if !natural_case(edge_signs_trimmed(&letters, src)) {
             return Decision::Keep("unnatural casing (password-like)");
         }
         let dst = src.other();
@@ -510,6 +545,16 @@ impl Engine {
                 dst_dict.rank(w).is_some_and(|r| w.chars().count() > 3 || r < SHORT_WORD_MAX_RANK)
             })
         };
+        // Passed the casing guard only because of a shifted sign at the edge
+        // (`тучесдщгвЖ`): the other-layout reading may convert, nothing else (no typo
+        // fix, split or guess on a token cased like that).
+        if !natural_case(&letters) {
+            return Self::try_convert(&chars, src, o.min_word_len, |w| {
+                dst_dict.rank(w).is_some_and(|r| w.chars().count() > 3 || r < SHORT_WORD_MAX_RANK)
+                    || (w.chars().count() >= FULL_FORM_CONVERT_MIN_LEN && dst_dict.in_full_forms(w))
+            })
+            .unwrap_or(Decision::Keep("unnatural casing (password-like)"));
+        }
         // Glued forms the lists carry as words (`незнаю`): split before "known word".
         if o.fix_missing_spaces && src == Lang::Ru && split::is_glued(core) {
             if let Some(d) = ranked_convert() {
@@ -522,6 +567,11 @@ impl Engine {
 
         if src_dict.contains(core) {
             return Decision::Keep("known word in current layout");
+        }
+        // One hyphen inside (`dct-nfrb` = `все-таки`): '-' is the same key in both
+        // layouts, so the token arrives whole; each half must read as a frequent word.
+        if let Some(d) = Self::hyphen_converted(&chars, src) {
+            return d;
         }
 
         if let Some(d) = ranked_convert() {
@@ -545,6 +595,13 @@ impl Engine {
             }
         }
 
+        // Wrong layout AND a missing space (`yflj,s` = `надобы` → `надо бы`, `dJabct` →
+        // `в офисе`): the other-layout reading is not a word, but splits like one.
+        if o.fix_missing_spaces && dst == Lang::Ru {
+            if let Some(d) = Self::split_converted(token, src) {
+                return d;
+            }
+        }
         // Missing space after a function word (`вофисе` → `в офисе`): the token is in its
         // own layout (no conversion fired above) and unknown in every list.
         if o.fix_missing_spaces {
@@ -595,6 +652,201 @@ impl Engine {
             }
         }
         Decision::Keep("not confident")
+    }
+
+    /// A word with both Latin and Cyrillic letters: the layout was switched mid-word
+    /// (`приdtn` → `привет`, `hellщ` → `hello`). The letters of one script are re-read in
+    /// the other layout; the result must be a known word, or (with typo fixes on, and only
+    /// for lowercase words) have a unique typo fix. If both readings qualify, nothing
+    /// changes. Mixed identifiers stay: `Gitом`, `iPhoneа` (Capitalised, unknown either
+    /// way), `PRы` (casing), anything with digits (checked before).
+    fn mixed_decision(&self, token: &str) -> Option<Decision> {
+        let o = &self.options;
+        let core = trim_non_letters(token);
+        let letters: Vec<char> = core.chars().filter(|c| c.is_alphabetic()).collect();
+        if letters.len() < MIXED_MIN_LETTERS || !natural_case(&letters) {
+            return None;
+        }
+        // Script runs of the letters: `gitом` = [git][ом].
+        let script = |c: char| layout::detect_script(c.encode_utf8(&mut [0; 4]));
+        let mut runs: Vec<(Lang, usize)> = Vec::new();
+        for &c in &letters {
+            let Some(l) = script(c) else { continue };
+            match runs.last_mut() {
+                Some((rl, n)) if *rl == l => *n += 1,
+                _ => runs.push((l, 1)),
+            }
+        }
+        // A word with a short ending in the other script is usually a Latin name with a
+        // Russian case ending (`sheы`, `gitом`, `Windowsе`), not a slip: one letter that can
+        // be a case ending never changes; any other single letter (`prщ`, `hellщ`: щ is the
+        // `o` key) and two-letter endings change only into an exact word.
+        let mut typos_ok = o.fix_typos && letters.iter().all(|c| c.is_lowercase());
+        let mut brand_ending = false;
+        if let [(first, n), (_, tail)] = runs[..] {
+            let prefix: String = letters[..n].iter().collect();
+            // A common English word + Russian case ending (`keyами`, `Heyом`) is not re-read
+            // as Russian (`Лунами`, `Руном`); `ghbвет` (rare `ghb`) still becomes `привет`.
+            brand_ending = first == Lang::En
+                && tail <= 3
+                && dict::get(first).rank(&prefix.to_lowercase()).is_some_and(|r| r < BRAND_PREFIX_RANK);
+            if tail <= 2 {
+                let prefix: String = letters[..n].iter().collect();
+                if dict::get(first).is_word(&prefix.to_lowercase()) {
+                    let last = letters[letters.len() - 1].to_lowercase().next().unwrap_or(' ');
+                    if tail == 1 && CASE_ENDING_LETTERS.contains(last) {
+                        return None;
+                    }
+                    typos_ok = false;
+                }
+            }
+        }
+        // Three letters: one switch only (`prщ`, not `аща`) and only into a frequent word.
+        // When the two-letter run is a word itself, only the one odd letter is re-read
+        // (`неn` → `нет`, `toщ` → `too`), never the word (`даg` is not `lfg`).
+        let mut only: Option<Lang> = None;
+        if letters.len() < MIXED_MIN_LETTERS + 1 {
+            if runs.len() != 2 {
+                return None;
+            }
+            let (major, start) = if runs[0].1 > runs[1].1 { (runs[0].0, 0) } else { (runs[1].0, runs[0].1) };
+            let pair: String = letters[start..start + 2].iter().collect::<String>().to_lowercase();
+            if dict::get(major).contains(&pair) {
+                only = Some(major);
+            }
+        }
+        let known = |d: &Dictionary, w: &str| {
+            let n = w.chars().count();
+            if n <= 3 {
+                d.rank(w).is_some_and(|r| r < MIXED_SHORT_MAX_RANK)
+            } else {
+                d.contains(w) || (n >= FULL_FORM_MIN_LEN && d.in_full_forms(w))
+            }
+        };
+        // `.` `[` `;` … at the end may be ю х ж typed on the Latin layout: first read the
+        // whole token (exact words only), then the letters alone.
+        let mut found: Vec<(bool, String, Lang)> = Vec::new();
+        for lang in [Lang::Ru, Lang::En] {
+            if (brand_ending && lang == Lang::Ru) || only.is_some_and(|l| l != lang) {
+                continue;
+            }
+            let whole = layout::convert(token, lang.other());
+            let d = dict::get(lang);
+            if whole != core
+                && whole.chars().all(char::is_alphabetic)
+                && layout::detect_script(&whole) == Some(lang)
+                && known(d, &whole)
+            {
+                found.push((true, whole, lang));
+                continue;
+            }
+            let cand = layout::convert(core, lang.other());
+            if !cand.chars().all(char::is_alphabetic) || layout::detect_script(&cand) != Some(lang) {
+                continue;
+            }
+            let fixed = token.replacen(core, &cand, 1);
+            if known(d, &cand) {
+                found.push((true, fixed, lang));
+            } else if typos_ok {
+                if let Some(fix) = typo::suggest(&cand, lang) {
+                    found.push((false, token.replacen(core, &fix, 1), lang));
+                }
+            }
+        }
+        // An exact reading beats a typo fix in the other script; two of a kind: keep.
+        let exact: Vec<_> = found.iter().filter(|f| f.0).collect();
+        let pick = match (exact.len(), found.len()) {
+            (1, _) => exact[0],
+            (0, 1) => &found[0],
+            _ => return None,
+        };
+        Some(Decision::Convert { text: pick.1.clone(), target: pick.2, reason: MIXED_REASON })
+    }
+
+    /// [`split::split_glued`] on the other-layout reading of `core`; signs around it are
+    /// converted as signs (`yflj,s!` → `надо бы!`).
+    fn split_converted(token: &str, src: Lang) -> Option<Decision> {
+        let dst = src.other();
+        let chars: Vec<char> = token.chars().collect();
+        // Like `try_convert`: signs on letter keys count (`,skjkb` = `былоли`), up to two
+        // trailing signs stay signs (`yflj,s!` → `надо бы!`).
+        for k in 0..=2.min(chars.len().saturating_sub(1)) {
+            let (head, tail) = chars.split_at(chars.len() - k);
+            if tail.iter().any(|c| c.is_alphanumeric()) {
+                break;
+            }
+            let conv = layout::convert(&head.iter().collect::<String>(), src);
+            if !conv.chars().all(char::is_alphabetic) || layout::detect_script(&conv) != Some(dst) {
+                continue;
+            }
+            if let Some(fixed) = split::split_glued(dict::get(dst), &conv, dst) {
+                let tail: String = tail.iter().collect();
+                return Some(Decision::Convert { text: fixed + &layout::convert_punctuation(&tail, src), target: dst, reason: SPACE_REASON });
+            }
+        }
+        None
+    }
+
+    /// `dct-nfrb` → `все-таки`, `bp-pf` → `из-за`, `rnj-nb,elm` → `кто-нибудь`: exactly one
+    /// hyphen between letters, both halves frequent words in the other layout (short
+    /// halves very frequent, or a hyphen particle after the hyphen; 5+ letter halves may
+    /// be any real form), and the typed halves
+    /// not both words of the typed language (`well-known`, `up-to` stay). Into English one
+    /// half must have 4+ letters (`цудд-лтщцт` → `well-known`; `гы-гы` stays). Up to two
+    /// trailing signs stay signs.
+    fn hyphen_converted(chars: &[char], src: Lang) -> Option<Decision> {
+        let dst = src.other();
+        let (src_dict, dst_dict) = (dict::get(src), dict::get(dst));
+        let frequent = |w: &str, after: bool| {
+            let lower = Dictionary::normalize(w);
+            (after && dst == Lang::Ru && HYPHEN_PARTICLES.contains(&lower.as_str()))
+                || dst_dict.rank(&lower).is_some_and(|r| {
+                    r < if lower.chars().count() <= 3 { SHORT_WORD_MAX_RANK } else { HYPHEN_PART_MAX_RANK }
+                })
+                // A rarer form of 5+ letters (`конференциях`), as for whole words.
+                || (lower.chars().count() >= FULL_FORM_CONVERT_MIN_LEN && dst_dict.in_full_forms(&lower))
+        };
+        // The whole token read in the other layout, when its last half is a real (if
+        // rare) form: a trailing sign is a letter there (`ghtcc-rjyathtywbz[` is
+        // `пресс-конференциях`, not `пресс-конференция[`).
+        let whole = layout::convert(&chars.iter().collect::<String>(), src);
+        let whole_last_known = whole.rsplit_once('-').is_some_and(|(_, b)| {
+            let b = Dictionary::normalize(b);
+            !b.is_empty() && b.chars().all(char::is_alphabetic) && (dst_dict.contains(&b) || dst_dict.in_full_forms(&b))
+        });
+        for k in 0..=2.min(chars.len().saturating_sub(1)) {
+            let (head, tail) = chars.split_at(chars.len() - k);
+            if tail.iter().any(|c| c.is_alphanumeric()) || (k > 0 && whole_last_known) {
+                break;
+            }
+            let head: String = head.iter().collect();
+            let Some((a, b)) = head.split_once('-') else { continue };
+            if a.chars().count() < 2 || b.chars().count() < 2 || b.contains('-') {
+                continue;
+            }
+            // The typed halves: letters only (signs on letter keys come next).
+            if src_dict.contains(&Dictionary::normalize(a)) && src_dict.contains(&Dictionary::normalize(b)) {
+                return None;
+            }
+            let conv = layout::convert(&head, src);
+            let (ca, cb) = conv.split_once('-')?;
+            let letters = |w: &str| w.chars().all(char::is_alphabetic) && layout::detect_script(w) == Some(dst);
+            if !letters(ca) || !letters(cb) || !natural_case(&conv.chars().filter(|c| c.is_alphabetic()).collect::<Vec<_>>()) {
+                continue;
+            }
+            // Into English, one half needs 4+ letters: short Russian reduplications
+            // (`гы-гы`, `цу-цу`, `туц-туц`) read as `us-us`, `we-we`, `new-new`.
+            let long_half = ca.chars().count().max(cb.chars().count()) >= 4;
+            if (dst == Lang::Ru || long_half) && frequent(ca, false) && frequent(cb, true) {
+                let tail: String = tail.iter().collect();
+                return Some(Decision::Convert {
+                    text: conv + &layout::convert_punctuation(&tail, src),
+                    target: dst,
+                    reason: "converted form is a known word",
+                });
+            }
+        }
+        None
     }
 
     fn split_decision(token: &str, core: &str, src: Lang) -> Option<Decision> {
@@ -692,6 +944,120 @@ mod tests {
             Decision::Convert { text, .. } => Some(text),
             Decision::Keep(_) => None,
         }
+    }
+
+    #[test]
+    fn shifted_sign_at_the_edge_is_not_password_casing() {
+        // Shift+ж is `:` on the Latin layout: `nextcloud:` typed on the Russian one.
+        assert_eq!(conv("тучесдщгвЖ").as_deref(), Some("nextcloud:"));
+        assert_eq!(conv("ТучесдщгвЖ").as_deref(), Some("Nextcloud:"));
+        // Э = `"`, Б = `<`, Ю = `>` at either end.
+        assert_eq!(conv("руддщЭ").as_deref(), Some("hello\""));
+        assert_eq!(conv("ЭруддщЭ").as_deref(), Some("\"hello\""));
+        assert_eq!(conv("ЭРуддщ").as_deref(), Some("\"Hello"));
+        assert_eq!(conv("руддщЮ").as_deref(), Some("hello>"));
+        // Capitals in the middle are still password-like; so is odd casing next to the sign.
+        for t in ["тучесДщгвЖ", "тУчесдщгвЖ", "ТУчесдщгвЖ", "пароЛьЖ", "ЖпАроль"] {
+            assert_eq!(engine().decide(t), Decision::Keep("unnatural casing (password-like)"), "{t}");
+        }
+        // Only a conversion, never a typo fix, for such casing.
+        let typos = Engine::new(EngineOptions { fix_typos: true, ..Default::default() });
+        assert_eq!(typos.decide("ПаркуЖ"), Decision::Keep("unnatural casing (password-like)"));
+        // Without the sign: unchanged rules.
+        assert_eq!(conv("тучесдщгв").as_deref(), Some("nextcloud"));
+        assert_eq!(conv("реезы").as_deref(), Some("https"));
+    }
+
+    #[test]
+    fn first_letter_slip_before_dots() {
+        let typos = Engine::new(EngineOptions { fix_typos: true, ..Default::default() });
+        let fix = |w: &str| match typos.decide(w) {
+            Decision::Convert { text, .. } => Some(text),
+            _ => None,
+        };
+        assert_eq!(fix("жлементы").as_deref(), Some("элементы"));
+        assert_eq!(fix("жлементы....").as_deref(), Some("элементы...."));
+        assert_eq!(fix("Жлементы,").as_deref(), Some("Элементы,"));
+        for w in ["жители", "железный", "элементы", "этажи"] {
+            assert_eq!(fix(w), None, "{w}");
+        }
+    }
+
+    #[test]
+    fn hyphenated_word_in_the_wrong_layout() {
+        assert_eq!(conv("dct-nfrb").as_deref(), Some("все-таки"));
+        assert_eq!(conv("Dct-nfrb").as_deref(), Some("Все-таки"));
+        assert_eq!(conv("dct-nfrb,").as_deref(), Some("все-таки,"));
+        assert_eq!(conv("rnj-nj").as_deref(), Some("кто-то"));
+        assert_eq!(conv("bp-pf").as_deref(), Some("из-за"));
+        assert_eq!(conv("rfr-yb,elm").as_deref(), Some("как-нибудь"));
+        assert_eq!(conv("lfq-rf").as_deref(), Some("дай-ка"));
+        assert_eq!(conv("цудд-лтщцт").as_deref(), Some("well-known"));
+        // A trailing sign that is a letter of a real form stays a letter.
+        assert_eq!(conv("ghtcc-rjyathtywbz[").as_deref(), Some("пресс-конференциях"));
+        // Real hyphenated words in their own layout, and short reduplications, stay.
+        for w in ["well-known", "up-to", "e-mail", "x-ray", "кто-то", "все-таки", "гы-гы", "цу-цу", "туц-туц", "rnj-nj-nj"] {
+            assert_eq!(conv(w), None, "{w}");
+        }
+    }
+
+    #[test]
+    fn wrong_layout_with_a_missing_space() {
+        // `yflj,s` is `надобы` (the comma is the б key): converted and split.
+        assert_eq!(engine().decide("yflj,s"), Decision::Convert { text: "надо бы".into(), target: Lang::Ru, reason: SPACE_REASON });
+        assert_eq!(conv("Yflj,s").as_deref(), Some("Надо бы"));
+        assert_eq!(conv("yflj,s!").as_deref(), Some("надо бы!"));
+        assert_eq!(conv("dJabct").as_deref(), None); // odd casing stays
+        assert_eq!(conv("djabct").as_deref(), Some("в офисе"));
+        assert_eq!(conv("yflj").as_deref(), Some("надо"));
+        // Words that end in those particles convert whole.
+        assert_eq!(conv("xnj,s").as_deref(), Some("чтобы"));
+        assert_eq!(conv("nfr;t").as_deref(), Some("также"));
+        // A product name typed on the Russian layout.
+        assert_eq!(conv("чцшлш").as_deref(), Some("xwiki"));
+        // Letter keys that are signs on the Latin layout: `б` = `,`, `ж` = `;`, `э` = `'`.
+        assert_eq!(conv(",skjkb").as_deref(), Some("было ли"));
+        assert_eq!(conv("'njn;t").as_deref(), Some("этот же"));
+    }
+
+    #[test]
+    fn layout_switched_mid_word_0_3_69() {
+        // The letters of one script re-read in the other layout give a known word.
+        assert_eq!(conv("приdtn").as_deref(), Some("привет"));
+        assert_eq!(conv("ghbвет").as_deref(), Some("привет"));
+        assert_eq!(conv("Приdtn").as_deref(), Some("Привет"));
+        assert_eq!(conv("спаcb,j").as_deref(), Some("спасибо"));
+        assert_eq!(conv("гkfpf[").as_deref(), Some("глазах"));
+        assert_eq!(conv("приdtn.").as_deref(), Some("привет."));
+        assert_eq!(conv("wщrld").as_deref(), Some("world"));
+        // One letter after the switch that cannot be a case ending (щ is the `o` key).
+        assert_eq!(conv("prщ").as_deref(), Some("pro"));
+        assert_eq!(conv("Prщ").as_deref(), Some("Pro"));
+        assert_eq!(conv("hellщ").as_deref(), Some("hello"));
+        assert_eq!(conv("неn").as_deref(), Some("нет"));
+        assert_eq!(conv("toщ").as_deref(), Some("too"));
+        // A two-letter word plus one odd letter is not re-read as a whole.
+        for t in ["даg", "изm", "dты", "сif", "мby"] {
+            assert_eq!(conv(t), None, "{t}");
+        }
+        assert_eq!(conv("ыщund").as_deref(), Some("sound"));
+        // Plus an ordinary typo, when typo fixes are on.
+        let typos = Engine::new(EngineOptions { fix_typos: true, ..Default::default() });
+        let fix = |t: &str| match typos.decide(t) {
+            Decision::Convert { text, .. } => Some(text),
+            Decision::Keep(_) => None,
+        };
+        assert_eq!(fix("приdtnn").as_deref(), Some("привет"));
+        assert_eq!(fix("wщrlds").as_deref(), Some("worlds"));
+        assert_eq!(fix("beaгtfiul").as_deref(), Some("beautiful"));
+        assert_eq!(conv("приdtnn"), None);
+        // Mixed names and identifiers stay.
+        for t in ["Gitом", "iPhoneа", "gitом", "PRы", "VPNом", "Wi-Fiем", "abcабв", "оотjbmь", "sheы", "youе", "Windowsе", "Heyом", "keyами", "gitа", "macу", "Appleй", "linuxе"] {
+            assert_eq!(fix(t), None, "{t}");
+        }
+        // Through the key buffer, with the replacement in the word's own layout.
+        let mut e = engine();
+        assert_eq!(type_str(&mut e, "приdtn "), vec![Replacement { delete: 7, insert: "привет ".into(), target: Lang::Ru }]);
     }
 
     #[test]
