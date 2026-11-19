@@ -98,6 +98,13 @@ pub fn suggest_as_unknown(d: &Dictionary, word: &str, lang: Lang) -> Option<Stri
     suggest_impl(d, word, lang, true).filter(|f| Dictionary::normalize(f) != Dictionary::normalize(word))
 }
 
+/// Audit helper: the wrong-layout + typo reading of an unknown token (`conv` is the
+/// token re-read in `lang`). Not implemented before 0.3.72.
+#[doc(hidden)]
+pub fn layout_typo_as_unknown(_conv: &str, _lang: Lang) -> Option<String> {
+    None
+}
+
 fn suggest_impl(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
     suggest_one(d, word, lang, assume_unknown)
         .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
