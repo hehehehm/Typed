@@ -36,6 +36,7 @@ use crate::buffer::WordBuffer;
 use crate::dict::{self, Dictionary};
 use crate::filename;
 use crate::layout::{self, Lang};
+use crate::ngram::Context;
 use crate::split;
 use crate::typo;
 use crate::userdict::UserWords;
@@ -97,6 +98,8 @@ pub struct EngineOptions {
     /// Corrections undone once with Backspace (normalised keys, `typo:` prefix for a
     /// typo-only undo): a second undo of the same one makes it permanent.
     pub undone_once: HashSet<String>,
+    /// Use the previous words (word n-grams) to choose and veto typo fixes.
+    pub use_context: bool,
 }
 
 /// `Decision::Convert` reason for a typo fix (kept for undo).
@@ -121,7 +124,7 @@ pub const SPACE_REASON: &str = "missing space after a function word";
 
 impl Default for EngineOptions {
     fn default() -> Self {
-        Self { autocorrect: true, convert_single_letters: true, preferred_lang: None, skip_urls_emails: true, skip_tokens_with_digits: true, min_word_len: 2, user_words: UserWords::default(), fix_typos: false, never_correct: HashSet::new(), undo_on_backspace: true, fix_missing_spaces: true, typo_level: typo::Level::default(), never_typo: HashSet::new(), undone_once: HashSet::new() }
+        Self { autocorrect: true, convert_single_letters: true, preferred_lang: None, skip_urls_emails: true, skip_tokens_with_digits: true, min_word_len: 2, user_words: UserWords::default(), fix_typos: false, never_correct: HashSet::new(), undo_on_backspace: true, fix_missing_spaces: true, typo_level: typo::Level::default(), never_typo: HashSet::new(), undone_once: HashSet::new(), use_context: true }
     }
 }
 
@@ -1000,7 +1003,37 @@ impl Engine {
         if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(core)) {
             return None;
         }
-        typo::suggest_level(core, lang, o.typo_level)
+        typo::suggest_ctx(core, lang, o.typo_level, &self.left_context(lang))
+    }
+
+    /// The one or two words before the word being judged, if they are words of `lang`
+    /// and nothing broke the sentence in between (see [`crate::ngram::Context`]). After a
+    /// sentence end or Enter it is the sentence start; after a reset (click, focus
+    /// change), a digit or another script it is unknown.
+    pub fn left_context(&self, lang: Lang) -> Context {
+        let mut words: Vec<String> = Vec::new();
+        if !self.options.use_context {
+            return Context::none();
+        }
+        for w in self.last.iter().chain(self.history.iter().rev()) {
+            let b = &w.boundary;
+            if b.contains(['.', '!', '?', '\n', '\r']) {
+                words.push(crate::ngram::START.to_string());
+                break;
+            }
+            if !b.chars().all(|c| c.is_whitespace() && c != '\t' || matches!(c, ',' | ';' | ':' | '-' | '—' | '–' | '"' | '«' | '»')) {
+                break;
+            }
+            let Some(core) = trim_non_letters(&w.word).split_whitespace().last() else { break };
+            if !core.chars().all(char::is_alphabetic) || layout::detect_script(core) != Some(lang) {
+                break;
+            }
+            words.push(Dictionary::normalize(core));
+            if words.len() == 2 {
+                break;
+            }
+        }
+        Context { prev: words.first().cloned(), prev2: words.get(1).cloned() }
     }
 
     /// Wrong layout + typo: the decision and the plain other-layout reading (the
@@ -1031,7 +1064,7 @@ impl Engine {
             if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(conv_core)) {
                 continue;
             }
-            if let Some(fix) = crate::typo_wide::layout_typo(conv_core, dst, o.typo_level) {
+            if let Some(fix) = crate::typo_wide::layout_typo_ctx(conv_core, dst, o.typo_level, &self.left_context(dst)) {
                 let tail: String = tail.iter().collect();
                 let tail = layout::convert_punctuation(&tail, src);
                 let plain = format!("{conv}{tail}");

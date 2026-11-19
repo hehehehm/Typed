@@ -346,6 +346,9 @@ pub struct Config {
     /// undos). A second undo moves the word to `never_correct` / `never_typo_fix`.
     #[serde(default)]
     pub undone_once: Vec<String>,
+    /// Let the previous words (word n-grams) choose and veto typo fixes (since 0.3.72).
+    #[serde(default = "default_true")]
+    pub use_context: bool,
     /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
     #[serde(default = "default_true")]
     pub fix_missing_spaces: bool,
@@ -383,6 +386,7 @@ impl Default for Config {
             typo_level: crate::typo::Level::default(),
             never_typo_fix: Vec::new(),
             undone_once: Vec::new(),
+            use_context: true,
             fix_missing_spaces: true,
             run_as_admin: false,
         }
@@ -550,6 +554,7 @@ impl Config {
             typo_level: self.typo_level,
             never_typo: self.never_typo_fix.iter().map(|w| crate::engine::never_key(w)).filter(|w| !w.is_empty()).collect(),
             undone_once: self.undone_once.iter().cloned().collect(),
+            use_context: self.use_context,
         }
     }
 

@@ -19,6 +19,7 @@ pub mod ffi;
 pub mod filename;
 pub mod layout;
 pub mod morph;
+pub mod ngram;
 pub mod split;
 pub mod typo;
 pub mod typo_wide;

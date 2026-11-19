@@ -16,6 +16,7 @@
 use crate::dict::{self, Dictionary};
 use crate::layout::Lang;
 use crate::morph;
+use crate::ngram::{self, Context};
 
 /// How hard the typo fixer tries (settings: «Осторожно / Обычно / Смело»).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -109,6 +110,12 @@ pub fn suggest_level(word: &str, lang: Lang, level: Level) -> Option<String> {
     suggest_impl(dict::get(lang), word, lang, false, level)
 }
 
+/// [`suggest_level`] with the words typed before (see [`crate::ngram`]): context picks
+/// between close candidates of the scored search and vetoes a fix that does not fit.
+pub fn suggest_ctx(word: &str, lang: Lang, level: Level, ctx: &Context) -> Option<String> {
+    suggest_impl_ctx(dict::get(lang), word, lang, false, level, ctx)
+}
+
 pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
     suggest_impl(d, word, lang, false, Level::default())
 }
@@ -123,17 +130,29 @@ pub fn suggest_as_unknown(d: &Dictionary, word: &str, lang: Lang) -> Option<Stri
 
 #[doc(hidden)]
 pub fn suggest_as_unknown_level(d: &Dictionary, word: &str, lang: Lang, level: Level) -> Option<String> {
-    suggest_impl(d, word, lang, true, level).filter(|f| Dictionary::normalize(f) != Dictionary::normalize(word))
+    suggest_as_unknown_ctx(d, word, lang, level, &Context::none())
+}
+
+#[doc(hidden)]
+pub fn suggest_as_unknown_ctx(d: &Dictionary, word: &str, lang: Lang, level: Level, ctx: &Context) -> Option<String> {
+    suggest_impl_ctx(d, word, lang, true, level, ctx).filter(|f| Dictionary::normalize(f) != Dictionary::normalize(word))
 }
 
 fn suggest_impl(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level) -> Option<String> {
+    suggest_impl_ctx(d, word, lang, assume_unknown, level, &Context::none())
+}
+
+fn suggest_impl_ctx(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level, ctx: &Context) -> Option<String> {
     let strict = suggest_one(d, word, lang, assume_unknown)
         .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
         .or_else(|| verb_soft_sign(d, word, lang, assume_unknown));
-    if strict.is_some() || level == Level::Cautious {
-        return strict;
+    // A strict fix the context rejects falls through to the scored search, which weighs
+    // the context itself (and may pick another candidate or nothing).
+    let vetoed = strict.as_deref().is_some_and(|f| ngram::veto(ctx, word, f, lang));
+    if (strict.is_some() && !vetoed) || level == Level::Cautious {
+        return strict.filter(|_| !vetoed);
     }
-    crate::typo_wide::suggest_wide(d, word, lang, assume_unknown, level)
+    crate::typo_wide::suggest_wide(d, word, lang, assume_unknown, level, ctx)
 }
 
 /// `-ить` / `-еть` written for `-ит` / `-ет` (`услышить` → `услышит`): the typed form is in

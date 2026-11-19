@@ -21,12 +21,15 @@
 use crate::dict::{self, Dictionary};
 use crate::layout::{self, Lang};
 use crate::morph;
+use crate::ngram::{self, Context};
 use crate::typo::{adjacent_keys_raw, en_affix_only, en_end_letter_only, en_known_form, first_letter_kept, match_case, sound_alike, tail_ok, Level, MAX_RANK, TAIL_RANK};
 
 /// Weight of one edit (in score units, natural log of frequency rank).
 pub const EDIT_WEIGHT: f64 = 3.0;
 /// Added to ranks before the log: the top words should not win by frequency alone.
 pub const RANK_OFFSET: f64 = 100.0;
+/// Weight of the context fit ([`ngram::fit`], about −4…+4) in the score.
+pub const CONTEXT_WEIGHT: f64 = 0.8;
 /// Score bonus for a candidate that keeps the typed last two letters.
 pub const TAIL_BONUS: f64 = 0.8;
 
@@ -232,7 +235,7 @@ struct Scored {
 }
 
 /// The scored search. `None` when nothing fits or the top two are too close.
-pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level) -> Option<String> {
+pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level, ctx: &Context) -> Option<String> {
     let chars: Vec<char> = word.chars().collect();
     let n = chars.len();
     if n < 3 || !chars.iter().all(|c| c.is_alphabetic()) || layout::detect_script(word) != Some(lang) {
@@ -275,6 +278,7 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
     let dels: Vec<u32> = (0..n).map(|i| del_cost(&lower, i, lang)).collect();
     let mut scratch = Scratch::default();
     let mut cv: Vec<char> = Vec::with_capacity(n + 4);
+    let has_ctx = !ctx.is_empty();
     for (cand, r) in pool {
         if r >= MAX_RANK {
             continue;
@@ -309,6 +313,9 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
         if cv.len() >= 2 && cv[cv.len() - 2..] == *tail2 {
             score -= TAIL_BONUS;
         }
+        if has_ctx {
+            score -= CONTEXT_WEIGHT * ngram::fit(ctx, cand, lang).unwrap_or(0.0);
+        }
         let s = Scored { score, word: cand.to_string(), ok };
         match &best {
             Some(b) if b.word == s.word => {}
@@ -327,6 +334,9 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
     if second.is_some_and(|s| s - best.score < margin(level, !lowercase)) {
         return None;
     }
+    if ngram::veto(ctx, word, &best.word, lang) {
+        return None;
+    }
     Some(match_case(word, &best.word))
 }
 
@@ -341,6 +351,11 @@ pub fn layout_typo_min_len(level: Level) -> usize {
 /// `conv` (letters only, the token re-read in `dst`) is not a word of `dst` but a typo of
 /// one: the fix. The caller checks the typed side (unknown, no typo fix of its own).
 pub fn layout_typo(conv: &str, dst: Lang, level: Level) -> Option<String> {
+    layout_typo_ctx(conv, dst, level, &Context::none())
+}
+
+/// [`layout_typo`] with the words typed before (in `dst`).
+pub fn layout_typo_ctx(conv: &str, dst: Lang, level: Level, ctx: &Context) -> Option<String> {
     if level == Level::Cautious || conv.chars().count() < layout_typo_min_len(level) {
         return None;
     }
@@ -351,7 +366,7 @@ pub fn layout_typo(conv: &str, dst: Lang, level: Level) -> Option<String> {
     if d.is_word(conv) {
         return None;
     }
-    crate::typo::suggest_level(conv, dst, level)
+    crate::typo::suggest_ctx(conv, dst, level, ctx)
 }
 
 /// The typed side of a wrong-layout + typo fix looks foreign to its own language: it has

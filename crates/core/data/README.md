@@ -88,3 +88,32 @@ Audit: `cargo run --release -p layout_keeper_core --example brands_audit`.
 - `ru_glued.txt`: curated (MIT) glued forms that the frequency lists carry as words although
   they are mistakes (`незнаю`, `вобщем`, `впорядке`); they are split anyway.
 Audit: `cargo run --release -p layout_keeper_core --example split_audit -- ru_full.txt ru_all.txt`.
+
+## Word n-gram context model (since 0.3.72)
+
+`ru_ngrams.fst` (4.4 MB) and `en_ngrams.fst` (3.5 MB): an fst map of word unigrams, bigrams
+and trigrams with quantised counts (`round(4·log2 count) + 1`, so ±9 %), read by
+`src/ngram.rs`. The typo fixer uses it to choose between close candidates and to veto a fix
+that does not fit after the previous one or two words (or when the typed word fits better).
+
+| Source | License | Used |
+|---|---|---|
+| [Tatoeba](https://tatoeba.org) sentence exports `rus_sentences.tsv.bz2`, `eng_sentences.tsv.bz2` (downloads.tatoeba.org/exports/per_language, fetched 2026-11-19) | **CC BY 2.0 FR** (© Tatoeba contributors) | all sentences except those with id % 50 == 0 (held out) |
+| Wikipedia dump parts `ruwiki-latest-pages-articles1.xml-p1p224167.bz2`, `enwiki-latest-pages-articles1.xml-p1p41242.bz2` (dumps.wikimedia.org, fetched 2026-11-19) | **CC BY-SA 4.0** (© Wikipedia contributors) | the first 25 M tokens of article text (markup stripped) |
+
+Only counts derived from the texts are stored, no text. Tokens: lowercase letter runs of the
+language (`ё` → `е`); vocabulary = `{lang}.txt` + `{lang}_extra.txt` + corpus words seen 30+
+times; digits, other scripts, unknown words and sentence ends break the context (`<s>` marks a
+sentence start).
+
+| | tokens | unigrams | bigrams (kept / count ≥ 2) | trigrams (kept / count ≥ 3) | keys | size |
+|---|---|---|---|---|---|---|
+| ru | 26.95 M | 77 181 | 300 000 / 1 659 822 | 120 000 / 690 433 | 497 181 | 4.39 MB |
+| en | 39.11 M | 48 683 | 300 000 / 1 634 612 | 120 000 / 1 360 335 | 468 683 | 3.45 MB |
+
+Most frequent n-grams are kept (doubling the tables to 600 k / 300 k changed the
+evaluation by ≤ 0.5 point). Rebuild: `tools/ngrams/fetch.sh` (in an empty dir), then
+`tools/ngrams/build.sh <that dir>` from the repository root (count: `tools/ngrams/count.py`,
+fst: `examples/build_ngrams.rs`). The same run writes `tests/data/heldout_{ru,en}.txt`:
+3 000 held-out Tatoeba sentences per language (**CC BY 2.0 FR**) for `tests/context_eval.rs`.
+Debug: `cargo run --release -p layout_keeper_core --example ctx_fit -- ru "я не" знаю знаб`.
