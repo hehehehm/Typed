@@ -73,8 +73,16 @@ fn capitalise(w: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
+fn level() -> typo::Level {
+    match std::env::var("EVAL_LEVEL").as_deref() {
+        Ok("cautious") => typo::Level::Cautious,
+        Ok("aggressive") => typo::Level::Aggressive,
+        _ => typo::Level::Normal,
+    }
+}
+
 fn engine() -> Engine {
-    Engine::new(EngineOptions { fix_typos: true, ..Default::default() })
+    Engine::new(EngineOptions { fix_typos: true, typo_level: level(), ..Default::default() })
 }
 
 fn out_text(e: &Engine, token: &str) -> Option<String> {
@@ -122,9 +130,11 @@ fn correction_eval() {
     let mut wrong_ex: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut miss_ex: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let kinds = ["typo 1", "typo 2", "typo 3", "layout", "layout+typo"];
+    let mut times: Vec<(f64, String)> = Vec::new();
     for lang in [Lang::Ru, Lang::En] {
         let d = dict::get(lang);
         let mut rng = Rng(7);
+        let mut ex_rng = Rng(11);
         let mut table: BTreeMap<(&str, usize), Cell> = BTreeMap::new();
         let mut totals: BTreeMap<&str, Cell> = BTreeMap::new();
         for len in 2..=12 {
@@ -150,7 +160,9 @@ fn correction_eval() {
                         if kind == "layout+typo" && d.is_word(&Dictionary::normalize(&layout::convert(&t, lang.other()))) { continue; }
                         t
                     } else { typed };
+                    let t0 = std::time::Instant::now();
                     let got = out_text(&e, &typed);
+                    times.push((t0.elapsed().as_secs_f64() * 1000.0, typed.clone()));
                     // Wrong layout + slip, converted but the slip left: half done.
                     let half = is_layout && got.as_deref().is_some_and(|g| Dictionary::normalize(g) != w && Dictionary::normalize(g) == Dictionary::normalize(&layout::convert(&typed, lang.other())));
                     let cell = table.entry((kind, len)).or_default();
@@ -166,7 +178,7 @@ fn correction_eval() {
                         }
                         None => {
                             let ex = miss_ex.entry(format!("{lang:?} {kind}")).or_default();
-                            if ex.len() < 12 && rng.next(4) == 0 { ex.push(format!("{typed} ({w})")); }
+                            if ex.len() < 12 && ex_rng.next(4) == 0 { ex.push(format!("{typed} ({w})")); }
                         }
                     }
                 }
@@ -195,7 +207,7 @@ fn correction_eval() {
             for w in &words {
                 let n = w.chars().count();
                 let t = if cap { capitalise(w) } else { w.clone() };
-                let changed = typo::suggest_as_unknown(d, &t, lang).or_else(|| typo::layout_typo_as_unknown(&layout::convert(&t, lang), lang.other()));
+                let changed = typo::suggest_as_unknown_level(d, &t, lang, level()).or_else(|| layout_keeper_core::typo_wide::layout_typo_as_unknown_level(&t, lang, level()));
                 let k = bucket(n);
                 b[k].0 += 1;
                 if let Some(f) = changed { b[k].1 += 1; if ex.len() < 12 { ex.push(format!("{t}→{f}")); } }
@@ -225,6 +237,10 @@ fn correction_eval() {
         }
     }
     let _ = writeln!(report, "## Known frequent words changed: {}/{}\n\n{:?}\n", known_changed.len(), n_known, known_changed);
+    times.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    let n = times.len().max(1);
+    let mean = times.iter().map(|t| t.0).sum::<f64>() / n as f64;
+    let _ = writeln!(report, "## Engine::decide latency (recall cases): mean {mean:.2} ms, p99 {:.2} ms, max {:.2} ms ({})\n", times[n * 99 / 100].0, times[n - 1].0, times[n - 1].1);
     report += "## Wrong-fix examples\n\n";
     for (k, v) in &wrong_ex { let _ = writeln!(report, "* {k}: {}", v.join(", ")); }
     report += "\n## Miss examples\n\n";
