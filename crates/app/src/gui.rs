@@ -5,7 +5,7 @@
 use crate::brand::{APP_NAME, WINDOW_TITLE};
 use crate::platform;
 use eframe::egui;
-use layout_keeper_core::{Config, Hotkey, HotkeyCode, Lang, LogoStyle};
+use layout_keeper_core::{typo::Level as TypoLevel, Config, Hotkey, HotkeyCode, Lang, LogoStyle};
 use crate::icons::{basename, delete_icon_button, has_path, hide_icon_button, is_hidden_app, IconCache};
 use layout_keeper_core::userdict;
 use std::collections::HashSet;
@@ -319,7 +319,7 @@ impl App {
         ui.add_space(10.0);
         ui.separator();
         ui.heading("Не исправлять");
-        ui.small("Слова, исправление которых вы отменили (сочетанием отмены, Backspace или набрав слово заново). Typed их больше не трогает. Корзина — снова разрешить исправление.");
+        ui.small("Слова, исправление которых вы отменили (сочетанием отмены, дважды Backspace или стерев и набрав слово заново). Typed их больше не трогает. Корзина — снова разрешить исправление.");
         let never = self.cfg.never_correct.clone();
         if never.is_empty() {
             ui.label("(пока пусто)");
@@ -336,6 +336,28 @@ impl App {
         if let Some(i) = never_remove {
             if i < self.cfg.never_correct.len() {
                 self.cfg.never_correct.remove(i);
+                changed = true;
+            }
+        }
+        ui.add_space(6.0);
+        ui.label("Не исправлять опечатки (раскладку — можно):");
+        ui.small("Слова, у которых вы дважды отменили только исправление опечатки.");
+        let never_typo = self.cfg.never_typo_fix.clone();
+        if never_typo.is_empty() {
+            ui.label("(пока пусто)");
+        }
+        let mut typo_remove = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            for (i, w) in never_typo.iter().enumerate() {
+                if chip(ui, w, None) {
+                    typo_remove = Some(i);
+                }
+            }
+        });
+        if let Some(i) = typo_remove {
+            if i < self.cfg.never_typo_fix.len() {
+                self.cfg.never_typo_fix.remove(i);
                 changed = true;
             }
         }
@@ -589,11 +611,28 @@ impl App {
             .changed();
         ui.small("Буква, которая сама по себе слово только в другом языке, переводится: d → в, z → я, ф → a, ш → i. Настоящие a, I, в, и, я остаются. Остальные (q/й) — в язык приложения.");
         changed |= ui.checkbox(&mut self.cfg.fix_typos, "Исправлять опечатки (поечаток → опечаток)").changed();
-        ui.small("Одна ошибка — в словах от 4 букв, две — от 8 букв. Только когда вариант один и частый. Комбинация конвертации возвращает как было.");
+        ui.add_enabled_ui(self.cfg.fix_typos, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Смелость:");
+                for (level, name) in [
+                    (TypoLevel::Cautious, "Осторожно"),
+                    (TypoLevel::Normal, "Обычно"),
+                    (TypoLevel::Aggressive, "Смело"),
+                ] {
+                    changed |= ui.radio_value(&mut self.cfg.typo_level, level, name).changed();
+                }
+            });
+        });
+        ui.small(match self.cfg.typo_level {
+            TypoLevel::Cautious => "Как в 0.3.71: одна ошибка — в словах от 4 букв, две — от 8 букв, только когда вариант один и частый.",
+            TypoLevel::Normal => "Одна ошибка — от 3 букв, две — от 5, три — от 9; раскладка вместе с опечаткой (xnjj → что). Если два варианта близки — не трогает.",
+            TypoLevel::Aggressive => "Как «Обычно», но больше ошибок на слово и смелее при близких вариантах. Чаще ошибается — отменяйте Backspace.",
+        });
+        ui.small("Backspace сразу после исправления: раскладка с опечаткой — сначала убирает только исправление опечатки, второй Backspace возвращает набранное. Сочетание отмены — сразу всё; нажатое ещё раз — отменяет предыдущее исправленное слово.");
         changed |= ui.checkbox(&mut self.cfg.fix_missing_spaces, "Расставлять пропущенные пробелы").changed();
         ui.small("После предлогов и «не»: снейросеткой → с нейросеткой, вофисе → в офисе, незнаю → не знаю. Только когда слова нет в словарях. Отменяется как исправление.");
         changed |= ui.checkbox(&mut self.cfg.undo_on_backspace, "Backspace сразу после исправления отменяет его").changed();
-        ui.small("Только первый Backspace, пока не нажато ничего другого. Слово возвращается как было и запоминается, если вы его оставите.");
+        ui.small("Только сразу после исправления, пока не нажато ничего другого. Слово возвращается как было; отменили одно и то же дважды — оно попадает в «Не исправлять».");
         changed |= ui.checkbox(&mut self.cfg.auto_learn, "Автозапоминание").changed();
         ui.small("Запоминает раскладку, только если её ещё нет. Назначенную не меняет.");
         ui.separator();
