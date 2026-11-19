@@ -136,12 +136,15 @@ fn sentence_context(chars: &[char], ws: &[(usize, usize)], i: usize) -> ngram::C
 }
 
 #[derive(Default, Clone, Copy)]
-struct Cell { total: u32, right: u32, wrong: u32 }
+struct Cell { total: u32, right: u32, partial: u32, wrong: u32 }
 impl Cell {
-    fn add(&mut self, right: bool, wrong: bool) { self.total += 1; self.right += right as u32; self.wrong += wrong as u32; }
+    fn add(&mut self, right: bool, partial: bool, wrong: bool) { self.total += 1; self.right += right as u32; self.partial += partial as u32; self.wrong += wrong as u32; }
     fn fmt(&self) -> String {
         if self.total == 0 { return "—".into(); }
         let p = |x: u32| 100.0 * x as f64 / self.total as f64;
+        if self.partial > 0 {
+            return format!("{:.1}% (+{:.1}%) / {:.2}%", p(self.right), p(self.partial), p(self.wrong));
+        }
         format!("{:.1}% / {:.2}%", p(self.right), p(self.wrong))
     }
 }
@@ -157,7 +160,7 @@ fn context_eval() {
     let dir = std::env::var("EVAL_HELDOUT").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data").into());
     let mut report = String::new();
     writeln!(report, "# Context eval: {label} (level {:?})\n", level()).unwrap();
-    writeln!(report, "Cells: right / wrong (share of cases). `all` = every target, `mid` = targets after a word.\n").unwrap();
+    writeln!(report, "Cells: right (+ layout fixed, typo kept) / wrong (share of cases). `all` = every target, `mid` = targets after a word.\n").unwrap();
     for lang in [Lang::Ru, Lang::En] {
         let tag = match lang { Lang::Ru => "ru", Lang::En => "en" };
         let Ok(text) = std::fs::read_to_string(format!("{dir}/heldout_{tag}.txt")) else { eprintln!("no held-out sentences for {tag}"); continue };
@@ -176,6 +179,7 @@ fn context_eval() {
         let mut unknown_rare = [0u32; 3];
         let mut unknown_examples: Vec<String> = vec![];
         let mut rng = Rng(0x5eed ^ lang as u64);
+        let mut ex_rng = Rng(0xe5 ^ lang as u64);
         let mut usable = vec![];
         for s in &sents {
             let mut ok = true;
@@ -201,7 +205,7 @@ fn context_eval() {
             if cands.is_empty() { continue; }
             // Unknown-word proxy in a real sentence: the word treated as unknown (a name or
             // slang the lists miss) — would it be changed, with and without its context?
-            for &ui in cands.iter().filter(|_| rng.next(2) == 0) {
+            for &ui in cands.iter().filter(|_| ex_rng.next(2) == 0) {
                 let (a, b) = ws[ui];
                 let w: String = chars[a..b].iter().collect();
                 let ctx = sentence_context(&chars, &ws, ui);
@@ -235,17 +239,21 @@ fn context_eval() {
                 if d.is_word(&Dictionary::normalize(&back)) && back.to_lowercase() != w.to_lowercase() { continue; }
                 if kind.starts_with("layout") && dict::get(lang.other()).is_word(&Dictionary::normalize(&t)) { continue; }
                 let typed: String = chars[..a].iter().chain(t.chars().collect::<Vec<_>>().iter()).chain(chars[b..].iter()).collect();
+                // Layout fixed, typo kept: half done.
+                let half: String = chars[..a].iter().copied().chain(back.chars()).chain(chars[b..].iter().copied()).collect();
                 let mut res = [String::new(), String::new()];
                 for (m, e) in engines.iter_mut().enumerate() {
                     let got = type_text(e, &typed);
                     // ё and е are the same letter to the dictionaries.
-                    let right = got.replace('ё', "е").replace('Ё', "Е") == s.replace('ё', "е").replace('Ё', "Е");
-                    let wrong = !right && got != typed;
-                    cells[k][0][m].add(right, wrong);
-                    if m == 0 && wrong && wrong_examples.len() < 40 && rng.next(4) == 0 {
+                    let e = |x: &str| x.replace('ё', "е").replace('Ё', "Е");
+                    let right = e(&got) == e(s);
+                    let partial = !right && *kind == "layout+typo" && got == half;
+                    let wrong = !right && !partial && got != typed;
+                    cells[k][0][m].add(right, partial, wrong);
+                    if m == 0 && wrong && wrong_examples.len() < 60 && ex_rng.next(4) == 0 {
                         wrong_examples.push(format!("{kind}: `{w}`→`{t}`: `{got}`"));
                     }
-                    if mid { cells[k][1][m].add(right, wrong); }
+                    if mid { cells[k][1][m].add(right, partial, wrong); }
                     res[m] = got;
                 }
                 if res[0] != res[1] && diff_examples.len() < 40 {

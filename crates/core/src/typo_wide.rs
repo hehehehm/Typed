@@ -29,7 +29,7 @@ pub const EDIT_WEIGHT: f64 = 3.0;
 /// Added to ranks before the log: the top words should not win by frequency alone.
 pub const RANK_OFFSET: f64 = 100.0;
 /// Weight of the context fit ([`ngram::fit`], about −4…+4) in the score.
-pub const CONTEXT_WEIGHT: f64 = 0.8;
+pub const CONTEXT_WEIGHT: f64 = 1.2;
 /// Score bonus for a candidate that keeps the typed last two letters.
 pub const TAIL_BONUS: f64 = 0.8;
 

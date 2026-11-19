@@ -795,6 +795,12 @@ impl Engine {
                 && src_dict.unseen_bigrams(core) >= 1
                 && dst_dict.unseen_bigrams(&conv) == 0
             {
+                // Mid-sentence after a word of the typed language, an unknown token that is
+                // no word in the other layout either is more likely a mangled word of this
+                // sentence (`I'm vfry glad`) than a switch of language (typo mode only).
+                if o.fix_typos && self.typed_language_context(src) {
+                    return Decision::Keep("unknown either way inside a sentence of the typed language");
+                }
                 let text = layout::convert(token, src);
                 return Decision::Convert { text, target: dst, reason: "letter bigrams fit other language" };
             }
@@ -1006,6 +1012,12 @@ impl Engine {
         typo::suggest_ctx(core, lang, o.typo_level, &self.left_context(lang))
     }
 
+    /// The previous word (same sentence) is a dictionary word of `lang`.
+    fn typed_language_context(&self, lang: Lang) -> bool {
+        let ctx = self.left_context(lang);
+        ctx.prev.as_deref().is_some_and(|p| p != crate::ngram::START && dict::get(lang).contains(p))
+    }
+
     /// The one or two words before the word being judged, if they are words of `lang`
     /// and nothing broke the sentence in between (see [`crate::ngram::Context`]). After a
     /// sentence end or Enter it is the sentence start; after a reset (click, focus
@@ -1017,15 +1029,23 @@ impl Engine {
         }
         for w in self.last.iter().chain(self.history.iter().rev()) {
             let b = &w.boundary;
-            if b.contains(['.', '!', '?', '\n', '\r']) {
+            // Signs typed at the end of the word belong to the gap too (`знаю.` + space).
+            let tail: String = w.word.chars().rev().take_while(|c| !c.is_alphabetic()).collect();
+            if b.contains(['.', '!', '?', '\n', '\r']) || tail.contains(['.', '!', '?']) {
                 words.push(crate::ngram::START.to_string());
                 break;
             }
-            if !b.chars().all(|c| c.is_whitespace() && c != '\t' || matches!(c, ',' | ';' | ':' | '-' | '—' | '–' | '"' | '«' | '»')) {
+            let gap_ok = |c: char| c.is_whitespace() && c != '\t' || matches!(c, ',' | ';' | ':' | '-' | '—' | '–' | '"' | '«' | '»');
+            if !b.chars().chain(tail.chars()).all(gap_ok) {
                 break;
             }
-            let Some(core) = trim_non_letters(&w.word).split_whitespace().last() else { break };
-            if !core.chars().all(char::is_alphabetic) || layout::detect_script(core) != Some(lang) {
+            // The last letter run, as the corpus was counted (`i'm` → `m`, a split fix
+            // `в офисе` → `офисе`); digits break the sentence.
+            if w.word.chars().any(|c| c.is_ascii_digit()) {
+                break;
+            }
+            let Some(core) = w.word.split(|c: char| !c.is_alphabetic()).filter(|p| !p.is_empty()).last() else { break };
+            if layout::detect_script(core) != Some(lang) {
                 break;
             }
             words.push(Dictionary::normalize(core));
@@ -1826,6 +1846,61 @@ mod tests {
         }
         assert!(type_str(&mut e, "ghbdtn ").is_empty());
         assert_eq!(never(&mut e), vec!["ghbdtn".to_string()]);
+    }
+
+    fn ctx_engine(use_context: bool) -> Engine {
+        Engine::new(EngineOptions { fix_typos: true, use_context, ..Default::default() })
+    }
+
+    #[test]
+    fn left_context_follows_the_sentence() {
+        let mut e = ctx_engine(true);
+        type_str(&mut e, "я не ");
+        assert_eq!(e.left_context(Lang::Ru), Context::of(&["я", "не"]));
+        assert_eq!(e.left_context(Lang::En), Context::none());
+        type_str(&mut e, "знаю. ");
+        assert_eq!(e.left_context(Lang::Ru), Context::of(&[crate::ngram::START]));
+        type_str(&mut e, "Ну, ");
+        assert_eq!(e.left_context(Lang::Ru), Context::of(&["<s>", "ну"]));
+        e.feed(Key::Reset, false);
+        assert_eq!(e.left_context(Lang::Ru), Context::none());
+        type_str(&mut e, "мы");
+        e.feed(Key::Boundary('\n'), false);
+        assert_eq!(e.left_context(Lang::Ru), Context::of(&[crate::ngram::START]));
+        type_str(&mut e, "в 5 ");
+        assert_eq!(e.left_context(Lang::Ru), Context::none());
+        type_str(&mut e, "i'm ");
+        assert_eq!(e.left_context(Lang::En), Context::of(&["m"]));
+        assert_eq!(ctx_engine(false).left_context(Lang::Ru), Context::none());
+    }
+
+    #[test]
+    fn context_keeps_names_it_knows() {
+        // Names the corpus knows after their usual previous word are not "fixed".
+        for (s, fixed) in [("нельсон мандела ", "мандола "), ("ален делон ", "дело ")] {
+            assert_eq!(type_str(&mut ctx_engine(true), s), vec![], "{s}");
+            let reps = type_str(&mut ctx_engine(false), s);
+            assert_eq!(reps.last().map(|r| r.insert.as_str()), Some(fixed), "{s}");
+        }
+    }
+
+    #[test]
+    fn context_picks_between_close_candidates() {
+        // Too close to call alone; the previous words decide.
+        for (s, fix) in [("я бы хотл ", "хотел "), ("со мпой ", "мной ")] {
+            let reps = type_str(&mut ctx_engine(true), s);
+            assert_eq!(reps.last().map(|r| r.insert.as_str()), Some(fix), "{s}");
+            assert_eq!(type_str(&mut ctx_engine(false), s), vec![], "{s}");
+        }
+    }
+
+    #[test]
+    fn mangled_word_inside_a_sentence_keeps_its_layout() {
+        // `vfry` alone reads like Russian letters (`макн`); after an English word it is a
+        // mangled English word and stays.
+        assert_eq!(conv("vfry").as_deref(), Some("макн"));
+        assert_eq!(type_str(&mut ctx_engine(true), "so vfry "), vec![]);
+        assert!(!type_str(&mut ctx_engine(false), "so vfry ").is_empty());
     }
 
     fn typo_engine() -> Engine {
