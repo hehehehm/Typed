@@ -97,7 +97,7 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
-## Что нового в 0.3.72 (в разработке)
+## Что нового в 0.3.72
 
 **Исправление опечаток стало смелее — и его легче отменить.** Работает, только когда включено «Исправлять опечатки».
 
@@ -853,7 +853,7 @@ settings does not stop the daemon.
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
 
-### New in 0.3.72 (in development)
+### New in 0.3.72
 
 - **Typo level** (`typo_level`: `cautious` = the 0.3.71 rules, `normal` = default, `aggressive`). Normal adds a scored search after the strict rules: one slip from 3 letters, two from 5, three from 9, ranked by keyboard-weighted edit cost and word frequency, with an ambiguity guard. Only with «Исправлять опечатки» on.
 - **Wrong layout + typo at once** (`xnjj` → «что»).
