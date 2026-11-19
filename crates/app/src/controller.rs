@@ -84,12 +84,13 @@ impl Controller {
         self.config.undo_hotkey
     }
 
-    /// Save words the engine learned from an undo into `never_correct`.
+    /// Save what the engine learned from undos (`never_correct`, `never_typo_fix`,
+    /// `undone_once`).
     fn save_learned(&mut self) {
-        let words = self.engine.take_learned();
+        let events = self.engine.take_learned();
         let mut changed = false;
-        for w in words {
-            changed |= self.config.add_never_correct(&w);
+        for l in &events {
+            changed |= self.config.apply_learn(l);
         }
         if changed {
             self.save();
@@ -483,7 +484,18 @@ mod tests {
         assert_eq!(cmds, vec![Command::Replace(Replacement { delete: 7, insert: "ghbdtn ".into(), target: Lang::En })]);
         c.replace_succeeded(Lang::En);
         typ(&mut c, "hello ");
+        // Since 0.3.72: the first Backspace undo is only noted, the second one of the
+        // same word saves it as never-correct.
+        assert!(c.config.never_correct.is_empty());
+        assert_eq!(c.config.undone_once, vec!["ghbdtn".to_string()]);
+        typ(&mut c, "ghbdtn ");
+        c.replace_succeeded(Lang::Ru);
+        let cmds = c.on_input(Input::Key { key: Key::Backspace, modifiers: false });
+        assert_eq!(cmds, vec![Command::Replace(Replacement { delete: 7, insert: "ghbdtn ".into(), target: Lang::En })]);
+        c.replace_succeeded(Lang::En);
+        typ(&mut c, "hello ");
         assert_eq!(c.config.never_correct, vec!["ghbdtn".to_string()]);
+        assert!(c.config.undone_once.is_empty());
     }
 
     #[test]

@@ -89,6 +89,14 @@ pub struct EngineOptions {
     pub undo_on_backspace: bool,
     /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
     pub fix_missing_spaces: bool,
+    /// How hard the typo fixer tries (only with `fix_typos`).
+    pub typo_level: typo::Level,
+    /// Words whose typo fix the user undid (normalised): never typo-fixed again, but
+    /// still converted when typed in the wrong layout.
+    pub never_typo: HashSet<String>,
+    /// Corrections undone once with Backspace (normalised keys, `typo:` prefix for a
+    /// typo-only undo): a second undo of the same one makes it permanent.
+    pub undone_once: HashSet<String>,
 }
 
 /// `Decision::Convert` reason for a typo fix (kept for undo).
@@ -105,12 +113,15 @@ const MIXED_SHORT_MAX_RANK: u32 = 5_000;
 /// English words this frequent, followed by a short Cyrillic ending, are read as a name
 /// with a Russian case ending (`keyами`), never re-read as Russian.
 const BRAND_PREFIX_RANK: u32 = 20_000;
+/// Wrong layout and a typo at once (`xnjj` → `что`): Backspace first undoes the typo
+/// fix only (`чтоо`), a second one the layout switch.
+pub const LAYOUT_TYPO_REASON: &str = "wrong layout and a typo";
 /// `Decision::Convert` reason for an inserted missing space (undoable like a typo fix).
 pub const SPACE_REASON: &str = "missing space after a function word";
 
 impl Default for EngineOptions {
     fn default() -> Self {
-        Self { autocorrect: true, convert_single_letters: true, preferred_lang: None, skip_urls_emails: true, skip_tokens_with_digits: true, min_word_len: 2, user_words: UserWords::default(), fix_typos: false, never_correct: HashSet::new(), undo_on_backspace: true, fix_missing_spaces: true }
+        Self { autocorrect: true, convert_single_letters: true, preferred_lang: None, skip_urls_emails: true, skip_tokens_with_digits: true, min_word_len: 2, user_words: UserWords::default(), fix_typos: false, never_correct: HashSet::new(), undo_on_backspace: true, fix_missing_spaces: true, typo_level: typo::Level::default(), never_typo: HashSet::new(), undone_once: HashSet::new() }
     }
 }
 
@@ -159,7 +170,25 @@ struct AutoFix {
     typed: String,
     /// The first boundary character as typed (before punctuation conversion).
     typed_boundary: String,
+    /// Intermediate texts between `typed` and the shown word, oldest first: for a
+    /// wrong-layout + typo fix the plain other-layout reading. Backspace steps back
+    /// through them (partial undo) before restoring `typed`.
+    steps: Vec<String>,
 }
+
+/// What the engine learned from an undo, for the controller to save in the config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Learned {
+    /// Never autocorrect this word again (`Config::never_correct`).
+    NeverCorrect(String),
+    /// Never typo-fix this word again (`Config::never_typo_fix`).
+    NeverTypo(String),
+    /// First Backspace undo of this key (`Config::undone_once`).
+    UndoneOnce(String),
+}
+
+/// Earlier words kept for undoing an older correction with the undo hotkey.
+pub const UNDO_HISTORY: usize = 12;
 
 /// The last autocorrection, kept while the user erases it by hand: retyping exactly
 /// what was typed means "this was right" (the stubborn-repeat case).
@@ -179,10 +208,13 @@ pub struct Engine {
     buf: WordBuffer,
     last: Option<LastWord>,
     recent_fix: Option<RecentFix>,
-    /// Undone with Backspace: remembered once the user moves on (not if they erase it).
-    pending_learn: Option<String>,
-    /// Newly remembered never-correct words for the controller to save.
-    learned: Vec<String>,
+    /// Undone with Backspace: counted once the user moves on (not if they erase it).
+    /// `true` = only the typo part was undone.
+    pending_learn: Option<(String, bool)>,
+    /// Learning events for the controller to save.
+    learned: Vec<Learned>,
+    /// Finished words before `last` (oldest first) while the caret stays put.
+    history: Vec<LastWord>,
 }
 
 fn is_boundary(c: char) -> bool {
@@ -228,24 +260,57 @@ impl Engine {
     /// Forget the current and last word (focus change, click, cursor movement).
     pub fn reset(&mut self) {
         self.buf.clear();
-        self.last = None;
+        self.drop_context();
         self.recent_fix = None;
-        if let Some(w) = self.pending_learn.take() {
-            self.remember(&w);
+        self.commit_pending_learn();
+    }
+
+    /// We no longer know the text before the caret.
+    fn drop_context(&mut self) {
+        self.last = None;
+        self.history.clear();
+    }
+
+    fn commit_pending_learn(&mut self) {
+        if let Some((w, typo_only)) = self.pending_learn.take() {
+            self.count_undo(&w, typo_only);
         }
     }
 
-    /// Never-correct words remembered since the last call (for the config).
-    pub fn take_learned(&mut self) -> Vec<String> {
+    /// Learning events since the last call (for the config).
+    pub fn take_learned(&mut self) -> Vec<Learned> {
         std::mem::take(&mut self.learned)
     }
 
     /// Add `word` to the never-correct list (this session and, via `take_learned`, the config).
     fn remember(&mut self, word: &str) {
         let key = never_key(word);
+        self.options.undone_once.remove(&key);
         if !key.is_empty() && self.options.never_correct.insert(key.clone()) {
             log::debug!("never-correct: remembered a word of {} chars", key.chars().count());
-            self.learned.push(key);
+            self.learned.push(Learned::NeverCorrect(key));
+        }
+    }
+
+    /// A Backspace undo of `word` (the typed word, or for `typo_only` the word whose typo
+    /// fix was undone): the second one for the same word makes it permanent.
+    fn count_undo(&mut self, word: &str, typo_only: bool) {
+        let key = never_key(word);
+        if key.is_empty() {
+            return;
+        }
+        let once = if typo_only { format!("typo:{key}") } else { key.clone() };
+        if !self.options.undone_once.remove(&once) {
+            self.options.undone_once.insert(once.clone());
+            self.learned.push(Learned::UndoneOnce(once));
+            return;
+        }
+        if typo_only {
+            if self.options.never_typo.insert(key.clone()) {
+                self.learned.push(Learned::NeverTypo(key));
+            }
+        } else {
+            self.remember(&key);
         }
     }
 
@@ -253,15 +318,62 @@ impl Engine {
     /// back with its boundary, the layout it was typed in is activated, and the word is
     /// never corrected again. `None` when the last word was not autocorrected or the
     /// caret may have moved since.
+    ///
+    /// Pressed again (or when the last word was not autocorrected), it undoes the
+    /// previous autocorrected word, one word per press, as long as the caret has not
+    /// moved and no Enter / Tab came after it: the text typed since is erased and typed
+    /// again after the restored word.
     pub fn undo_last(&mut self, current_layout: Lang) -> Option<Replacement> {
-        if !self.buf.is_empty() {
-            return None;
+        if self.buf.is_empty() && self.last.as_ref().is_some_and(|l| l.fix.is_some()) {
+            let rep = self.restore_last(current_layout)?;
+            self.recent_fix = None;
+            self.pending_learn = None;
+            if let Some(w) = self.last.as_ref().map(|l| l.word.clone()) {
+                self.remember(&w);
+            }
+            return Some(rep);
         }
-        let rep = self.restore_last(current_layout)?;
+        self.undo_earlier(current_layout)
+    }
+
+    /// Undo the newest autocorrection among the earlier words (see [`Self::undo_last`]).
+    fn undo_earlier(&mut self, current_layout: Lang) -> Option<Replacement> {
+        let last = self.last.take()?;
+        let mut all = std::mem::take(&mut self.history);
+        all.push(last);
+        let sent = |w: &LastWord| w.boundary.contains(['\n', '\t', '\r']);
+        let mut target = None;
+        for i in (0..all.len()).rev() {
+            if sent(&all[i]) {
+                break;
+            }
+            if all[i].fix.is_some() {
+                target = Some(i);
+                break;
+            }
+        }
+        let rep = target.map(|i| {
+            let mut rest = String::new();
+            for w in &all[i + 1..] {
+                rest.push_str(&w.word);
+                rest.push_str(&w.boundary);
+            }
+            rest.push_str(&self.buf.as_string());
+            let w = &mut all[i];
+            let fix = w.fix.take().expect("target has a fix");
+            let boundary = format!("{}{}", fix.typed_boundary, w.boundary.chars().skip(1).collect::<String>());
+            let delete = w.word.chars().count() + w.boundary.chars().count() + rest.chars().count();
+            let insert = format!("{}{boundary}{rest}", fix.typed);
+            w.word = fix.typed;
+            w.boundary = boundary;
+            w.fresh = false;
+            (w.word.clone(), Replacement { delete, insert, target: current_layout })
+        });
+        self.last = all.pop();
+        self.history = all;
+        let (word, rep) = rep?;
         self.recent_fix = None;
-        if let Some(w) = self.last.as_ref().map(|l| l.word.clone()) {
-            self.remember(&w);
-        }
+        self.remember(&word);
         Some(rep)
     }
 
@@ -285,8 +397,10 @@ impl Engine {
     /// Backspace right after an autocorrection: undo it instead of erasing the boundary
     /// (the platform swallows that Backspace). Only for a single space / sign boundary;
     /// after Enter or Tab the text may already be sent.
+    /// A wrong-layout + typo fix goes back one step at a time: first the typo fix only
+    /// (the layout switch stays), then, with another Backspace, the typed word.
     fn backspace_undo(&mut self, current_layout: Lang) -> Option<Replacement> {
-        let last = self.last.as_ref()?;
+        let last = self.last.as_mut()?;
         if !self.options.undo_on_backspace
             || !last.fresh
             || last.fix.is_none()
@@ -295,11 +409,22 @@ impl Engine {
         {
             return None;
         }
+        if let Some(step) = last.fix.as_mut().and_then(|f| f.steps.pop()) {
+            let rep = Replacement {
+                delete: last.word.chars().count() + last.boundary.chars().count(),
+                insert: format!("{step}{}", last.boundary),
+                target: layout::detect_script(&step).unwrap_or(current_layout),
+            };
+            last.word = step.clone();
+            // Still fresh: one more Backspace restores what was typed.
+            self.pending_learn = Some((step, true));
+            return Some(rep);
+        }
         let rep = self.restore_last(current_layout)?;
         let typed = self.last.as_ref().map(|l| l.word.clone()).unwrap_or_default();
         // If they erase the restored word and type it again, that still counts.
         self.recent_fix = Some(RecentFix { typed: typed.clone(), erased: false });
-        self.pending_learn = Some(typed);
+        self.pending_learn = Some((typed, false));
         Some(rep)
     }
 
@@ -315,7 +440,7 @@ impl Engine {
                 // Ctrl/Alt+Backspace erases a word: keep watching for a retyped original.
                 self.mark_erased();
                 self.buf.clear();
-                self.last = None;
+                self.drop_context();
                 return None;
             }
             self.reset();
@@ -341,13 +466,13 @@ impl Engine {
                 if !self.buf.backspace() {
                     // Erasing into the previous word: we no longer know what is on screen.
                     self.mark_erased();
-                    self.last = None;
+                    self.drop_context();
                 }
                 None
             }
             Key::Char(c) if !is_boundary(c) => {
                 if !self.buf.push(c) {
-                    self.last = None;
+                    self.drop_context();
                 }
                 None
             }
@@ -380,12 +505,10 @@ impl Engine {
                     return None;
                 }
             }
-            self.last = None;
+            self.drop_context();
             return None;
         }
-        if let Some(w) = self.pending_learn.take() {
-            self.remember(&w);
-        }
+        self.commit_pending_learn();
         // Erased an autocorrection by hand and typed the original again: keep it, forever.
         if self.recent_fix.take().is_some_and(|rf| rf.erased && never_key(&rf.typed) == never_key(&token)) {
             self.remember(&token);
@@ -423,15 +546,32 @@ impl Engine {
                     insert: format!("{text}{b}"),
                     target,
                 };
-                let fix = AutoFix { typed: token.clone(), typed_boundary: boundary.to_string() };
+                let mut steps = Vec::new();
+                if reason == LAYOUT_TYPO_REASON {
+                    let chars: Vec<char> = token.chars().collect();
+                    if let Some((_, plain)) = layout::detect_script(&token).and_then(|src| self.layout_typo_decision(&chars, src)) {
+                        steps.push(plain);
+                    }
+                }
+                let fix = AutoFix { typed: token.clone(), typed_boundary: boundary.to_string(), steps };
                 self.recent_fix = Some(RecentFix { typed: token, erased: false });
-                self.last = Some(LastWord { word: text, boundary: b, fix: Some(fix), fresh: true });
+                self.push_last(LastWord { word: text, boundary: b, fix: Some(fix), fresh: true });
                 Some(rep)
             }
             Decision::Keep(reason) => {
                 log::debug!("autocorrect: keep word of {} chars ({})", token.chars().count(), reason);
-                self.last = Some(LastWord { word: token, boundary: b, fix: None, fresh: false });
+                self.push_last(LastWord { word: token, boundary: b, fix: None, fresh: false });
                 None
+            }
+        }
+    }
+
+    /// A new last word; the previous one goes to the undo history.
+    fn push_last(&mut self, w: LastWord) {
+        if let Some(prev) = self.last.replace(w) {
+            self.history.push(prev);
+            if self.history.len() > UNDO_HISTORY {
+                self.history.remove(0);
             }
         }
     }
@@ -610,7 +750,7 @@ impl Engine {
                 // one vowel beats the split (`отсуда` → `отсюда`, not `от суда`;
                 // `котрое` → `которое`); other fixes lose (`отебе` is `о тебе`, not `отеле`).
                 if o.fix_typos && core.chars().all(char::is_alphabetic) {
-                    if let Some(fix) = typo::suggest(core, src) {
+                    if let Some(fix) = self.typo_fix(core, src) {
                         let (n, m) = (core.chars().count(), fix.chars().count());
                         let mut a: Vec<char> = Dictionary::normalize(core).chars().collect();
                         let mut b: Vec<char> = Dictionary::normalize(&fix).chars().collect();
@@ -633,9 +773,14 @@ impl Engine {
 
         if o.fix_typos {
             if core.chars().all(char::is_alphabetic) {
-                if let Some(fix) = typo::suggest(core, src) {
+                if let Some(fix) = self.typo_fix(core, src) {
                     return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
                 }
+            }
+            // Wrong layout and a typo at once: the other-layout reading is one or two
+            // slips from a word there (`xnjj` → `что`).
+            if let Some((d, _)) = self.layout_typo_decision(&chars, src) {
+                return d;
             }
         }
 
@@ -748,7 +893,7 @@ impl Engine {
             if known(d, &cand) {
                 found.push((true, fixed, lang));
             } else if typos_ok {
-                if let Some(fix) = typo::suggest(&cand, lang) {
+                if let Some(fix) = self.typo_fix(&cand, lang) {
                     found.push((false, token.replacen(core, &fix, 1), lang));
                 }
             }
@@ -844,6 +989,54 @@ impl Engine {
                     target: dst,
                     reason: "converted form is a known word",
                 });
+            }
+        }
+        None
+    }
+
+    /// Typo fix of `core` at the configured level, unless the user undid one for it.
+    fn typo_fix(&self, core: &str, lang: Lang) -> Option<String> {
+        let o = &self.options;
+        if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(core)) {
+            return None;
+        }
+        typo::suggest_level(core, lang, o.typo_level)
+    }
+
+    /// Wrong layout + typo: the decision and the plain other-layout reading (the
+    /// partial-undo step). Up to two trailing signs stay signs, as in `try_convert`.
+    fn layout_typo_decision(&self, chars: &[char], src: Lang) -> Option<(Decision, String)> {
+        let o = &self.options;
+        let dst = src.other();
+        for k in 0..=2.min(chars.len().saturating_sub(1)) {
+            let (head, tail) = chars.split_at(chars.len() - k);
+            if tail.iter().any(|c| c.is_alphanumeric()) {
+                break;
+            }
+            let head: String = head.iter().collect();
+            let conv = layout::convert(&head, src);
+            let conv_core = trim_non_letters(&conv);
+            let letters: Vec<char> = conv_core.chars().collect();
+            if letters.is_empty()
+                || !letters.iter().all(|c| c.is_alphabetic())
+                || layout::detect_script(conv_core) != Some(dst)
+                || !natural_case(&letters)
+            {
+                continue;
+            }
+            let typed_letters: String = head.chars().filter(|c| c.is_alphabetic()).collect();
+            if !crate::typo_wide::looks_foreign(&Dictionary::normalize(&typed_letters), src) {
+                continue;
+            }
+            if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(conv_core)) {
+                continue;
+            }
+            if let Some(fix) = crate::typo_wide::layout_typo(conv_core, dst, o.typo_level) {
+                let tail: String = tail.iter().collect();
+                let tail = layout::convert_punctuation(&tail, src);
+                let plain = format!("{conv}{tail}");
+                let text = format!("{}{tail}", conv.replacen(conv_core, &fix, 1));
+                return Some((Decision::Convert { text, target: dst, reason: LAYOUT_TYPO_REASON }, plain));
             }
         }
         None
@@ -1471,19 +1664,27 @@ mod tests {
         e.feed(Key::Backspace, false)
     }
 
+    /// Never-correct words learned since the last call.
+    fn never(e: &mut Engine) -> Vec<String> {
+        e.take_learned().into_iter().filter_map(|l| if let Learned::NeverCorrect(w) = l { Some(w) } else { None }).collect()
+    }
+
     #[test]
     fn undo_hotkey_restores_and_remembers() {
         let mut e = engine();
         assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
         let undo = e.undo_last(Lang::Ru).unwrap();
         assert_eq!(undo, Replacement { delete: 7, insert: "ghbdtn ".into(), target: Lang::En });
-        assert_eq!(e.take_learned(), vec!["ghbdtn".to_string()]);
+        assert_eq!(never(&mut e), vec!["ghbdtn".to_string()]);
         // Never again, in any casing; other words still convert.
         assert!(type_str(&mut e, "ghbdtn ").is_empty());
         assert!(type_str(&mut e, "Ghbdtn, ").is_empty());
         assert_eq!(type_str(&mut e, "pltcm ")[0].insert, "здесь ");
-        // Nothing to undo after a kept word or in the middle of a word.
+        // After a kept word the undo hotkey reaches back to the previous correction
+        // (since 0.3.72): `здесь` goes back to `pltcm`, `hello ` is typed again after it.
         assert!(type_str(&mut e, "hello ").is_empty());
+        assert_eq!(e.undo_last(Lang::En), Some(Replacement { delete: 12, insert: "pltcm hello ".into(), target: Lang::En }));
+        // Nothing older to undo, also in the middle of a word.
         assert_eq!(e.undo_last(Lang::En), None);
         type_str(&mut e, "ghbd");
         assert_eq!(e.undo_last(Lang::En), None);
@@ -1499,7 +1700,7 @@ mod tests {
         assert_eq!(type_str(&mut e, " пирвет ")[0].insert, "привет ");
         assert_eq!(e.undo_last(Lang::Ru).unwrap(), Replacement { delete: 7, insert: "пирвет ".into(), target: Lang::Ru });
         assert!(type_str(&mut e, "пирвет ").is_empty());
-        let mut learned = e.take_learned();
+        let mut learned = never(&mut e);
         learned.sort();
         assert_eq!(learned, vec!["ghbdtn".to_string(), "пирвет".to_string()]);
     }
@@ -1510,7 +1711,7 @@ mod tests {
         assert_eq!(type_str(&mut e, "зуфсу ")[0].insert, "peace ");
         let r = e.manual_convert(Lang::En).unwrap();
         assert_eq!(r, Replacement { delete: 6, insert: "зуфсу ".into(), target: Lang::Ru });
-        assert_eq!(e.take_learned(), vec!["зуфсу".to_string()]);
+        assert_eq!(never(&mut e), vec!["зуфсу".to_string()]);
         // Pressed again: a plain flip, as before.
         assert_eq!(e.manual_convert(Lang::Ru).unwrap().insert, "peace ");
     }
@@ -1520,10 +1721,15 @@ mod tests {
         let mut e = engine();
         assert_eq!(type_str(&mut e, "зуфсу ")[0].insert, "peace ");
         assert_eq!(bs(&mut e), Some(Replacement { delete: 6, insert: "зуфсу ".into(), target: Lang::Ru }));
-        // Remembered only once the user moves on.
+        // Counted only once the user moves on; since 0.3.72 the first undo is only
+        // noted (`undone_once`), the second one of the same word makes it permanent.
         assert!(e.take_learned().is_empty());
         assert!(type_str(&mut e, "привет ").is_empty());
-        assert_eq!(e.take_learned(), vec!["зуфсу".to_string()]);
+        assert_eq!(e.take_learned(), vec![Learned::UndoneOnce("зуфсу".into())]);
+        assert_eq!(type_str(&mut e, "зуфсу ")[0].insert, "peace ");
+        assert!(bs(&mut e).is_some());
+        assert!(type_str(&mut e, "привет ").is_empty());
+        assert_eq!(never(&mut e), vec!["зуфсу".to_string()]);
         assert!(type_str(&mut e, "зуфсу ").is_empty());
     }
 
@@ -1564,19 +1770,19 @@ mod tests {
             assert_eq!(bs(&mut e), None);
         }
         assert!(type_str(&mut e, "пирвет ").is_empty(), "retyped original is kept");
-        assert_eq!(e.take_learned(), vec!["пирвет".to_string()]);
+        assert_eq!(never(&mut e), vec!["пирвет".to_string()]);
         // Ctrl+Backspace works the same.
         assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
         assert!(e.feed(Key::Backspace, true).is_none());
         assert!(type_str(&mut e, "ghbdtn ").is_empty());
-        assert_eq!(e.take_learned(), vec!["ghbdtn".to_string()]);
+        assert_eq!(never(&mut e), vec!["ghbdtn".to_string()]);
         // A different word after erasing is judged normally and nothing is learned.
         assert_eq!(type_str(&mut e, "pltcm ")[0].insert, "здесь ");
         for _ in 0..6 {
             bs(&mut e);
         }
         assert_eq!(type_str(&mut e, "ntcn ")[0].insert, "тест ");
-        assert!(e.take_learned().is_empty());
+        assert!(never(&mut e).is_empty());
         // With Backspace-undo on: the first Backspace restores, the user keeps erasing
         // and retypes the original: still kept and remembered.
         let mut e = engine();
@@ -1586,7 +1792,90 @@ mod tests {
             bs(&mut e);
         }
         assert!(type_str(&mut e, "ghbdtn ").is_empty());
-        assert_eq!(e.take_learned(), vec!["ghbdtn".to_string()]);
+        assert_eq!(never(&mut e), vec!["ghbdtn".to_string()]);
+    }
+
+    fn typo_engine() -> Engine {
+        let mut e = engine();
+        e.options.fix_typos = true;
+        e
+    }
+
+    #[test]
+    fn wrong_layout_and_typo_0_3_72() {
+        let mut e = typo_engine();
+        assert_eq!(type_str(&mut e, "xnjj "), vec![Replacement { delete: 5, insert: "что ".into(), target: Lang::Ru }]);
+        assert_eq!(type_str(&mut e, "ghbdnt ")[0].insert, "привет ");
+        // Typo fixes off: only the plain other-layout reading, as before.
+        let mut e = engine();
+        assert!(type_str(&mut e, "ghbdnt ").first().map_or(true, |r| r.insert != "привет "));
+        // Cautious level: the 0.3.71 rules, no combined fix.
+        let mut e = typo_engine();
+        e.options.typo_level = typo::Level::Cautious;
+        assert!(type_str(&mut e, "xnjj ").first().map_or(true, |r| r.insert != "что "));
+        assert!(type_str(&mut e, "teh ").is_empty());
+        e.options.typo_level = typo::Level::Normal;
+        assert_eq!(type_str(&mut e, "teh ")[0].insert, "the ");
+    }
+
+    #[test]
+    fn partial_undo_keeps_the_layout() {
+        let mut e = typo_engine();
+        assert_eq!(type_str(&mut e, "xnjj ")[0].insert, "что ");
+        // First Backspace: only the typo fix goes, the Russian reading stays.
+        assert_eq!(bs(&mut e), Some(Replacement { delete: 4, insert: "чтоо ".into(), target: Lang::Ru }));
+        // Second one: exactly what was typed, in the layout it was typed in.
+        assert_eq!(bs(&mut e), Some(Replacement { delete: 5, insert: "xnjj ".into(), target: Lang::En }));
+        // Third: an ordinary Backspace.
+        assert_eq!(bs(&mut e), None);
+        // The undo hotkey undoes everything at once.
+        let mut e = typo_engine();
+        type_str(&mut e, "xnjj ");
+        assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 4, insert: "xnjj ".into(), target: Lang::En }));
+    }
+
+    #[test]
+    fn partial_undo_twice_stops_typo_fixes_only() {
+        let mut e = typo_engine();
+        for round in 0..2 {
+            assert_eq!(type_str(&mut e, "xnjj ")[0].insert, "что ", "round {round}");
+            assert!(bs(&mut e).is_some());
+            assert!(type_str(&mut e, "дальше ").is_empty());
+        }
+        let learned = e.take_learned();
+        assert_eq!(learned, vec![Learned::UndoneOnce("typo:чтоо".into()), Learned::NeverTypo("чтоо".into())]);
+        // Now only the layout is fixed; other words still get typo fixes.
+        assert!(type_str(&mut e, "xnjj ").first().map_or(true, |r| r.insert != "что "));
+        assert_eq!(type_str(&mut e, "превт ")[0].insert, "привет ");
+    }
+
+    #[test]
+    fn undo_hotkey_walks_back_word_by_word() {
+        let mut e = typo_engine();
+        assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
+        assert_eq!(type_str(&mut e, "vbh ")[0].insert, "мир ");
+        assert!(type_str(&mut e, "и ").is_empty());
+        // Newest first: `мир`, then `привет`; the text after each is typed again.
+        assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 6, insert: "vbh и ".into(), target: Lang::Ru }));
+        assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 13, insert: "ghbdtn vbh и ".into(), target: Lang::Ru }));
+        assert_eq!(e.undo_last(Lang::Ru), None);
+        assert_eq!(never(&mut e), vec!["vbh".to_string(), "ghbdtn".to_string()]);
+        // A word in progress is kept and typed again too.
+        let mut e = typo_engine();
+        type_str(&mut e, "ghbdtn ");
+        type_str(&mut e, "ми");
+        assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 9, insert: "ghbdtn ми".into(), target: Lang::Ru }));
+        // Not past Enter (the message may be sent) or a caret move.
+        let mut e = typo_engine();
+        type_str(&mut e, "ghbdtn");
+        e.feed(Key::Boundary('\n'), false);
+        type_str(&mut e, "ok ");
+        assert_eq!(e.undo_last(Lang::En), None);
+        let mut e = typo_engine();
+        type_str(&mut e, "ghbdtn ");
+        e.feed(Key::Reset, false);
+        type_str(&mut e, "ok ");
+        assert_eq!(e.undo_last(Lang::En), None);
     }
 
     #[test]
@@ -1663,12 +1952,16 @@ mod tests {
         assert_eq!(type_str(&mut e, "нафайле ")[0].insert, "на файле ");
         assert_eq!(bs(&mut e), Some(Replacement { delete: 9, insert: "нафайле ".into(), target: Lang::Ru }));
         assert!(type_str(&mut e, "дальше ").is_empty());
-        assert_eq!(e.take_learned(), vec!["нафайле".to_string()]);
+        // Second Backspace undo of the same word: remembered.
+        assert_eq!(type_str(&mut e, "нафайле ")[0].insert, "на файле ");
+        assert!(bs(&mut e).is_some());
+        assert!(type_str(&mut e, "дальше ").is_empty());
+        assert_eq!(never(&mut e), vec!["нафайле".to_string()]);
         assert!(type_str(&mut e, "нафайле ").is_empty());
         let mut e = engine();
         assert_eq!(type_str(&mut e, "вофисе ")[0].insert, "в офисе ");
         assert_eq!(e.undo_last(Lang::Ru).unwrap(), Replacement { delete: 8, insert: "вофисе ".into(), target: Lang::Ru });
-        assert_eq!(e.take_learned(), vec!["вофисе".to_string()]);
+        assert_eq!(never(&mut e), vec!["вофисе".to_string()]);
         // With typo fixing on: a missing letter beats a split, a wrong one does not.
         let mut e = engine();
         e.options.fix_typos = true;

@@ -334,6 +334,18 @@ pub struct Config {
     /// Words the user undid: never autocorrected again (normalised, lowercase).
     #[serde(default)]
     pub never_correct: Vec<String>,
+    /// How hard the typo fixer tries: `cautious` (the 0.3.71 rules), `normal` (default
+    /// since 0.3.72: shorter words, more slips per word) or `aggressive`.
+    #[serde(default)]
+    pub typo_level: crate::typo::Level,
+    /// Words whose typo fix the user undid twice: never typo-fixed again (normalised).
+    /// A wrong-layout reading still converts.
+    #[serde(default)]
+    pub never_typo_fix: Vec<String>,
+    /// Corrections undone once with Backspace (internal; `typo:` prefix for typo-only
+    /// undos). A second undo moves the word to `never_correct` / `never_typo_fix`.
+    #[serde(default)]
+    pub undone_once: Vec<String>,
     /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
     #[serde(default = "default_true")]
     pub fix_missing_spaces: bool,
@@ -368,6 +380,9 @@ impl Default for Config {
             undo_hotkey: default_undo_hotkey(),
             undo_on_backspace: true,
             never_correct: Vec::new(),
+            typo_level: crate::typo::Level::default(),
+            never_typo_fix: Vec::new(),
+            undone_once: Vec::new(),
             fix_missing_spaces: true,
             run_as_admin: false,
         }
@@ -532,6 +547,47 @@ impl Config {
             never_correct: self.never_correct.iter().map(|w| crate::engine::never_key(w)).filter(|w| !w.is_empty()).collect(),
             undo_on_backspace: self.undo_on_backspace,
             fix_missing_spaces: self.fix_missing_spaces,
+            typo_level: self.typo_level,
+            never_typo: self.never_typo_fix.iter().map(|w| crate::engine::never_key(w)).filter(|w| !w.is_empty()).collect(),
+            undone_once: self.undone_once.iter().cloned().collect(),
+        }
+    }
+
+    /// Add a never-typo-fix word (normalised); `false` if it was already there or empty.
+    pub fn add_never_typo(&mut self, word: &str) -> bool {
+        let key = crate::engine::never_key(word);
+        if key.is_empty() || self.never_typo_fix.iter().any(|w| crate::engine::never_key(w) == key) {
+            return false;
+        }
+        self.never_typo_fix.push(key);
+        true
+    }
+
+    /// Apply one learning event from the engine; `true` if the config changed.
+    pub fn apply_learn(&mut self, l: &crate::engine::Learned) -> bool {
+        use crate::engine::Learned;
+        match l {
+            Learned::NeverCorrect(w) => {
+                let key = crate::engine::never_key(w);
+                self.undone_once.retain(|u| u != &key);
+                self.add_never_correct(w)
+            }
+            Learned::NeverTypo(w) => {
+                let key = format!("typo:{}", crate::engine::never_key(w));
+                self.undone_once.retain(|u| u != &key);
+                self.add_never_typo(w)
+            }
+            Learned::UndoneOnce(key) => {
+                if self.undone_once.contains(key) {
+                    return false;
+                }
+                self.undone_once.push(key.clone());
+                // Bounded: only recent single undos matter.
+                if self.undone_once.len() > UNDONE_ONCE_MAX {
+                    self.undone_once.remove(0);
+                }
+                true
+            }
         }
     }
 
@@ -546,6 +602,9 @@ impl Config {
     }
 }
 
+/// At most this many remembered single undos.
+pub const UNDONE_ONCE_MAX: usize = 200;
+
 /// App ids are compared case-insensitively (Windows paths, WM_CLASS variations).
 pub fn normalize_app_id(id: &str) -> String {
     id.trim().to_lowercase()
@@ -554,6 +613,35 @@ pub fn normalize_app_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typo_level_and_undo_learning_0_3_72() {
+        use crate::engine::Learned;
+        use crate::typo::Level;
+        // Old configs get the new default level.
+        let c = Config::from_json("{}").unwrap();
+        assert_eq!(c.typo_level, Level::Normal);
+        assert!(c.never_typo_fix.is_empty() && c.undone_once.is_empty());
+        let c = Config::from_json(r#"{"typo_level":"cautious"}"#).unwrap();
+        assert_eq!(c.typo_level, Level::Cautious);
+        assert_eq!(c.engine_options().typo_level, Level::Cautious);
+        // Learning: once noted, the second time permanent (and the note goes away).
+        let mut c = Config::default();
+        assert!(c.apply_learn(&Learned::UndoneOnce("зуфсу".into())));
+        assert!(!c.apply_learn(&Learned::UndoneOnce("зуфсу".into())));
+        assert!(c.apply_learn(&Learned::NeverCorrect("Зуфсу".into())));
+        assert_eq!((c.never_correct.clone(), c.undone_once.clone()), (vec!["зуфсу".to_string()], vec![]));
+        assert!(c.apply_learn(&Learned::UndoneOnce("typo:чтоо".into())));
+        assert!(c.apply_learn(&Learned::NeverTypo("чтоо".into())));
+        assert_eq!(c.never_typo_fix, vec!["чтоо".to_string()]);
+        assert!(c.undone_once.is_empty());
+        assert!(c.engine_options().never_typo.contains("чтоо"));
+        // Bounded list of single undos.
+        for i in 0..(UNDONE_ONCE_MAX + 5) {
+            c.apply_learn(&Learned::UndoneOnce(format!("w{i}")));
+        }
+        assert_eq!(c.undone_once.len(), UNDONE_ONCE_MAX);
+    }
 
     #[test]
     fn custom_words_default_and_old_json() {
