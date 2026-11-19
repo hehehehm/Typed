@@ -132,7 +132,7 @@ fn real_main() -> Result<(), String> {
             println!("hotkey:       {}", cfg.hotkey);
             println!("summon:       {}", cfg.summon_hotkey);
             println!("undo:         {} (backspace undo: {}), never-correct words: {}, never-typo-fix words: {}", cfg.undo_hotkey, cfg.undo_on_backspace, cfg.never_correct.len(), cfg.never_typo_fix.len());
-            println!("typos:        {} (level {:?})", cfg.fix_typos, cfg.typo_level);
+            println!("typos:        {} (level {:?}, context {})", cfg.fix_typos, cfg.typo_level, cfg.use_context);
             println!("apps:         {} remembered, {} exceptions", cfg.apps.len(), cfg.exception_apps.len());
             let (app, lang) = platform::probe();
             println!("focused app:  {}", app.as_deref().unwrap_or("(unknown)"));
@@ -175,7 +175,7 @@ fn real_main() -> Result<(), String> {
         "set" => {
             let (key, val) = match (args.get(1), args.get(2)) {
                 (Some(k), Some(v)) => (k.as_str(), v.as_str()),
-                _ => return Err("usage: typed set <autocorrect|auto-learn|hotkey|summon-hotkey|undo-hotkey|undo-on-backspace|fix-missing-spaces|typo-level> <value>".into()),
+                _ => return Err("usage: typed set <autocorrect|auto-learn|hotkey|summon-hotkey|undo-hotkey|undo-on-backspace|fix-missing-spaces|typo-level|typo-context> <value>".into()),
             };
             let (mut cfg, path) = load()?;
             match key {
@@ -186,6 +186,7 @@ fn real_main() -> Result<(), String> {
                 "undo-hotkey" | "undo_hotkey" => cfg.undo_hotkey = val.parse::<Hotkey>()?,
                 "undo-on-backspace" | "undo_on_backspace" => cfg.undo_on_backspace = on_off(val)?,
                 "fix-missing-spaces" | "fix_missing_spaces" => cfg.fix_missing_spaces = on_off(val)?,
+                "typo-context" | "use_context" => cfg.use_context = on_off(val)?,
                 "typo-level" | "typo_level" => {
                     cfg.typo_level = match val {
                         "cautious" => layout_keeper_core::typo::Level::Cautious,

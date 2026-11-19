@@ -1,12 +1,13 @@
-//! Worst-case time of one `typo::suggest` call (run with `--ignored --nocapture`, release).
-use layout_keeper_core::{dict, layout::Lang, typo};
+//! Worst-case time of one `typo::suggest` call (run with `--ignored --nocapture`, release),
+//! without and with a left context (the n-gram model scores every close candidate).
+use layout_keeper_core::{dict, layout::Lang, ngram::Context, typo};
 use std::time::Instant;
 
-fn measure(lang: Lang, words: &[String]) -> (f64, f64, f64, String) {
+fn measure(lang: Lang, words: &[String], ctx: &Context) -> (f64, f64, f64, String) {
     let mut t: Vec<(f64, &String)> = Vec::new();
     for w in words {
         let s = Instant::now();
-        let _ = typo::suggest(w, lang);
+        let _ = typo::suggest_ctx(w, lang, typo::Level::default(), ctx);
         t.push((s.elapsed().as_secs_f64() * 1000.0, w));
     }
     t.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -39,7 +40,10 @@ fn latency() {
         for long in ["превысокомногорассмотрительствующий", "привественный", "ярдык", "pneumonoultramicroscopic", "antidisestablishmentarianizm"] {
             words.push(long.to_string());
         }
-        let (mean, p99, max, worst) = measure(lang, &words);
-        eprintln!("{lang:?}: {} words, mean {mean:.3} ms, p99 {p99:.3} ms, max {max:.3} ms ({worst})", words.len());
+        let with = match lang { Lang::Ru => Context::of(&["я", "не"]), Lang::En => Context::of(&["i", "will"]) };
+        for (name, ctx) in [("no context", Context::none()), ("context", with)] {
+            let (mean, p99, max, worst) = measure(lang, &words, &ctx);
+            eprintln!("{lang:?} {name}: {} words, mean {mean:.3} ms, p99 {p99:.3} ms, max {max:.3} ms ({worst})", words.len());
+        }
     }
 }
