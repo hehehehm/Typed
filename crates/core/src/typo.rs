@@ -6,12 +6,31 @@
 //! Fix targets come from the whole 40 000-word list; the rarer half wins only when the
 //! slip keeps the last two letters.
 //! Two edits are tried only for long words (8+ letters) that have no one-edit candidate.
+//!
+//! Since 0.3.72 these strict rules are the [`Level::Cautious`] behaviour. At the default
+//! [`Level::Normal`] (and [`Level::Aggressive`]) a word they leave alone goes on to the
+//! wider, scored search in [`crate::typo_wide`]: 3-letter words, two slips from 5
+//! letters, three from 9, ranked by keyboard-weighted edit cost and word frequency,
+//! with an ambiguity guard.
 
 use crate::dict::{self, Dictionary};
 use crate::layout::Lang;
 use crate::morph;
 
-/// Minimum letters in the typed word.
+/// How hard the typo fixer tries (settings: «Осторожно / Обычно / Смело»).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    /// The strict 0.3.71 rules only.
+    Cautious,
+    /// Strict rules, then the scored wider search.
+    #[default]
+    Normal,
+    /// Wider budgets and a smaller ambiguity margin.
+    Aggressive,
+}
+
+/// Minimum letters in the typed word (strict rules).
 pub const MIN_LEN: usize = 4;
 /// Minimum letters for a two-edit fix.
 pub const MIN_LEN_2: usize = 8;
@@ -65,7 +84,7 @@ fn edits1(w: &[char], alphabet: &[char]) -> Vec<String> {
 }
 
 /// Re-apply the typed word's casing (lower / UPPER / Capitalised) to the fix.
-fn match_case(typed: &str, fix: &str) -> String {
+pub(crate) fn match_case(typed: &str, fix: &str) -> String {
     let letters: Vec<char> = typed.chars().filter(|c| c.is_alphabetic()).collect();
     if letters.len() > 1 && letters.iter().all(|c| c.is_uppercase()) {
         return fix.to_uppercase();
@@ -82,12 +101,16 @@ fn match_case(typed: &str, fix: &str) -> String {
 
 /// Best single fix for `word` (letters only) in `lang`, or `None` when unsure.
 pub fn suggest(word: &str, lang: Lang) -> Option<String> {
-    let d = dict::get(lang);
-    suggest_in(d, word, lang)
+    suggest_level(word, lang, Level::default())
+}
+
+/// [`suggest`] at a given [`Level`].
+pub fn suggest_level(word: &str, lang: Lang, level: Level) -> Option<String> {
+    suggest_impl(dict::get(lang), word, lang, false, level)
 }
 
 pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
-    suggest_impl(d, word, lang, false)
+    suggest_impl(d, word, lang, false, Level::default())
 }
 
 /// Audit helper: like [`suggest_in`], but treats `word` as unknown even when it is a real
@@ -95,20 +118,22 @@ pub fn suggest_in(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
 /// word itself. Used to measure how often unknown words would be changed.
 #[doc(hidden)]
 pub fn suggest_as_unknown(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
-    suggest_impl(d, word, lang, true).filter(|f| Dictionary::normalize(f) != Dictionary::normalize(word))
+    suggest_as_unknown_level(d, word, lang, Level::default())
 }
 
-/// Audit helper: the wrong-layout + typo reading of an unknown token (`conv` is the
-/// token re-read in `lang`). Not implemented before 0.3.72.
 #[doc(hidden)]
-pub fn layout_typo_as_unknown(_conv: &str, _lang: Lang) -> Option<String> {
-    None
+pub fn suggest_as_unknown_level(d: &Dictionary, word: &str, lang: Lang, level: Level) -> Option<String> {
+    suggest_impl(d, word, lang, true, level).filter(|f| Dictionary::normalize(f) != Dictionary::normalize(word))
 }
 
-fn suggest_impl(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
-    suggest_one(d, word, lang, assume_unknown)
+fn suggest_impl(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level) -> Option<String> {
+    let strict = suggest_one(d, word, lang, assume_unknown)
         .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
-        .or_else(|| verb_soft_sign(d, word, lang, assume_unknown))
+        .or_else(|| verb_soft_sign(d, word, lang, assume_unknown));
+    if strict.is_some() || level == Level::Cautious {
+        return strict;
+    }
+    crate::typo_wide::suggest_wide(d, word, lang, assume_unknown, level)
 }
 
 /// `-ить` / `-еть` written for `-ит` / `-ет` (`услышить` → `услышит`): the typed form is in
@@ -462,7 +487,7 @@ fn full_winner(lower: &[char], found: Vec<String>) -> Option<String> {
 /// A rarer candidate (rank [`TAIL_RANK`]+) must keep the typed last two letters: the
 /// slip is inside the word (`ярдык` → `ярлык`), while a changed or dropped ending turns
 /// unknown names and forms into other rare words (`айса` → `айс`, `minut` → `mint`).
-fn tail_ok(typed: &[char], cand: &str) -> bool {
+pub(crate) fn tail_ok(typed: &[char], cand: &str) -> bool {
     let cv: Vec<char> = cand.chars().collect();
     typed.len() >= 2 && cv.len() >= 2 && typed[typed.len() - 2..] == cv[cv.len() - 2..]
 }
@@ -476,7 +501,7 @@ fn stem_differs(a: &[char], b: &[char]) -> bool {
 
 /// English `cand` only adds or drops a suffix (`vibrate` / `vibrates`, `midge` /
 /// `midget`): another word, not a typo.
-fn en_affix_only(typed: &str, cand: &str) -> bool {
+pub(crate) fn en_affix_only(typed: &str, cand: &str) -> bool {
     const SUFFIXES: [&str; 14] = ["s", "es", "d", "ed", "er", "ers", "al", "ly", "an", "ian", "ing", "t", "y", "ness"];
     let (long, short) = if typed.len() > cand.len() { (typed, cand) } else { (cand, typed) };
     long.strip_prefix(short).is_some_and(|tail| SUFFIXES.contains(&tail))
@@ -486,7 +511,7 @@ fn en_affix_only(typed: &str, cand: &str) -> bool {
 /// `apple` / `appl`): usually another word (a brand, a name, a form), not a slip. The
 /// Russian counterpart is [`morph::only_ending_differs`]. A doubled last letter
 /// (`helloo` → `hello`) is still a slip and may be fixed.
-fn en_end_letter_only(typed: &str, cand: &str) -> bool {
+pub(crate) fn en_end_letter_only(typed: &str, cand: &str) -> bool {
     let (t, c): (Vec<char>, Vec<char>) = (typed.chars().collect(), cand.chars().collect());
     if t.len() == c.len() + 1 && t.starts_with(&c) {
         return t[t.len() - 1] != t[t.len() - 2];
@@ -497,7 +522,7 @@ fn en_end_letter_only(typed: &str, cand: &str) -> bool {
 /// The fix starts with the typed first letter, or swaps the first two: slips at the
 /// very start are rare, while `упускать` / `пускать`, `входной` / `выходной`,
 /// `ренди` / `бренди` are different words.
-fn first_letter_kept(typed: &[char], cand: &str) -> bool {
+pub(crate) fn first_letter_kept(typed: &[char], cand: &str) -> bool {
     let cv: Vec<char> = cand.chars().collect();
     match (cv.first(), typed.first()) {
         (Some(a), Some(b)) if a == b => true,
@@ -554,7 +579,7 @@ const RU_VOWELS: &str = "аеиоуыэюя";
 const EN_VOWELS: &str = "aeiouy";
 const RU_PAIRS: [(char, char); 8] = [('б', 'п'), ('в', 'ф'), ('г', 'к'), ('д', 'т'), ('ж', 'ш'), ('з', 'с'), ('ш', 'щ'), ('ь', 'ъ')];
 
-fn sound_alike(a: char, b: char, lang: Lang) -> bool {
+pub(crate) fn sound_alike(a: char, b: char, lang: Lang) -> bool {
     let vowels = match lang {
         Lang::Ru => RU_VOWELS,
         Lang::En => EN_VOWELS,
@@ -575,7 +600,12 @@ fn key_pos(c: char, lang: Lang) -> Option<(i32, i32)> {
 }
 
 /// Keys touching on a staggered keyboard (same row ±1, row below at column −1/0, above 0/+1).
-fn adjacent_keys(a: char, b: char, lang: Lang) -> bool {
+/// A table lookup (see [`crate::typo_wide`]); [`adjacent_keys_raw`] computes it.
+pub(crate) fn adjacent_keys(a: char, b: char, lang: Lang) -> bool {
+    crate::typo_wide::adjacent_fast(a, b, lang)
+}
+
+pub(crate) fn adjacent_keys_raw(a: char, b: char, lang: Lang) -> bool {
     match (key_pos(a, lang), key_pos(b, lang)) {
         (Some((ra, ca)), Some((rb, cb))) => match rb - ra {
             0 => (ca - cb).abs() == 1,
@@ -828,7 +858,9 @@ mod tests {
     #[test]
     fn leaves_known_short_and_unclear_words() {
         assert_eq!(suggest("привет", Lang::Ru), None);
-        assert_eq!(suggest("teh", Lang::En), None); // too short
+        // 3 letters since 0.3.72 (Level::Normal), when one fix clearly wins.
+        assert_eq!(suggest("teh", Lang::En).as_deref(), Some("the"));
+        assert_eq!(suggest_level("teh", Lang::En, Level::Cautious), None); // too short for the strict rules
         assert_eq!(suggest("qzxvbn", Lang::En), None);
         // к→й is not a neighbour-key slip, so only the doubled letter is dropped.
         assert_eq!(suggest("опечаткок", Lang::Ru).as_deref(), Some("опечаток"));
@@ -877,10 +909,14 @@ mod tests {
         assert_eq!(suggest("увидить", Lang::Ru).as_deref(), Some("увидит"));
         assert_eq!(suggest("ккайф", Lang::Ru).as_deref(), Some("кайф"));
         // Left alone: real words, names / slang verbs, too short or too far.
-        for w in ["буде", "коды", "зи", "динамить", "зеркалить", "верз", "архим", "ухора", "контингенте"] {
+        for w in ["буде", "коды", "зи", "динамить", "зеркалить", "архим", "ухора", "контингенте"] {
             assert_eq!(suggest(w, Lang::Ru), None, "{w}");
         }
         assert_eq!(suggest("lowfps", Lang::En), None);
+        // `верз`: left alone by the strict rules; since 0.3.72 the scored search fixes
+        // it (з is next to х, `верх` is frequent and the only close word).
+        assert_eq!(suggest_level("верз", Lang::Ru, Level::Cautious), None);
+        assert_eq!(suggest("верз", Lang::Ru).as_deref(), Some("верх"));
     }
 
     #[test]

@@ -22,3 +22,4 @@ desktop.ini
 *.swp
 .idea/
 .vscode/
+target-base/
