@@ -69,6 +69,36 @@ const HYPHEN_PARTICLES: [&str; 6] = ["то", "либо", "нибудь", "так
 pub const FULL_FORM_MIN_LEN: usize = 4;
 /// Shortest token converted only because the other layout gives a full-form-set word.
 pub const FULL_FORM_CONVERT_MIN_LEN: usize = 5;
+/// A real form of the typed layout (full-form set) gives way to an other-layout reading
+/// ranked under this; rarer readings need corpus support ([`reading_likelier`]). Since 0.3.74.
+pub const FULL_FORM_YIELD_RANK: u32 = 3_000;
+/// Short-token rule (since 0.3.74): a 2–3 letter English list entry ranked past this
+/// (`lf` 2 362, `ns` 34 218; curated extras sit at exactly [`dict::EXTRA_RANK`] = 2 000 and
+/// never qualify) whose Russian reading ranks under [`SHORT_SWITCH_DST_RANK`].
+pub const SHORT_SWITCH_SRC_RANK: u32 = 2_000;
+pub const SHORT_SWITCH_DST_RANK: u32 = 50;
+/// Latin abbreviations of that kind typed inside Russian text too (`Спартак vs Зенит`). The
+/// rule's whole candidate set was audited by eye (docs/eval-0.3.74): `ns`, `vs`, `ds`, `lf`,
+/// `bp`, `ye`; only `vs` is kept.
+const SHORT_SWITCH_KEEP: [&str; 1] = ["vs"];
+/// The corpus (n-gram unigrams) has the other-layout reading at least this many times more
+/// often, per token, than the typed form.
+pub const READING_CORPUS_RATIO: f64 = 10.0;
+/// A real typed form whose reading turns its last letters into signs (`тучею` = `next.`)
+/// converts only into a word ranked under this.
+pub const SIGNED_READING_MAX_RANK: u32 = 1_000;
+
+/// `conv` (in `dst`) is attested in the n-gram corpus and [`READING_CORPUS_RATIO`] times
+/// more frequent there than `typed` (in `src`) is in its own.
+fn reading_likelier(typed: &str, src: Lang, conv: &str, dst: Lang) -> bool {
+    let freq = |w: &str, l: Lang| {
+        let g = crate::ngram::get(l);
+        let n = Dictionary::normalize(w);
+        if g.total() > 0.0 { g.count(&[n.as_str()]) / g.total() } else { 0.0 }
+    };
+    let (fc, ft) = (freq(conv, dst), freq(typed, src));
+    fc > 0.0 && fc > READING_CORPUS_RATIO * ft
+}
 
 /// Tunables, normally filled from [`crate::Config`].
 #[derive(Debug, Clone)]
@@ -708,6 +738,32 @@ impl Engine {
             }
         }
 
+        // A short English list entry that is rare (an abbreviation or subtitle noise such
+        // as `lf`, `ns`) whose Russian reading is one of the most frequent words (`да`,
+        // `ты`): the Russian word was meant. Into Russian only (short Russian entries of
+        // that rank are slang people type: `ща`, `ша`, `рук`), never after an English word,
+        // never for curated extras (`ok`, `js` rank above the limit) or [`SHORT_SWITCH_KEEP`].
+        if src == Lang::En && (2..=3).contains(&letters.len()) && !self.typed_language_context(src) {
+            let lower = Dictionary::normalize(core);
+            let rare = src_dict.rank(&lower).is_some_and(|r| r > SHORT_SWITCH_SRC_RANK) && !SHORT_SWITCH_KEEP.contains(&lower.as_str());
+            if rare {
+                // Trailing keys that are letters in the other layout (`lf.` = `даю`):
+                // the whole token's reading wins when it is a frequent word.
+                let whole: String = chars.iter().collect();
+                let whole_conv = layout::convert(&whole, src);
+                let whole_core = trim_non_letters(&whole_conv);
+                if whole_core.chars().count() > letters.len()
+                    && layout::detect_script(whole_core) == Some(dst)
+                    && whole_core.chars().all(char::is_alphabetic)
+                    && dst_dict.rank(whole_core).is_some_and(|r| r < FULL_FORM_YIELD_RANK)
+                {
+                    return Decision::Convert { text: whole_conv, target: dst, reason: "converted form is a known word" };
+                }
+                if let Some(d) = Self::try_convert(&chars, src, o.min_word_len, |w| dst_dict.rank(w).is_some_and(|r| r < SHORT_SWITCH_DST_RANK)) {
+                    return d;
+                }
+            }
+        }
         if src_dict.contains(core) {
             return Decision::Keep("known word in current layout");
         }
@@ -717,7 +773,30 @@ impl Engine {
             return d;
         }
 
-        if let Some(d) = ranked_convert() {
+        // A real (if rare) form in the typed layout converts only when its other-layout
+        // reading is clearly the likelier word: frequent (and every typed letter a letter
+        // there), or far more frequent in the corpus than the typed form (`шару` stays,
+        // `ifhe` is subtitle noise; `туфе` → `neat`; `иную` is not `bye.`).
+        let src_full = letters.len() >= FULL_FORM_MIN_LEN && src_dict.in_full_forms(core);
+        let ranked = if src_full {
+            // Letters read as signs: only at the end (`тучею` = `next.`), never at the start
+            // (`херу` is not `[the`), and only into a frequent word the corpus prefers.
+            let lead_letter = layout::convert(&letters[0].to_string(), src).chars().all(char::is_alphabetic);
+            Self::try_convert(&chars, src, o.min_word_len, |w| {
+                let whole = w.chars().count() == letters.len();
+                dst_dict.rank(w).is_some_and(|r| {
+                    (w.chars().count() > 3 || r < SHORT_WORD_MAX_RANK)
+                        && if whole {
+                            r < FULL_FORM_YIELD_RANK || reading_likelier(core, src, w, dst)
+                        } else {
+                            lead_letter && r < SIGNED_READING_MAX_RANK && reading_likelier(core, src, w, dst)
+                        }
+                })
+            })
+        } else {
+            ranked_convert()
+        };
+        if let Some(d) = ranked {
             return d;
         }
 
@@ -2088,5 +2167,57 @@ mod tests {
         // User words win.
         let mut e = engine_with(&["вофисе"]);
         assert!(type_str(&mut e, "вофисе ").is_empty());
+    }
+
+    /// Types `text` key by key (then Enter) at `level` and returns what the field holds.
+    fn field_after(level: typo::Level, text: &str) -> String {
+        let mut e = typo_engine();
+        e.options.typo_level = level;
+        let mut out: Vec<char> = Vec::new();
+        for k in text.chars().map(Key::Char).chain([Key::Boundary('\n')]) {
+            if let Key::Char(c) = k {
+                out.push(c);
+            }
+            match e.feed(k, false) {
+                Some(r) => {
+                    let keep = out.len().saturating_sub(r.delete);
+                    out.truncate(keep);
+                    out.extend(r.insert.chars());
+                }
+                None => {
+                    if let Key::Boundary(c) = k {
+                        out.push(c);
+                    }
+                }
+            }
+        }
+        out.into_iter().collect::<String>().trim_end().to_string()
+    }
+
+    #[test]
+    fn real_forms_short_tokens_and_new_words_0_3_74() {
+        // A real form of the typed layout stays when the other reading is subtitle noise.
+        assert_eq!(conv("шару"), None);
+        assert_eq!(conv("иную"), None);
+        // Rare forms whose reading is a frequent word still switch.
+        assert_eq!(conv("цуку").as_deref(), Some("were"));
+        // Short rare English entries whose Russian reading is a top word.
+        assert_eq!(conv("lf").as_deref(), Some("да"));
+        assert_eq!(conv("lf.").as_deref(), Some("даю"));
+        assert_eq!(conv("Lf").as_deref(), Some("Да"));
+        assert_eq!(conv("ns").as_deref(), Some("ты"));
+        for keep in ["vs", "ok", "js", "id", "cd", "ls", "db", "ui", "pr", "dj", "us"] {
+            assert_eq!(conv(keep), None, "{keep}");
+        }
+        // Not after an English word (`kubectl get ns`).
+        let mut e = typo_engine();
+        assert!(type_str(&mut e, "get ns ").is_empty());
+        // New words of regular formation are not typos; a far guess is not made.
+        for level in [typo::Level::Normal, typo::Level::Aggressive] {
+            let s = "есть зранилка типа nas, образ лежит на хосте -- зас сделают шару? я смогу напрямик скачать на нее? и надо почистить boot -- как лучше сделать?";
+            assert_eq!(field_after(level, s), s, "{level:?}");
+            assert_eq!(field_after(level, "есть хранилка типа nas"), "есть хранилка типа nas", "{level:?}");
+        }
+        assert_eq!(field_after(typo::Level::Normal, "lf, ns ghfd"), "да, ты прав");
     }
 }

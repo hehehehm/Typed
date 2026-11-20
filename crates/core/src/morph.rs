@@ -462,3 +462,101 @@ mod tests {
         assert!(!ok("системой", "ситстемрым", "системым"));
     }
 }
+
+/// Productive Russian suffixes (before the case ending): an unknown word built with one of
+/// them on a known stem is a new word, not a typo (`хранилка`, `донатщик`, `ботоводство`).
+/// Single-letter suffixes (`-к`, `-ец`) are left out: a slip makes those too easily.
+/// Productive suffixes by what they attach to. Verbal (`храни(ть)` + `лк`): the base is an
+/// infinitive. Nominal (`донат` + `щик`): the base is a noun in the nominative. Adjectival
+/// (`мутн(ый)` + `ость`): the base is an adjective. Verb-making (`донат` + `ирова` + `ть`).
+const DERIV_VERBAL: &[&str] = &["лк", "льщик", "тель"];
+const DERIV_NOMINAL: &[&str] = &["щик", "чик", "ник", "шк", "ечк", "очк", "ушк", "юшк", "ищ", "изм", "ист", "ств", "ниц", "овщин", "ёнок", "онок", "ирова", "изирова"];
+const DERIV_ADJECTIVAL: &[&str] = &["ость", "еньк", "оньк"];
+/// Case and verb endings after a derivational suffix.
+const DERIV_ENDINGS: &[&str] = &[
+    "", "а", "я", "и", "ы", "у", "ю", "е", "о", "ой", "ей", "ою", "ам", "ям", "ами", "ями", "ах", "ях", "ом", "ем", "ов", "ев", "ью", "ть", "ться", "л", "ла", "ли", "ло", "ет", "ют", "ешь", "ете", "ая", "ый", "ое", "ые",
+];
+/// Prefixes that make new verbs of known ones (`перезалить`, `недогуглить`).
+const DERIV_PREFIXES: &[&str] = &[
+    "пере", "недо", "пред", "раз", "рас", "под", "над", "при", "про", "анти", "супер", "псевдо", "мега", "микро", "полу", "само", "сверх",
+];
+/// Infinitive and past endings: the verb forms a prefixed new verb is checked in.
+const DERIV_VERB_FORMS: &[&str] = &["ть", "ться", "л", "ла", "ли", "ло", "лся", "лась", "лись"];
+
+fn is_vowel(c: char) -> bool {
+    "аеёиоуыэюя".contains(c)
+}
+
+/// `w` (normalised, unknown to the dictionaries) is regular word formation on known parts:
+/// a known base plus a productive suffix and an ending (`хранилка` = `храни(ть)` + `лк` +
+/// `а`; [`DERIV_VERBAL`], [`DERIV_NOMINAL`], [`DERIV_ADJECTIVAL`]; the base is an
+/// infinitive, a nominative noun or an adjective on a stem of 5+ letters), or a verb prefix plus a
+/// known infinitive or past form of 5+ letters (`перезалить`; `от` + `суда` is a slip of
+/// `отсюда`, not a new word). Such a word is left alone by the typo fixer (since 0.3.74).
+pub fn looks_derived(d: &Dictionary, w: &str) -> bool {
+    derivation(d, w).is_some()
+}
+
+/// A correction `cand` of the derived word `w` stays within its formation: it keeps the
+/// prefix (`разудить` → `разбудить`) or the suffix (`поклоннников` → `поклонников`), so
+/// it fixes a slip inside the word instead of turning it into another lemma
+/// (`хранилка` → `хранила` drops `лк`, `блузочки` → `булочки` leaves the stem).
+pub fn keeps_derivation(d: &Dictionary, w: &str, cand: &str) -> bool {
+    match derivation(d, w) {
+        None => true,
+        Some((_, affix, true)) => cand.starts_with(affix),
+        Some((base, affix, false)) => {
+            // The stem the suffix was found on, without the base's completion.
+            // A slip at its seam may go (`пространн|ств|е` → `пространстве`).
+            let stem = ["ть", "ый", "ой", "ий", "а", "я"].iter().find_map(|e| base.strip_suffix(e)).unwrap_or(&base);
+            let head: String = stem.chars().take(stem.chars().count() - 1).collect();
+            cand.starts_with(&head) && cand.contains(affix)
+        }
+    }
+}
+
+/// The analysis behind [`looks_derived`]: `(base word, affix, affix is a prefix)`.
+pub fn derivation(d: &Dictionary, w: &str) -> Option<(String, &'static str, bool)> {
+    if w.chars().count() < 6 {
+        return None;
+    }
+    let known = |s: &str| s.chars().count() >= 5 && d.is_word(s);
+    for end in DERIV_ENDINGS {
+        let Some(rest) = w.strip_suffix(end) else { continue };
+        let tries: [(&[&str], &[&str]); 3] = [
+            (DERIV_VERBAL, &["ть"]),
+            (DERIV_NOMINAL, &["", "а", "я"]),
+            (DERIV_ADJECTIVAL, &["ый", "ой", "ий"]),
+        ];
+        for (sufs, stem_ends) in tries {
+            for suf in sufs {
+                let Some(stem) = rest.strip_suffix(suf) else { continue };
+                let Some(last) = stem.chars().last() else { continue };
+                // 5+ letters: shorter stems complete to case forms (`лист|ниц|ы`
+                // would read `листа` + `ниц`).
+                if stem.chars().count() < 5 {
+                    continue;
+                }
+                for e in stem_ends {
+                    // Verbal: `храни` + `ть`, a vowel before `ть`. Nominal and adjectival:
+                    // a consonant-final stem (`донат`, `мутн`), `-ий` only after a velar or
+                    // hissing letter (`горьк-ий`), so case forms (`залою`, `неприятий`) and
+                    // conjugated forms (`хранишь`) are not taken for bases.
+                    let ok_shape = match *e {
+                        "ть" => is_vowel(last),
+                        "ий" => "гкхжшчщ".contains(last),
+                        _ => !is_vowel(last) && last != 'ь' && last != 'ъ',
+                    };
+                    let base = format!("{stem}{e}");
+                    if ok_shape && known(&base) {
+                        return Some((base, *suf, false));
+                    }
+                }
+            }
+        }
+    }
+    DERIV_PREFIXES.iter().find_map(|p| {
+        let rest = w.strip_prefix(p)?;
+        (DERIV_VERB_FORMS.iter().any(|f| rest.ends_with(f)) && known(rest)).then(|| (rest.to_string(), *p, true))
+    })
+}

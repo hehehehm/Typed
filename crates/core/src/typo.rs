@@ -143,6 +143,16 @@ fn suggest_impl(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
 }
 
 fn suggest_impl_ctx(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level, ctx: &Context) -> Option<String> {
+    let fix = suggest_core(d, word, lang, assume_unknown, level, ctx)?;
+    // A new word of regular formation (`хранилка`, `перезалить`) is not a typo of another
+    // lemma: a fix must keep its prefix or suffix.
+    if lang == Lang::Ru && !morph::keeps_derivation(d, &Dictionary::normalize(word), &Dictionary::normalize(&fix)) {
+        return None;
+    }
+    Some(fix)
+}
+
+fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level, ctx: &Context) -> Option<String> {
     let strict = suggest_one(d, word, lang, assume_unknown)
         .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
         .or_else(|| verb_soft_sign(d, word, lang, assume_unknown));

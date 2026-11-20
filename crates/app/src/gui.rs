@@ -1052,7 +1052,13 @@ fn chip(ui: &mut egui::Ui, word: &str, lang: Option<&str>) -> bool {
     let lang_w = lang.map_or(0.0, |l| ui.fonts(|f| f.layout_no_wrap(l.to_owned(), lang_font, color)).size().x + spacing);
     let icon = 18.0;
     let pad_x = 6.0;
-    let width = pad_x + word_w + spacing + lang_w + icon + pad_x;
+    let fixed = pad_x + spacing + lang_w + icon + pad_x;
+    // A chip never grows wider than the row: a long entry (a full path) would
+    // otherwise stretch the whole tab and push the controls below off the window.
+    let max_w = ui.max_rect().width().max(fixed + 40.0);
+    let word_w_shown = word_w.min(max_w - fixed);
+    let truncated = word_w_shown < word_w;
+    let width = fixed + word_w_shown;
     let height = ui.spacing().interact_size.y.max(22.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     ui.painter().rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
@@ -1064,7 +1070,13 @@ fn chip(ui: &mut egui::Ui, word: &str, lang: Option<&str>) -> bool {
     );
     child.spacing_mut().item_spacing.x = spacing;
     child.add_space(pad_x * 0.5);
-    child.add(egui::Label::new(egui::RichText::new(word).monospace())).on_hover_text(word);
+    if truncated {
+        child
+            .add_sized([word_w_shown, height], egui::Label::new(egui::RichText::new(word).monospace()).truncate())
+            .on_hover_text(word);
+    } else {
+        child.add(egui::Label::new(egui::RichText::new(word).monospace())).on_hover_text(word);
+    }
     if let Some(l) = lang {
         child.small(l);
     }

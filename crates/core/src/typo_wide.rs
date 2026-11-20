@@ -444,7 +444,10 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
             && !(lang == Lang::Ru && morph::only_ending_differs(&lower_s, cand))
             && !(lang == Lang::En && (en_affix_only(&lower_s, cand) || en_end_letter_only(&lower_s, cand)))
             && (odd || (cost <= ONE_SLIP && lowercase) || (lowercase && m > n && r < DROPPED_RANK) || (lowercase && level == Level::Aggressive))
-            && !extra_or_cut_end(&lower, &cv);
+            && !extra_or_cut_end(&lower, &cv)
+            // Past the default budget (Aggressive only) the word keeps its shape: at most
+            // one letter more or less (`зранилка` is not `заняла`, 2.9 slips and 2 letters).
+            && (cost <= budget(n, Level::Normal) || m.abs_diff(n) <= 1);
         if m < 3 && r >= crate::engine::SHORT_WORD_MAX_RANK {
             continue;
         }
