@@ -9,6 +9,7 @@
 //!   No IPC with the daemon, no clipboard, no network, nothing secret is logged.
 
 use crate::platform;
+use crate::ui_style as st;
 use eframe::egui;
 use layout_keeper_core::vault::{self, Card, Login, Vault};
 use std::path::PathBuf;
@@ -16,13 +17,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use zeroize::{Zeroize, Zeroizing};
 
-/// Warning copy: deep amber on light, warm gold on dark — readable on both.
-fn warn_color(ui: &egui::Ui) -> egui::Color32 {
-    if ui.visuals().dark_mode {
-        egui::Color32::from_rgb(232, 196, 72)
-    } else {
-        egui::Color32::from_rgb(148, 90, 0)
-    }
+/// The section colour (lime square on the home screen).
+const ACCENT: egui::Color32 = st::LIME;
+
+/// Caption with a count on the left, an add tile on the right.
+fn heading_row(ui: &mut egui::Ui, caption: &str, button: &str, clicked: &mut bool) {
+    st::row(
+        ui,
+        egui::Color32::TRANSPARENT,
+        |ui| st::caption(ui, caption),
+        |ui| *clicked = st::primary(ui, button, ACCENT).clicked(),
+    );
 }
 
 enum Edit {
@@ -66,6 +71,26 @@ impl VaultUi {
 
     pub fn is_unlocked(&self) -> bool {
         self.vault.is_some()
+    }
+
+    /// Screenshot / layout tests: a vault at `path`, optionally already open.
+    #[cfg(test)]
+    pub(crate) fn for_test(path: PathBuf, vault: Option<Vault>) -> Self {
+        let mut v = Self::new();
+        v.path = path;
+        v.vault = vault;
+        v
+    }
+
+    /// One-word state for the home square and the section header.
+    pub fn state_text(&self) -> &'static str {
+        if self.vault.is_some() {
+            "открыт"
+        } else if self.path.exists() {
+            "заперт"
+        } else {
+            "не создан"
+        }
     }
 
     /// Drop the decrypted vault and any secret edit buffers (all zeroize on drop).
@@ -140,54 +165,75 @@ impl VaultUi {
 
     pub fn show(&mut self, ui: &mut egui::Ui, focus_app: Option<String>, idle_minutes: &mut u32) -> bool {
         let mut cfg_changed = false;
-        ui.heading("Сейф: пароли и карты");
-        ui.add(egui::Label::new(egui::RichText::new(format!("Файл: {}", self.path.display())).small()).wrap());
-        ui.small("На диске только шифротекст.");
+        let t = st::cur(ui);
         if !self.msg.is_empty() {
-            ui.label(&self.msg);
+            st::block(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (sq, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                    ui.painter().rect_filled(sq, 0.0, ACCENT);
+                    ui.add(egui::Label::new(egui::RichText::new(&self.msg).color(t.ink)).wrap());
+                });
+            });
         }
-        ui.separator();
 
         if self.vault.is_none() {
             self.show_locked(ui);
         } else {
-            ui.horizontal(|ui| {
-                if ui.button("🔒 Заблокировать").clicked() {
-                    self.lock();
-                    self.msg = "Сейф заблокирован.".into();
-                }
-                ui.label("Автоблокировка через, мин:");
-                cfg_changed |= ui.add(egui::DragValue::new(idle_minutes).range(1..=120)).changed();
+            st::block(ui, |ui| {
+                st::row(
+                    ui,
+                    egui::Color32::TRANSPARENT,
+                    |ui| {
+                        if st::primary(ui, "Заблокировать", ACCENT).clicked() {
+                            self.lock();
+                            self.msg = "Сейф заблокирован.".into();
+                        }
+                    },
+                    |ui| {
+                        ui.scope(|ui| {
+                            let v = &mut ui.visuals_mut().widgets;
+                            v.inactive.weak_bg_fill = t.field;
+                            v.inactive.bg_stroke = egui::Stroke::new(1.0, t.line);
+                            v.hovered.bg_stroke = egui::Stroke::new(1.0, t.muted);
+                            cfg_changed |= ui.add_sized([52.0, 28.0], egui::DragValue::new(idle_minutes).range(1..=120)).changed();
+                        });
+                        ui.add(egui::Label::new(egui::RichText::new("Автоблокировка, мин").color(t.muted)).truncate());
+                    },
+                );
             });
             if self.vault.is_some() {
                 self.show_unlocked(ui, focus_app);
             }
         }
+        ui.add_space(4.0);
+        st::hint(ui, &format!("Файл: {} — на диске только шифротекст.", self.path.display()));
         cfg_changed
     }
 
     fn show_locked(&mut self, ui: &mut egui::Ui) {
         let exists = self.path.exists();
-        if exists {
-            ui.label("Введите мастер-пароль, чтобы открыть сейф.");
-        } else {
-            ui.label("Сейф ещё не создан. Придумайте мастер-пароль и введите его дважды.");
-            ui.colored_label(warn_color(ui), "Мастер-пароль нельзя восстановить. Если забудете — данные не вернуть.");
-        }
         let mut go = false;
-        ui.horizontal(|ui| {
-            ui.label("Мастер-пароль:");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                go = ui.button(if exists { "Открыть" } else { "Создать сейф" }).clicked();
-                ui.add(egui::TextEdit::singleline(&mut self.pw1).password(true).desired_width(ui.available_width().max(60.0)));
-            });
+        st::block(ui, |ui| {
+            if exists {
+                ui.label("Введите мастер-пароль, чтобы открыть сейф.");
+            } else {
+                ui.label("Сейф ещё не создан. Придумайте мастер-пароль и введите его дважды.");
+                st::warn(ui, "Мастер-пароль нельзя восстановить. Если забудете — данные не вернуть.");
+            }
+            let w = ui.available_width();
+            if exists {
+                let bw = st::text_w(ui, "Открыть", st::font(14.0)) + 24.0;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    st::password_bg(ui, &mut self.pw1, "мастер-пароль", w - bw - 6.0, ACCENT);
+                    go = st::primary(ui, "Открыть", ACCENT).clicked();
+                });
+            } else {
+                st::password_bg(ui, &mut self.pw1, "мастер-пароль (от 8 символов)", w, ACCENT);
+                st::password_bg(ui, &mut self.pw2, "ещё раз", w, ACCENT);
+                go = st::primary(ui, "Создать сейф", ACCENT).clicked();
+            }
         });
-        if !exists {
-            ui.horizontal(|ui| {
-                ui.label("Ещё раз:");
-                ui.add(egui::TextEdit::singleline(&mut self.pw2).password(true).desired_width(ui.available_width().max(60.0)));
-            });
-        }
         let go = go || ui.input(|i| i.key_pressed(egui::Key::Enter));
         if !go || self.pw1.is_empty() {
             return;
@@ -223,10 +269,13 @@ impl VaultUi {
 
     fn show_unlocked(&mut self, ui: &mut egui::Ui, focus_app: Option<String>) {
         let ctx = ui.ctx().clone();
-        ui.label("Щёлкните в поле другой программы, вернитесь и нажмите кнопку. Наберётся в текущее приложение.");
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Текущее:");
-            ui.add(egui::Label::new(egui::RichText::new(focus_app.as_deref().unwrap_or("(не определено)")).monospace()).wrap());
+        let t = st::cur(ui);
+        st::hint(ui, "Щёлкните в поле другой программы, вернитесь и нажмите кнопку. Наберётся в текущее приложение.");
+        let cur = focus_app.as_deref().unwrap_or("(не определено)").to_string();
+        ui.horizontal(|ui| {
+            ui.set_max_width(ui.available_width());
+            ui.label(egui::RichText::new("Текущее:").color(t.muted));
+            ui.add(egui::Label::new(egui::RichText::new(crate::icons::basename(&cur)).monospace()).truncate()).on_hover_text(&cur);
         });
 
         if !matches!(self.edit, Edit::None) {
@@ -235,58 +284,71 @@ impl VaultUi {
         }
 
         // ---- logins
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Логины");
-            if ui.button("+ Добавить логин").clicked() {
-                let mut l = Login::default();
-                if let Some(a) = &focus_app {
-                    l.app_match = a.clone();
-                }
-                self.edit = Edit::Login(None, l);
+        ui.add_space(4.0);
+        let mut add_login = false;
+        let n_logins = self.vault.as_ref().map_or(0, |v| v.data.logins.len());
+        heading_row(ui, &format!("Логины · {n_logins}"), "+ Логин", &mut add_login);
+        if add_login {
+            let mut l = Login::default();
+            if let Some(a) = &focus_app {
+                l.app_match = a.clone();
             }
-        });
+            self.edit = Edit::Login(None, l);
+        }
         let v = self.vault.as_ref().expect("unlocked");
         let mut order: Vec<usize> = (0..v.data.logins.len()).collect();
         let is_match = |i: usize| focus_app.as_deref().is_some_and(|a| v.data.logins[i].matches_app(a));
         order.sort_by_key(|&i| !is_match(i));
         let matches: Vec<bool> = order.iter().map(|&i| is_match(i)).collect();
         if order.is_empty() {
-            ui.label("(пока пусто)");
+            st::hint(ui, "Пока пусто.");
         }
         let mut action: Option<(usize, &'static str)> = None;
         for (&i, &m) in order.iter().zip(&matches) {
             let l = &self.vault.as_ref().unwrap().data.logins[i];
-            ui.group(|ui| {
+            let revealed = self.reveal == Some(i);
+            st::block(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                st::row(
+                    ui,
+                    egui::Color32::TRANSPARENT,
+                    |ui| {
+                        if m {
+                            let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                            ui.painter().rect_filled(r, 0.0, ACCENT);
+                        }
+                        ui.add(egui::Label::new(egui::RichText::new(&l.label).color(t.ink)).truncate()).on_hover_text(&l.label);
+                        ui.add(egui::Label::new(egui::RichText::new(&l.username).color(t.muted)).truncate()).on_hover_text(&l.username);
+                    },
+                    |ui| {
+                        if crate::icons::delete_icon_button(ui).clicked() {
+                            action = Some((i, "del"));
+                        }
+                        if st::secondary(ui, "Изменить").clicked() {
+                            action = Some((i, "edit"));
+                        }
+                    },
+                );
+                if m {
+                    ui.label(egui::RichText::new("подходит к текущему приложению").small().color(t.muted));
+                }
                 ui.horizontal(|ui| {
-                    if m {
-                        ui.colored_label(egui::Color32::LIGHT_GREEN, "★ подходит");
+                    ui.set_max_width(ui.available_width());
+                    let (txt, btn, a) = if revealed { (l.password.as_str(), "скрыть", "hide") } else { ("••••••••", "показать", "show") };
+                    if st::secondary(ui, btn).clicked() {
+                        action = Some((i, a));
                     }
-                    ui.strong(&l.label);
-                    ui.label(format!("— {}", l.username));
-                    if self.reveal == Some(i) {
-                        ui.monospace(&l.password);
-                        if ui.button("скрыть").clicked() {
-                            action = Some((i, "hide"));
-                        }
-                    } else {
-                        ui.monospace("••••••••");
-                        if ui.button("показать").clicked() {
-                            action = Some((i, "show"));
-                        }
-                    }
+                    ui.add(egui::Label::new(egui::RichText::new(txt).monospace()).truncate());
                 });
                 ui.horizontal_wrapped(|ui| {
-                    for (k, name) in [("both", "Подставить логин"), ("pass", "Только пароль"), ("user", "Только имя")] {
-                        if ui.button(name).clicked() {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                    if st::primary(ui, "Подставить логин", ACCENT).clicked() {
+                        action = Some((i, "both"));
+                    }
+                    for (k, name) in [("pass", "Только пароль"), ("user", "Только имя")] {
+                        if st::secondary(ui, name).clicked() {
                             action = Some((i, k));
                         }
-                    }
-                    if ui.button("Изменить").clicked() {
-                        action = Some((i, "edit"));
-                    }
-                    if crate::icons::delete_icon_button(ui).clicked() {
-                        action = Some((i, "del"));
                     }
                 });
             });
@@ -315,40 +377,49 @@ impl VaultUi {
         }
 
         // ---- cards
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Карты");
-            if ui.button("+ Добавить карту").clicked() {
-                self.edit = Edit::Card(None, Card::default());
-            }
-        });
+        ui.add_space(4.0);
         let n = self.vault.as_ref().unwrap().data.cards.len();
+        let mut add_card = false;
+        heading_row(ui, &format!("Карты · {n}"), "+ Карта", &mut add_card);
+        if add_card {
+            self.edit = Edit::Card(None, Card::default());
+        }
         if n == 0 {
-            ui.label("(пока пусто)");
+            st::hint(ui, "Пока пусто.");
         }
         let mut caction: Option<(usize, &'static str)> = None;
         for i in 0..n {
             let c = &self.vault.as_ref().unwrap().data.cards[i];
-            ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    ui.strong(&c.label);
-                    ui.monospace(c.masked());
-                    ui.label(&c.expiry);
-                });
+            st::block(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                st::row(
+                    ui,
+                    egui::Color32::TRANSPARENT,
+                    |ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(&c.label).color(t.ink)).truncate()).on_hover_text(&c.label);
+                        ui.add(egui::Label::new(egui::RichText::new(format!("{}  {}", c.masked(), c.expiry)).monospace().color(t.muted)).truncate());
+                    },
+                    |ui| {
+                        if crate::icons::delete_icon_button(ui).clicked() {
+                            caction = Some((i, "del"));
+                        }
+                        if st::secondary(ui, "Изменить").clicked() {
+                            caction = Some((i, "edit"));
+                        }
+                    },
+                );
                 ui.horizontal_wrapped(|ui| {
-                    for (k, name) in [("num", "Номер"), ("exp", "Срок"), ("name", "Имя")] {
-                        if ui.button(name).clicked() {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                    if st::primary(ui, "Номер", ACCENT).clicked() {
+                        caction = Some((i, "num"));
+                    }
+                    for (k, name) in [("exp", "Срок"), ("name", "Имя")] {
+                        if st::secondary(ui, name).clicked() {
                             caction = Some((i, k));
                         }
                     }
-                    if !c.cvc.is_empty() && ui.button("CVC").clicked() {
+                    if !c.cvc.is_empty() && st::secondary(ui, "CVC").clicked() {
                         caction = Some((i, "cvc"));
-                    }
-                    if ui.button("Изменить").clicked() {
-                        caction = Some((i, "edit"));
-                    }
-                    if crate::icons::delete_icon_button(ui).clicked() {
-                        caction = Some((i, "del"));
                     }
                 });
             });
@@ -376,64 +447,78 @@ impl VaultUi {
         }
 
         if let Some((is_login, i)) = self.confirm_delete {
-            ui.separator();
-            ui.colored_label(warn_color(ui), "Удалить запись безвозвратно?");
-            ui.horizontal(|ui| {
-                if ui.button("Да, удалить").clicked() {
-                    let v = self.vault.as_mut().unwrap();
-                    if is_login && i < v.data.logins.len() {
-                        v.data.logins.remove(i);
-                    } else if !is_login && i < v.data.cards.len() {
-                        v.data.cards.remove(i);
-                    }
-                    self.confirm_delete = None;
-                    self.reveal = None;
-                    self.save();
-                }
-                if ui.button("Отмена").clicked() {
-                    self.confirm_delete = None;
-                }
+            let mut yes = false;
+            let mut no = false;
+            st::block(ui, |ui| {
+                st::warn(ui, "Удалить запись безвозвратно?");
+                ui.horizontal(|ui| {
+                    yes = st::tile(ui, "Да, удалить", st::RED, st::INK_ON_COLOR).clicked();
+                    no = st::secondary(ui, "Отмена").clicked();
+                });
             });
+            if yes {
+                let v = self.vault.as_mut().unwrap();
+                if is_login && i < v.data.logins.len() {
+                    v.data.logins.remove(i);
+                } else if !is_login && i < v.data.cards.len() {
+                    v.data.cards.remove(i);
+                }
+                self.confirm_delete = None;
+                self.reveal = None;
+                self.save();
+            }
+            if no {
+                self.confirm_delete = None;
+            }
         }
     }
 
     fn show_editor(&mut self, ui: &mut egui::Ui) {
         let mut done: Option<bool> = None; // Some(true)=save, Some(false)=cancel
         let row = |ui: &mut egui::Ui, label: &str, s: &mut String, secret: bool| {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                ui.add(egui::TextEdit::singleline(s).password(secret).desired_width(ui.available_width().max(80.0)));
-            });
+            let c = st::cur(ui).muted;
+            ui.label(egui::RichText::new(label).small().color(c));
+            let w = ui.available_width();
+            if secret {
+                st::password_bg(ui, s, "", w, ACCENT);
+            } else {
+                st::field_bg(ui, s, "", w, ACCENT);
+            }
         };
-        match &mut self.edit {
-            Edit::Login(_, l) => {
-                ui.heading("Логин");
-                row(ui, "Название:", &mut l.label, false);
-                row(ui, "Имя:", &mut l.username, false);
-                row(ui, "Пароль:", &mut l.password, true);
-                row(ui, "Приложение / адрес:", &mut l.app_match, false);
-                ui.small("Если путь или адрес содержит эту строку, логин подсветится.");
-                ui.label("Заметки:");
-                ui.add(egui::TextEdit::multiline(&mut l.notes).desired_rows(3));
+        st::block(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            match &mut self.edit {
+                Edit::Login(_, l) => {
+                    ui.label(egui::RichText::new("Логин").size(17.0));
+                    row(ui, "Название", &mut l.label, false);
+                    row(ui, "Имя", &mut l.username, false);
+                    row(ui, "Пароль", &mut l.password, true);
+                    row(ui, "Приложение / адрес", &mut l.app_match, false);
+                    st::hint(ui, "Если путь или адрес содержит эту строку, логин подсветится.");
+                    let c = st::cur(ui).muted;
+                    ui.label(egui::RichText::new("Заметки").small().color(c));
+                    ui.add(egui::TextEdit::multiline(&mut l.notes).desired_rows(3).desired_width(f32::INFINITY));
+                }
+                Edit::Card(_, c) => {
+                    ui.label(egui::RichText::new("Карта").size(17.0));
+                    row(ui, "Название", &mut c.label, false);
+                    row(ui, "Номер", &mut c.number, true);
+                    row(ui, "Срок (ММ/ГГ)", &mut c.expiry, false);
+                    row(ui, "Имя на карте", &mut c.holder, false);
+                    row(ui, "CVC (необязательно)", &mut c.cvc, true);
+                    st::warn(ui, "CVC лучше не сохранять, а вводить вручную.");
+                }
+                Edit::None => {}
             }
-            Edit::Card(_, c) => {
-                ui.heading("Карта");
-                row(ui, "Название:", &mut c.label, false);
-                row(ui, "Номер:", &mut c.number, true);
-                row(ui, "Срок (ММ/ГГ):", &mut c.expiry, false);
-                row(ui, "Имя на карте:", &mut c.holder, false);
-                row(ui, "CVC (необязательно):", &mut c.cvc, true);
-                ui.colored_label(warn_color(ui), "CVC лучше не сохранять, а вводить вручную.");
-            }
-            Edit::None => {}
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Сохранить").clicked() {
-                done = Some(true);
-            }
-            if ui.button("Отмена").clicked() {
-                done = Some(false);
-            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if st::primary(ui, "Сохранить", ACCENT).clicked() {
+                    done = Some(true);
+                }
+                if st::secondary(ui, "Отмена").clicked() {
+                    done = Some(false);
+                }
+            });
         });
         let Some(save) = done else { return };
         let edit = std::mem::replace(&mut self.edit, Edit::None);

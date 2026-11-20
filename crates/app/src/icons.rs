@@ -12,7 +12,7 @@ pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
     let visuals = ui.style().interact(&response);
     let painter = ui.painter();
     if response.hovered() || response.is_pointer_button_down_on() {
-        painter.rect_filled(rect.expand(1.0), 3.0, visuals.bg_fill);
+        painter.rect_filled(rect.expand(1.0), 0.0, visuals.bg_fill);
     }
     let stroke = visuals.fg_stroke;
     let c = rect.center();
@@ -39,7 +39,7 @@ pub fn hide_icon_button(ui: &mut egui::Ui, hide: bool) -> egui::Response {
     let visuals = ui.style().interact(&response);
     let painter = ui.painter();
     if response.hovered() || response.is_pointer_button_down_on() {
-        painter.rect_filled(rect.expand(1.0), 3.0, visuals.bg_fill);
+        painter.rect_filled(rect.expand(1.0), 0.0, visuals.bg_fill);
     }
     let stroke = visuals.fg_stroke;
     let c = rect.center();
@@ -73,14 +73,14 @@ impl IconCache {
     /// Draw the icon (or placeholder) for `id`.
     pub fn show(&mut self, ui: &mut egui::Ui, id: &str) {
         let size = egui::vec2(ICON_SIZE, ICON_SIZE);
-        let rounding = 4.5;
+        let rounding = 3.0;
         if let Some(tex) = self.get(ui.ctx(), id) {
             ui.add(egui::Image::new(&tex).fit_to_exact_size(size).rounding(rounding));
             return;
         }
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         let p = ui.painter();
-        p.rect_filled(rect, rounding, ui.visuals().widgets.inactive.bg_fill);
+        p.rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill);
         let letter = basename(id).chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
         p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(11.0), ui.visuals().text_color());
     }

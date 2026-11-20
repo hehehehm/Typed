@@ -1,6 +1,6 @@
 //! Bundled app marks the user can pick in settings.
 
-use eframe::egui::{self, Color32};
+use eframe::egui;
 use layout_keeper_core::LogoStyle;
 
 pub fn png(style: LogoStyle) -> &'static [u8] {
@@ -117,61 +117,4 @@ pub fn texture_faded(ctx: &egui::Context, style: LogoStyle) -> egui::TextureHand
         egui::ColorImage::from_rgba_premultiplied([w, h], &rgba),
         egui::TextureOptions::LINEAR,
     )
-}
-
-/// Water colors sampled from the selected mark, tuned so selected buttons stay readable.
-pub struct Palette {
-    pub accent: Color32,
-    pub accent_hover: Color32,
-    pub accent_soft: Color32,
-    pub gold: Color32,
-    /// Text drawn on accent fills (selected EN/RU pills and similar).
-    pub on_accent: Color32,
-}
-
-pub fn palette(style: LogoStyle, light: bool) -> Palette {
-    match (style, light) {
-        (LogoStyle::Water, true) => Palette {
-            accent: Color32::from_rgb(42, 152, 168),
-            accent_hover: Color32::from_rgb(60, 180, 192),
-            accent_soft: Color32::from_rgb(196, 232, 232),
-            gold: Color32::from_rgb(212, 176, 72),
-            on_accent: Color32::from_rgb(255, 255, 255),
-        },
-        (LogoStyle::Water, false) => Palette {
-            accent: Color32::from_rgb(60, 180, 192),
-            accent_hover: Color32::from_rgb(96, 204, 204),
-            accent_soft: Color32::from_rgb(28, 72, 80),
-            gold: Color32::from_rgb(232, 196, 96),
-            on_accent: Color32::from_rgb(16, 32, 36),
-        },
-        (LogoStyle::Suprematism, true) => Palette {
-            accent: Color32::from_rgb(0, 132, 144),
-            accent_hover: Color32::from_rgb(0, 156, 180),
-            accent_soft: Color32::from_rgb(188, 232, 232),
-            gold: Color32::from_rgb(212, 168, 48),
-            on_accent: Color32::from_rgb(255, 255, 255),
-        },
-        (LogoStyle::Suprematism, false) => Palette {
-            accent: Color32::from_rgb(0, 192, 204),
-            accent_hover: Color32::from_rgb(108, 216, 216),
-            accent_soft: Color32::from_rgb(0, 72, 80),
-            gold: Color32::from_rgb(232, 184, 64),
-            on_accent: Color32::from_rgb(16, 32, 36),
-        },
-        (LogoStyle::Geometry, true) => Palette {
-            accent: Color32::from_rgb(0, 120, 156),
-            accent_hover: Color32::from_rgb(36, 180, 192),
-            accent_soft: Color32::from_rgb(196, 228, 232),
-            gold: Color32::from_rgb(196, 160, 48),
-            on_accent: Color32::from_rgb(255, 255, 255),
-        },
-        (LogoStyle::Geometry, false) => Palette {
-            accent: Color32::from_rgb(36, 180, 192),
-            accent_hover: Color32::from_rgb(96, 192, 216),
-            accent_soft: Color32::from_rgb(0, 56, 80),
-            gold: Color32::from_rgb(212, 176, 72),
-            on_accent: Color32::from_rgb(16, 32, 36),
-        },
-    }
 }

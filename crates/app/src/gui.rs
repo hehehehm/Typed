@@ -7,6 +7,7 @@ use crate::platform;
 use eframe::egui;
 use layout_keeper_core::{typo::Level as TypoLevel, Config, Hotkey, HotkeyCode, Lang, LogoStyle};
 use crate::icons::{basename, delete_icon_button, has_path, hide_icon_button, is_hidden_app, IconCache};
+use crate::ui_style as st;
 use layout_keeper_core::userdict;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -71,9 +72,10 @@ struct App {
     show_system_apps: bool,
     icons: IconCache,
     /// Last inner height we applied (content + 10px, capped to the current monitor).
-    fitted_height: Option<f32>,
-    last_min_size: Option<egui::Vec2>,
-    last_max_size: Option<egui::Vec2>,
+    /// Settings groups opened in this session (all closed at start).
+    open_groups: HashSet<&'static str>,
+    /// How much the last frame's content was wider than the window (should stay 0).
+    content_overflow: f32,
     tray: Option<crate::tray::TrayHandle>,
     /// When true, the close button / tray "Выход" actually quits instead of hiding.
     allow_close: bool,
@@ -108,6 +110,8 @@ enum HotkeySlot {
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
+    /// The five squares.
+    Home,
     Layouts,
     Exceptions,
     Words,
@@ -165,97 +169,57 @@ impl App {
         true
     }
 
-    fn toggle_path(&mut self, id: &str) {
-        if self.expanded_paths.contains(id) {
-            self.expanded_paths.remove(id);
-        } else {
-            self.expanded_paths.insert(id.to_string());
-        }
-    }
-
-    /// Icon + short exe name + "…" revealing the full path on the next line.
-    fn app_label(&mut self, ui: &mut egui::Ui, id: &str) {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                self.icons.show(ui, id);
-                let title = platform::app_display_name(id).unwrap_or_else(|| basename(id).to_string());
-                if has_path(id) {
-                    let open = self.expanded_paths.contains(id);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button(if open { "▾" } else { "…" })
-                            .on_hover_text(if open { "Скрыть путь" } else { "Показать полный путь" })
-                            .clicked()
-                        {
-                            self.toggle_path(id);
-                        }
-                        ui.add(egui::Label::new(egui::RichText::new(&title).strong()).truncate())
-                            .on_hover_text(id);
-                    });
-                } else {
-                    ui.add(egui::Label::new(egui::RichText::new(&title).strong()).truncate())
-                        .on_hover_text(id);
-                }
-            });
-            if self.expanded_paths.contains(id) {
-                ui.add(
-                    egui::Label::new(egui::RichText::new(id).monospace().small())
-                        .wrap()
-                        .selectable(true),
-                );
-            }
-        });
-    }
-
-    fn app_actions(&mut self, ui: &mut egui::Ui, id: &str, cur: Lang) -> bool {
+    /// Remembered apps: one flat row each — name (cut to fit), EN/RU tiles, hide, trash.
+    fn apps_list(&mut self, ui: &mut egui::Ui, apps: &[(String, Lang)]) -> bool {
         let mut changed = false;
-        ui.horizontal(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for l in [Lang::En, Lang::Ru] {
-                if ui.selectable_label(cur == l, lang_name(l)).clicked() && cur != l {
+        let accent = Tab::Layouts.color();
+        let t = st::cur(ui);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for (id, cur) in apps {
+            let mut act: Option<AppAction> = None;
+            let cfg = &self.cfg;
+            let icons = &mut self.icons;
+            let expanded = &mut self.expanded_paths;
+            st::row(
+                ui,
+                t.surface,
+                |ui| app_label(ui, icons, expanded, id),
+                |ui| {
+                    if delete_icon_button(ui).clicked() {
+                        act = Some(AppAction::Remove);
+                    }
+                    // Hide into the collapsed group / bring back. Built-in system apps stay
+                    // there without a button. Visual only: the layout is still applied.
+                    let user_hidden = cfg.is_user_hidden(id);
+                    if (user_hidden || !is_hidden_app(id)) && hide_icon_button(ui, !user_hidden).clicked() {
+                        act = Some(AppAction::Hide(!user_hidden));
+                    }
+                    ui.add_space(4.0);
+                    for l in [Lang::Ru, Lang::En] {
+                        if st::choice_tile(ui, *cur == l, lang_name(l), 36.0, accent).clicked() && *cur != l {
+                            act = Some(AppAction::Set(l));
+                        }
+                    }
+                },
+            );
+            match act {
+                Some(AppAction::Remove) => {
+                    self.cfg.remove_app(id);
+                    changed = true;
+                }
+                Some(AppAction::Hide(h)) => {
+                    self.cfg.set_user_hidden(id, h);
+                    changed = true;
+                }
+                Some(AppAction::Set(l)) => {
                     self.cfg.set_layout(id, l);
                     changed = true;
                 }
+                None => {}
             }
-            if delete_icon_button(ui).clicked() {
-                self.cfg.remove_app(id);
-                changed = true;
-            }
-            // Hide into the collapsed group / bring back. Built-in system apps stay
-            // there without a button. Visual only: the layout is still applied.
-            let user_hidden = self.cfg.is_user_hidden(id);
-            if (user_hidden || !is_hidden_app(id)) && hide_icon_button(ui, !user_hidden).clicked() {
-                self.cfg.set_user_hidden(id, !user_hidden);
-                changed = true;
-            }
-        });
-        changed
-    }
-
-    /// One compact row: name truncates, EN/RU, the trash and hide icons stay on the right.
-    fn apps_list(&mut self, ui: &mut egui::Ui, apps: &[(String, Lang)]) -> bool {
-        let mut changed = false;
-        for (i, (id, cur)) in apps.iter().enumerate() {
-            let bg = if i % 2 == 0 {
-                ui.visuals().faint_bg_color
-            } else {
-                egui::Color32::TRANSPARENT
-            };
-            egui::Frame::none().fill(bg).inner_margin(egui::Margin::symmetric(2.0, 2.0)).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        changed |= self.app_actions(ui, id, *cur);
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.set_max_width(ui.available_width());
-                            self.app_label(ui, id);
-                        });
-                    });
-                });
-            });
         }
+        ui.spacing_mut().item_spacing.y = st::GAP;
+        ui.add_space(4.0);
         changed
     }
 
@@ -269,42 +233,29 @@ impl App {
     }
 
     fn words_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Свои слова");
-        ui.label("Сокращения, жаргон, названия. Автозамена знает их и ставит выше встроенного словаря.");
-        ui.small("Пример: слово «exe» заменит русское «учу». Обратная сторона защищена. Можно с цифрами и знаками (mp3, c++, ci/cd), но без пробелов. Однобуквенные — во вкладке «Настройки».");
-        ui.add_space(6.0);
+        let accent = Tab::Words.color();
         let mut changed = false;
-        let mut add_word = false;
-        ui.horizontal(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.label("Слово:");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Добавить").clicked() {
-                    add_word = true;
-                }
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut self.word_draft).desired_width(ui.available_width().max(60.0)),
-                );
-                add_word = add_word || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-            });
+        st::hint(ui, "Сокращения, жаргон, названия. Автозамена знает их и ставит выше встроенного словаря. Пример: слово «exe» заменит русское «учу». Можно с цифрами и знаками (mp3, c++, ci/cd), но без пробелов. Однобуквенные — в «Настройки → Исправления».");
+        st::block(ui, |ui| {
+            if st::add_line(ui, &mut self.word_draft, "новое слово", "Добавить", accent) {
+                changed |= self.add_custom_word();
+            }
         });
-        if add_word {
-            changed |= self.add_custom_word();
-        }
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         let words = self.cfg.custom_words.clone();
+        st::caption(ui, &format!("Свои слова · {}", words.len()));
         if words.is_empty() {
-            ui.label("(пока пусто)");
+            st::hint(ui, "Пока пусто.");
         }
         let mut remove_at = None;
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
             for (i, w) in words.iter().enumerate() {
                 let lang = match userdict::classify(w) {
                     Ok(l) => lang_name(l),
                     Err(_) => "?",
                 };
-                if word_chip(ui, w, lang) {
+                if st::chip(ui, w, Some(lang)) {
                     remove_at = Some(i);
                 }
             }
@@ -316,46 +267,21 @@ impl App {
             }
         }
 
-        ui.add_space(10.0);
-        ui.separator();
-        ui.heading("Не исправлять");
-        ui.small("Слова, исправление которых вы отменили (сочетанием отмены, дважды Backspace или стерев и набрав слово заново). Typed их больше не трогает. Корзина — снова разрешить исправление.");
+        ui.add_space(8.0);
         let never = self.cfg.never_correct.clone();
-        if never.is_empty() {
-            ui.label("(пока пусто)");
-        }
-        let mut never_remove = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for (i, w) in never.iter().enumerate() {
-                if chip(ui, w, None) {
-                    never_remove = Some(i);
-                }
-            }
-        });
-        if let Some(i) = never_remove {
+        st::caption(ui, &format!("Не исправлять · {}", never.len()));
+        st::hint(ui, "Слова, исправление которых вы отменили (сочетанием отмены, дважды Backspace или стерев и набрав слово заново). Typed их больше не трогает. Корзина — снова разрешить исправление.");
+        if let Some(i) = chips(ui, &never) {
             if i < self.cfg.never_correct.len() {
                 self.cfg.never_correct.remove(i);
                 changed = true;
             }
         }
-        ui.add_space(6.0);
-        ui.label("Не исправлять опечатки (раскладку — можно):");
-        ui.small("Слова, у которых вы дважды отменили только исправление опечатки.");
+        ui.add_space(8.0);
         let never_typo = self.cfg.never_typo_fix.clone();
-        if never_typo.is_empty() {
-            ui.label("(пока пусто)");
-        }
-        let mut typo_remove = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for (i, w) in never_typo.iter().enumerate() {
-                if chip(ui, w, None) {
-                    typo_remove = Some(i);
-                }
-            }
-        });
-        if let Some(i) = typo_remove {
+        st::caption(ui, &format!("Не исправлять опечатки · {}", never_typo.len()));
+        st::hint(ui, "Слова, у которых вы дважды отменили только исправление опечатки. Раскладку в них Typed по-прежнему исправляет.");
+        if let Some(i) = chips(ui, &never_typo) {
             if i < self.cfg.never_typo_fix.len() {
                 self.cfg.never_typo_fix.remove(i);
                 changed = true;
@@ -381,92 +307,110 @@ impl App {
     }
 
     fn hotkey_picker(&mut self, ui: &mut egui::Ui, slot: HotkeySlot, label: &str, presets: &[(Hotkey, &str)]) {
+        let accent = Tab::Settings.color();
         let current = match slot {
             HotkeySlot::Convert => self.cfg.hotkey,
             HotkeySlot::Summon => self.cfg.summon_hotkey,
             HotkeySlot::Undo => self.cfg.undo_hotkey,
         };
-        ui.horizontal_wrapped(|ui| {
-            ui.label(label);
-            ui.strong(current.to_string());
-            let capturing = self.capturing_hotkey == Some(slot);
-            if capturing {
-                ui.colored_label(
-                    warn_color(ui),
-                    "нажмите клавиши… Esc — отмена",
-                );
-            } else if ui.button("Назначить").clicked() {
-                self.capturing_hotkey = Some(slot);
-                self.status = "Нажмите нужное сочетание клавиш.".into();
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            for &(h, name) in presets {
-                if ui.selectable_label(current == h, name).clicked() {
-                    match slot {
-                        HotkeySlot::Convert => self.cfg.hotkey = h,
-                        HotkeySlot::Summon => self.cfg.summon_hotkey = h,
-                        HotkeySlot::Undo => self.cfg.undo_hotkey = h,
+        let t = st::cur(ui);
+        st::block(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            ui.horizontal(|ui| {
+                let capturing = self.capturing_hotkey == Some(slot);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if capturing {
+                        st::primary(ui, "Нажмите клавиши… Esc — отмена", accent);
+                    } else if st::secondary(ui, "Назначить").clicked() {
+                        self.capturing_hotkey = Some(slot);
+                        self.status = "Нажмите нужное сочетание клавиш.".into();
                     }
-                    self.save();
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.vertical(|ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(label).color(t.ink)).truncate());
+                            ui.add(egui::Label::new(egui::RichText::new(current.to_string()).monospace().color(t.muted)).truncate());
+                        });
+                    });
+                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                for &(h, name) in presets {
+                    if st::choice_tile(ui, current == h, name, 0.0, accent).clicked() {
+                        match slot {
+                            HotkeySlot::Convert => self.cfg.hotkey = h,
+                            HotkeySlot::Summon => self.cfg.summon_hotkey = h,
+                            HotkeySlot::Undo => self.cfg.undo_hotkey = h,
+                        }
+                        self.save();
+                    }
                 }
-            }
+            });
         });
     }
 
     fn exceptions_tab(&mut self, ui: &mut egui::Ui, focus: &Focus) {
-        ui.heading("Исключения автозамены");
-        ui.label("Автозамена и клавиша конвертации здесь не работают. Назначенный язык по-прежнему ставится.");
-        ui.small("Совпадение по фрагменту имени, без регистра: powershell, windowsterminal.");
-
+        let accent = Tab::Exceptions.color();
+        let t = st::cur(ui);
+        st::hint(ui, "Здесь автозамена и клавиша конвертации не работают; назначенная раскладка по-прежнему ставится. Совпадение по фрагменту имени, без регистра: powershell, windowsterminal.");
         let mut changed = false;
-        let mut remove_at: Option<usize> = None;
-        let items = self.cfg.exception_apps.clone();
-        if items.is_empty() {
-            ui.label("(список пуст — автозамена работает везде)");
-        }
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for (i, item) in items.iter().enumerate() {
-                if chip(ui, item, None) {
-                    remove_at = Some(i);
+        // The add line comes first, so no list length or entry width can push it away.
+        st::block(ui, |ui| {
+            if st::add_line(ui, &mut self.exception_draft, "фрагмент имени или путь", "Добавить", accent) {
+                changed |= self.add_exception_entry(self.exception_draft.clone());
+            }
+            if let Some(a) = focus.app.clone() {
+                let already = self.cfg.is_exception(&a);
+                let mut add_current = false;
+                st::row(
+                    ui,
+                    egui::Color32::TRANSPARENT,
+                    |ui| {
+                        ui.label(egui::RichText::new("Текущее:").color(t.muted));
+                        ui.add(egui::Label::new(egui::RichText::new(basename(&a)).monospace()).truncate()).on_hover_text(&a);
+                    },
+                    |ui| {
+                        if already {
+                            ui.label(egui::RichText::new("уже в списке").color(t.warn));
+                        } else if st::secondary(ui, "Добавить текущее").clicked() {
+                            add_current = true;
+                        }
+                    },
+                );
+                if add_current {
+                    changed |= self.add_exception_entry(a);
                 }
             }
         });
+        ui.add_space(4.0);
+        let items = self.cfg.exception_apps.clone();
+        st::caption(ui, &format!("Список · {}", items.len()));
+        if items.is_empty() {
+            st::hint(ui, "Список пуст — автозамена работает везде.");
+        }
+        let mut remove_at: Option<usize> = None;
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for (i, item) in items.iter().enumerate() {
+            st::row(
+                ui,
+                t.surface,
+                |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(item).monospace()).truncate()).on_hover_text(item);
+                },
+                |ui| {
+                    if delete_icon_button(ui).clicked() {
+                        remove_at = Some(i);
+                    }
+                },
+            );
+        }
+        ui.spacing_mut().item_spacing.y = st::GAP;
         if let Some(i) = remove_at {
             if i < self.cfg.exception_apps.len() {
                 self.cfg.exception_apps.remove(i);
                 changed = true;
             }
-        }
-
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.label("Добавить:");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Добавить").clicked() {
-                    changed |= self.add_exception_entry(self.exception_draft.clone());
-                }
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.exception_draft).desired_width(ui.available_width().max(60.0)),
-                );
-            });
-        });
-        if let Some(a) = focus.app.clone() {
-            ui.horizontal(|ui| {
-                ui.label("Текущее:");
-                ui.add(egui::Label::new(egui::RichText::new(basename(&a)).monospace()).truncate());
-                if self.cfg.is_exception(&a) {
-                    ui.colored_label(warn_color(ui), "уже в исключениях");
-                } else {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Добавить текущее").clicked() {
-                            changed |= self.add_exception_entry(a);
-                        }
-                    });
-                }
-            });
         }
         if changed {
             self.save();
@@ -474,45 +418,39 @@ impl App {
     }
 
     fn layouts_tab(&mut self, ui: &mut egui::Ui, focus: &Focus) {
-        ui.heading("Текущее приложение");
-        ui.label("Переключитесь в программу и вернитесь сюда — она останется в списке.");
-        ui.horizontal(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.label("Приложение:");
-            match focus.app.clone() {
-                Some(a) => self.app_label(ui, &a),
-                None => {
-                    ui.label("(не определено)");
+        let accent = Tab::Layouts.color();
+        let t = st::cur(ui);
+        st::caption(ui, "Текущее приложение");
+        st::block(ui, |ui| match focus.app.clone() {
+            Some(a) => {
+                ui.horizontal(|ui| {
+                    ui.set_max_width(ui.available_width());
+                    app_label(ui, &mut self.icons, &mut self.expanded_paths, &a);
+                });
+                let assigned = self.cfg.layout_for(&a);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Сейчас {} · назначено {}",
+                        focus.layout.map(lang_name).unwrap_or("?"),
+                        assigned.map(lang_name).unwrap_or("—"),
+                    ))
+                    .color(t.muted),
+                );
+                if self.cfg.is_exception(&a) {
+                    st::warn(ui, "В исключениях: автозамена выключена, раскладка ставится как обычно.");
                 }
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.label("Сейчас:");
-            ui.monospace(focus.layout.map(lang_name).unwrap_or("?"));
-            ui.label("Назначено:");
-            let assigned = focus.app.as_deref().and_then(|a| self.cfg.layout_for(a));
-            ui.monospace(assigned.map(lang_name).unwrap_or("—"));
-        });
-        if let Some(a) = focus.app.clone() {
-            if self.cfg.is_exception(&a) {
-                ui.colored_label(warn_color(ui), "В исключениях: автозамена выключена, раскладка ставится как обычно.");
-            }
-            ui.horizontal(|ui| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                ui.label("Назначить:");
-                for l in [Lang::En, Lang::Ru] {
-                    if ui.button(lang_name(l)).clicked() {
+                let mut sel = assigned;
+                if st::segmented(ui, &mut sel, &[(Some(Lang::En), "Назначить EN"), (Some(Lang::Ru), "Назначить RU")], accent) {
+                    if let Some(l) = sel {
                         self.cfg.set_layout(&a, l);
                         self.save();
                     }
                 }
-            });
-        }
+            }
+            None => st::hint(ui, "Переключитесь в нужную программу и вернитесь сюда — она появится здесь и останется в списке."),
+        });
 
-        ui.separator();
-        ui.heading("Запомненные приложения");
-        ui.label("Раскладка включается при каждом входе в приложение. Ручное переключение её не меняет.");
+        ui.add_space(4.0);
         let (mut hidden_apps, mut apps): (Vec<(String, Lang)>, Vec<(String, Lang)>) = self
             .cfg
             .apps
@@ -521,14 +459,14 @@ impl App {
             .partition(|(id, _)| is_hidden_app(id) || self.cfg.is_user_hidden(id));
         self.sort_apps(&mut apps);
         self.sort_apps(&mut hidden_apps);
+        st::caption(ui, &format!("Запомненные · {}", apps.len()));
+        st::hint(ui, "Раскладка включается при каждом входе в приложение. Ручное переключение её не меняет.");
         if apps.is_empty() {
-            ui.label("(пока пусто)");
+            st::hint(ui, "Пока пусто.");
         }
         let mut changed = self.apps_list(ui, &apps);
         if !hidden_apps.is_empty() {
-            let arrow = if self.show_system_apps { "▾" } else { "▸" };
-            if ui
-                .small_button(format!("{arrow} Скрытые и системные ({})", hidden_apps.len()))
+            if st::group_header(ui, self.show_system_apps, "Скрытые и системные", &hidden_apps.len().to_string(), accent)
                 .on_hover_text("Системные программы, установщики и те, что вы скрыли. Раскладка для них всё равно ставится.")
                 .clicked()
             {
@@ -538,20 +476,25 @@ impl App {
                 changed |= self.apps_list(ui, &hidden_apps);
             }
         }
-        ui.add_space(6.0);
-        ui.label("Добавить вручную:");
-        ui.add(egui::TextEdit::singleline(&mut self.manual_id).desired_width(ui.available_width().max(60.0)));
-        ui.horizontal(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            for l in [Lang::En, Lang::Ru] {
-                ui.selectable_value(&mut self.manual_lang, l, lang_name(l));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Добавить").clicked() && !self.manual_id.trim().is_empty() {
-                    let id = std::mem::take(&mut self.manual_id);
-                    self.cfg.set_layout(&id, self.manual_lang);
-                    changed = true;
+        ui.add_space(4.0);
+        st::caption(ui, "Добавить вручную");
+        st::block(ui, |ui| {
+            let w = ui.available_width();
+            st::field_bg(ui, &mut self.manual_id, "имя программы или путь", w, accent);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for l in [Lang::En, Lang::Ru] {
+                    if st::choice_tile(ui, self.manual_lang == l, lang_name(l), 44.0, accent).clicked() {
+                        self.manual_lang = l;
+                    }
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if st::primary(ui, "Добавить", accent).clicked() && !self.manual_id.trim().is_empty() {
+                        let id = std::mem::take(&mut self.manual_id);
+                        self.cfg.set_layout(id.trim(), self.manual_lang);
+                        changed = true;
+                    }
+                });
             });
         });
 
@@ -561,16 +504,14 @@ impl App {
     }
 
     fn donate_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Поддержать Typed");
-        ui.label("Typed бесплатный и ничего не отправляет в сеть. Если он вам помогает — можно поддержать.");
-        ui.add_space(8.0);
-        ui.strong("Boosty");
-        if ui.button("Открыть Boosty").on_hover_text(BOOSTY_URL).clicked() {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(BOOSTY_URL));
-        }
-        ui.add_space(8.0);
+        st::hint(ui, "Typed бесплатный и ничего не отправляет в сеть. Если он вам помогает — можно поддержать.");
+        st::block(ui, |ui| {
+            ui.label("Boosty");
+            if st::primary(ui, "Открыть Boosty", Tab::Donate.color()).on_hover_text(BOOSTY_URL).clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(BOOSTY_URL));
+            }
+        });
         self.address_block(ui, "USDT (TRC-20)", USDT_TRC20, "Только сеть TRON (TRC-20). USDT из другой сети (ERC-20, BEP-20) потеряется.");
-        ui.add_space(8.0);
         self.address_block(ui, "GRAM (TON)", GRAM_TON, "Только сеть TON. Из другой сети перевод потеряется.");
     }
 
@@ -580,129 +521,178 @@ impl App {
             .entry(addr)
             .or_insert_with(|| ui.ctx().load_texture(format!("qr-{addr}"), qr_image(addr), egui::TextureOptions::NEAREST))
             .clone();
-        ui.strong(title);
-        ui.horizontal_top(|ui| {
-            ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(110.0, 110.0)));
-            ui.vertical(|ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(addr).monospace().small())
-                            .wrap_mode(egui::TextWrapMode::Wrap),
-                    );
+        st::block(ui, |ui| {
+            ui.label(title);
+            ui.horizontal_top(|ui| {
+                ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(104.0, 104.0)));
+                ui.vertical(|ui| {
+                    ui.set_max_width(ui.available_width());
+                    ui.add(egui::Label::new(egui::RichText::new(addr).monospace().small()).wrap_mode(egui::TextWrapMode::Wrap));
+                    if st::secondary(ui, "Скопировать адрес").clicked() {
+                        ui.ctx().copy_text(addr.to_owned());
+                        self.status = format!("Адрес {title} скопирован.");
+                    }
+                    st::hint(ui, note);
                 });
-                if ui.small_button("🗐").on_hover_text("Скопировать адрес").clicked() {
-                    ui.ctx().copy_text(addr.to_owned());
-                    self.status = format!("Адрес {title} скопирован.");
-                }
-                ui.add(egui::Label::new(egui::RichText::new(note).small()).wrap());
             });
         });
     }
 
+    /// Collapsible group of the settings section. Closed until opened (state kept
+    /// for the session only).
+    fn group(&mut self, ui: &mut egui::Ui, key: &'static str, title: &str, summary: &str, body: impl FnOnce(&mut Self, &mut egui::Ui)) {
+        let open = self.open_groups.contains(key);
+        if open {
+            ui.spacing_mut().item_spacing.y = 2.0;
+        }
+        if st::group_header(ui, open, title, summary, Tab::Settings.color()).clicked() {
+            if open {
+                self.open_groups.remove(key);
+            } else {
+                self.open_groups.insert(key);
+            }
+        }
+        ui.spacing_mut().item_spacing.y = st::GAP;
+        if self.open_groups.contains(key) {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            body(self, ui);
+            ui.spacing_mut().item_spacing.y = st::GAP;
+            ui.add_space(6.0);
+        }
+    }
+
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Настройки");
+        let accent = Tab::Settings.color();
         let mut changed = false;
-        changed |= ui.checkbox(&mut self.cfg.autocorrect, "Автоисправление (зуфсу → peace)").changed();
-        changed |= ui
-            .checkbox(
-                &mut self.cfg.convert_single_letters,
-                "Исправлять отдельные буквы",
-            )
-            .changed();
-        ui.small("Буква, которая сама по себе слово только в другом языке, переводится: d → в, z → я, ф → a, ш → i. Настоящие a, I, в, и, я остаются. Остальные (q/й) — в язык приложения.");
-        changed |= ui.checkbox(&mut self.cfg.fix_typos, "Исправлять опечатки (поечаток → опечаток)").changed();
-        ui.add_enabled_ui(self.cfg.fix_typos, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Смелость:");
-                for (level, name) in [
-                    (TypoLevel::Cautious, "Осторожно"),
-                    (TypoLevel::Normal, "Обычно"),
-                    (TypoLevel::Aggressive, "Смело"),
-                ] {
-                    changed |= ui.radio_value(&mut self.cfg.typo_level, level, name).changed();
+        changed |= st::toggle_row(
+            ui,
+            &mut self.cfg.autocorrect,
+            "Автоисправление",
+            "Слово, набранное не в той раскладке, исправляется при пробеле, знаке препинания и Enter: зуфсу → peace.",
+            accent,
+        );
+        ui.add_space(4.0);
+        st::caption(ui, "Подробнее");
+
+        let on = [self.cfg.convert_single_letters, self.cfg.fix_missing_spaces, self.cfg.auto_learn].iter().filter(|b| **b).count();
+        let mut c = false;
+        self.group(ui, "fix", "Исправления", &format!("{on} из 3 включено"), |s, ui| {
+            c |= st::toggle_row(ui, &mut s.cfg.convert_single_letters, "Исправлять отдельные буквы", "Буква, которая сама по себе слово только в другом языке, переводится: d → в, z → я, ф → a, ш → i. Настоящие a, I, в, и, я остаются. Остальные (q/й) — в язык приложения.", accent);
+            c |= st::toggle_row(ui, &mut s.cfg.fix_missing_spaces, "Расставлять пропущенные пробелы", "После предлогов и «не»: снейросеткой → с нейросеткой, вофисе → в офисе, незнаю → не знаю. Только когда слова нет в словарях. Отменяется как исправление.", accent);
+            c |= st::toggle_row(ui, &mut s.cfg.auto_learn, "Автозапоминание раскладки", "Запоминает раскладку приложения, только если её ещё нет. Назначенную не меняет.", accent);
+        });
+
+        let typo_summary = if self.cfg.fix_typos {
+            format!("{}{}", level_name(self.cfg.typo_level), if self.cfg.use_context { " · с контекстом" } else { "" })
+        } else {
+            "выключено".to_string()
+        };
+        self.group(ui, "typo", "Опечатки", &typo_summary, |s, ui| {
+            c |= st::toggle_row(ui, &mut s.cfg.fix_typos, "Исправлять опечатки", "поечаток → опечаток", accent);
+            ui.add_enabled_ui(s.cfg.fix_typos, |ui| {
+                st::block(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.label("Смелость");
+                    c |= st::segmented(
+                        ui,
+                        &mut s.cfg.typo_level,
+                        &[
+                            (TypoLevel::Cautious, level_name(TypoLevel::Cautious)),
+                            (TypoLevel::Normal, level_name(TypoLevel::Normal)),
+                            (TypoLevel::Aggressive, level_name(TypoLevel::Aggressive)),
+                        ],
+                        accent,
+                    );
+                    st::hint(ui, match s.cfg.typo_level {
+                        TypoLevel::Cautious => "Как в 0.3.71: одна ошибка — в словах от 4 букв, две — от 8 букв, только когда вариант один и частый.",
+                        TypoLevel::Normal => "Одна ошибка — от 3 букв, две — от 5, три — от 9; раскладка вместе с опечаткой (xnjj → что). Если два варианта близки — не трогает.",
+                        TypoLevel::Aggressive => "Как «Обычно», но больше ошибок на слово и смелее при близких вариантах. Чаще ошибается — отменяйте Backspace.",
+                    });
+                });
+                c |= st::toggle_row(ui, &mut s.cfg.use_context, "Учитывать соседние слова", "Смотрит на одно-два предыдущих слова предложения (частоты пар и троек слов): выбирает между близкими вариантами (я бы хотл → хотел) и не трогает слово, которое к ним подходит (Нельсон Мандела). Сбрасывается при щелчке, Enter, смене окна.", accent);
+            });
+        });
+
+        let undo_summary = if self.cfg.undo_on_backspace { "Backspace отменяет" } else { "только сочетание" };
+        self.group(ui, "undo", "Отмена исправлений", undo_summary, |s, ui| {
+            c |= st::toggle_row(ui, &mut s.cfg.undo_on_backspace, "Backspace сразу после исправления отменяет его", "Только сразу после исправления, пока не нажато ничего другого. Слово возвращается как было; отменили одно и то же дважды — оно попадает в «Не исправлять».", accent);
+            st::block(ui, |ui| {
+                st::hint(ui, "Раскладка с опечаткой: первый Backspace убирает только исправление опечатки, второй возвращает набранное. Сочетание отмены (в «Горячих клавишах») — сразу всё; нажатое ещё раз — отменяет предыдущее исправленное слово.");
+            });
+        });
+
+        let hk_summary = self.cfg.hotkey.to_string();
+        self.group(ui, "keys", "Горячие клавиши", &hk_summary, |s, ui| {
+            st::block(ui, |ui| st::hint(ui, "Удобно начинать с Ctrl+Shift. Букву без Ctrl, Alt или Win назначить нельзя."));
+            s.hotkey_picker(
+                ui,
+                HotkeySlot::Convert,
+                "Конвертация слова",
+                &[
+                    (Hotkey::Pause, "Pause"),
+                    (Hotkey::ShiftShift, "Shift+Shift"),
+                    (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
+                ],
+            );
+            s.hotkey_picker(
+                ui,
+                HotkeySlot::Summon,
+                "Вызов окна",
+                &[
+                    (Hotkey::CTRL_SHIFT_V, "Ctrl+Shift+V"),
+                    (Hotkey::CTRL_SHIFT_K, "Ctrl+Shift+K"),
+                    (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
+                ],
+            );
+            s.hotkey_picker(
+                ui,
+                HotkeySlot::Undo,
+                "Отмена автоисправления",
+                &[
+                    (Hotkey::CTRL_ALT_Z, if cfg!(target_os = "macos") { "Ctrl+Option+Z" } else { "Ctrl+Alt+Z" }),
+                    (Hotkey::CTRL_ALT_BACKSPACE, if cfg!(target_os = "macos") { "Ctrl+Option+Delete" } else { "Ctrl+Alt+Backspace" }),
+                    (Hotkey::SHIFT_PAUSE, "Shift+Pause"),
+                ],
+            );
+            st::block(ui, |ui| {
+                st::hint(ui, "Отмена возвращает слово как было набрано и больше никогда его не исправляет (список — в разделе «Словарь»).");
+                if s.cfg.hotkey == s.cfg.summon_hotkey {
+                    st::warn(ui, "Сочетания совпадают — сработает только конвертация слова.");
+                }
+                if s.cfg.undo_hotkey == s.cfg.hotkey || s.cfg.undo_hotkey == s.cfg.summon_hotkey {
+                    st::warn(ui, "Отмена совпадает с другим сочетанием — сработает только отмена.");
                 }
             });
         });
-        ui.small(match self.cfg.typo_level {
-            TypoLevel::Cautious => "Как в 0.3.71: одна ошибка — в словах от 4 букв, две — от 8 букв, только когда вариант один и частый.",
-            TypoLevel::Normal => "Одна ошибка — от 3 букв, две — от 5, три — от 9; раскладка вместе с опечаткой (xnjj → что). Если два варианта близки — не трогает.",
-            TypoLevel::Aggressive => "Как «Обычно», но больше ошибок на слово и смелее при близких вариантах. Чаще ошибается — отменяйте Backspace.",
-        });
-        ui.add_enabled_ui(self.cfg.fix_typos, |ui| {
-            changed |= ui.checkbox(&mut self.cfg.use_context, "Учитывать соседние слова").changed();
-        });
-        ui.small("Смотрит на одно-два предыдущих слова предложения (частоты пар и троек слов): выбирает между близкими вариантами (я бы хотл → хотел) и не трогает слово, которое к ним подходит (Нельсон Мандела). Сбрасывается при щелчке, Enter, смене окна.");
-        ui.small("Backspace сразу после исправления: раскладка с опечаткой — сначала убирает только исправление опечатки, второй Backspace возвращает набранное. Сочетание отмены — сразу всё; нажатое ещё раз — отменяет предыдущее исправленное слово.");
-        changed |= ui.checkbox(&mut self.cfg.fix_missing_spaces, "Расставлять пропущенные пробелы").changed();
-        ui.small("После предлогов и «не»: снейросеткой → с нейросеткой, вофисе → в офисе, незнаю → не знаю. Только когда слова нет в словарях. Отменяется как исправление.");
-        changed |= ui.checkbox(&mut self.cfg.undo_on_backspace, "Backspace сразу после исправления отменяет его").changed();
-        ui.small("Только сразу после исправления, пока не нажато ничего другого. Слово возвращается как было; отменили одно и то же дважды — оно попадает в «Не исправлять».");
-        changed |= ui.checkbox(&mut self.cfg.auto_learn, "Автозапоминание").changed();
-        ui.small("Запоминает раскладку, только если её ещё нет. Назначенную не меняет.");
-        ui.separator();
-        ui.heading("Горячие клавиши");
-        ui.small("Удобно начинать с Ctrl+Shift. Букву без Ctrl, Alt или Win назначить нельзя.");
-        self.hotkey_picker(
-            ui,
-            HotkeySlot::Convert,
-            "Конвертация слова:",
-            &[
-                (Hotkey::Pause, "Pause"),
-                (Hotkey::ShiftShift, "Shift+Shift"),
-                (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
-            ],
-        );
-        self.hotkey_picker(
-            ui,
-            HotkeySlot::Summon,
-            "Вызов окна:",
-            &[
-                (Hotkey::CTRL_SHIFT_V, "Ctrl+Shift+V"),
-                (Hotkey::CTRL_SHIFT_K, "Ctrl+Shift+K"),
-                (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
-            ],
-        );
-        self.hotkey_picker(
-            ui,
-            HotkeySlot::Undo,
-            "Отмена автоисправления:",
-            &[
-                (Hotkey::CTRL_ALT_Z, if cfg!(target_os = "macos") { "Ctrl+Option+Z" } else { "Ctrl+Alt+Z" }),
-                (Hotkey::CTRL_ALT_BACKSPACE, if cfg!(target_os = "macos") { "Ctrl+Option+Delete" } else { "Ctrl+Alt+Backspace" }),
-                (Hotkey::SHIFT_PAUSE, "Shift+Pause"),
-            ],
-        );
-        ui.small("Возвращает слово как было набрано и больше никогда его не исправляет (список — во вкладке «Свои слова»).");
-        if self.cfg.hotkey == self.cfg.summon_hotkey {
-            ui.colored_label(
-                warn_color(ui),
-                "Сочетания совпадают — сработает только конвертация слова.",
-            );
-        }
-        if self.cfg.undo_hotkey == self.cfg.hotkey || self.cfg.undo_hotkey == self.cfg.summon_hotkey {
-            ui.colored_label(
-                warn_color(ui),
-                "Отмена совпадает с другим сочетанием — сработает только отмена.",
-            );
-        }
+
         #[cfg(windows)]
-        self.admin_section(ui);
-        ui.separator();
-        ui.heading("Оформление");
-        changed |= ui.checkbox(&mut self.cfg.light_theme, "Светлый фон").changed();
-        ui.small("Тёмный стиль остаётся по умолчанию. Можно переключить в любой момент.");
-        ui.add_space(8.0);
-        ui.label("Значок");
-        ui.small("Он появится в окне, в трее и в переключателе окон.");
-        changed |= self.logo_picker(ui);
-        ui.separator();
-        if ui.button("Показать приветственный экран").clicked() {
-            // Shown now; «Не показывать снова» keeps its saved state until «Далее».
-            self.welcome_dont_show = self.cfg.hide_welcome;
-            self.welcome_open = true;
+        {
+            let admin_summary = if self.cfg.run_as_admin { "администратором" } else { "обычный" };
+            self.group(ui, "admin", "Запуск", admin_summary, |s, ui| s.admin_section(ui));
         }
-        ui.add(egui::Label::new(egui::RichText::new(format!("Конфиг: {}", self.path.display())).small()).wrap());
-        ui.small(WINDOW_TITLE);
+
+        let look = if self.cfg.light_theme { "светлая тема" } else { "тёмная тема" };
+        self.group(ui, "look", "Оформление", look, |s, ui| {
+            c |= st::toggle_row(ui, &mut s.cfg.light_theme, "Светлая тема", "Можно переключить в любой момент.", accent);
+            st::block(ui, |ui| {
+                ui.label("Значок");
+                st::hint(ui, "Он появится в окне, в трее и в переключателе окон.");
+                c |= s.logo_picker(ui);
+            });
+        });
+
+        self.group(ui, "about", "О программе", concat!("ver. ", env!("CARGO_PKG_VERSION")), |s, ui| {
+            st::block(ui, |ui| {
+                if st::secondary(ui, "Показать приветственный экран").clicked() {
+                    // Shown now; «Не показывать снова» keeps its saved state until «Далее».
+                    s.welcome_dont_show = s.cfg.hide_welcome;
+                    s.welcome_open = true;
+                }
+                st::hint(ui, &format!("Конфиг: {}", s.path.display()));
+                st::hint(ui, WINDOW_TITLE);
+            });
+        });
+        changed |= c;
         if changed {
             self.save();
         }
@@ -712,7 +702,7 @@ impl App {
     #[cfg(windows)]
     fn admin_section(&mut self, ui: &mut egui::Ui) {
         use crate::platform::win_admin;
-        ui.separator();
+        let accent = Tab::Settings.color();
         // Finished helper (the UAC prompt runs off the UI thread).
         let done = self.admin_job.as_ref().and_then(|(on, r)| r.lock().ok().and_then(|mut g| g.take()).map(|r| (*on, r)));
         if let Some((on, result)) = done {
@@ -734,8 +724,18 @@ impl App {
         }
         let busy = self.admin_job.is_some();
         let mut want = self.cfg.run_as_admin;
-        let resp = ui.add_enabled(!busy, egui::Checkbox::new(&mut want, "Запуск администратором"));
-        if resp.changed() && !busy {
+        let toggled = ui
+            .add_enabled_ui(!busy, |ui| {
+                st::toggle_row(
+                    ui,
+                    &mut want,
+                    "Запуск администратором",
+                    "Нужно, чтобы раскладка переключалась и в программах, запущенных от имени администратора (MobaXterm, PowerShell и т. п.): Windows не даёт обычной программе менять в них раскладку. Typed будет запускаться при входе через Планировщик заданий, без окна с вопросом. Windows спросит разрешение только при включении и выключении.",
+                    accent,
+                )
+            })
+            .inner;
+        if toggled && !busy {
             let result: AdminJobResult = Arc::new(Mutex::new(None));
             let slot = result.clone();
             let ctx = ui.ctx().clone();
@@ -749,7 +749,6 @@ impl App {
             self.admin_job = Some((want, result));
             self.status = "Windows спросит разрешение (один раз)…".into();
         }
-        ui.small("Нужно, чтобы раскладка переключалась и в программах, запущенных от имени администратора (MobaXterm, PowerShell и т. п.): Windows не даёт обычной программе менять в них раскладку. Typed будет запускаться при входе через Планировщик заданий, без окна с вопросом. Windows спросит разрешение только при включении и выключении.");
         if self.cfg.run_as_admin && !busy {
             let stale = self.daemon_admin.2.map_or(true, |t| t.elapsed() > Duration::from_secs(5));
             if stale {
@@ -757,8 +756,12 @@ impl App {
             }
             if !self.daemon_admin.1 {
                 // No task, or it still starts the pre-0.3.68 layout-keeper.exe.
-                ui.colored_label(warn_color(ui), "Задача запуска администратором устарела или удалена.");
-                if ui.button("Обновить задачу").clicked() {
+                let mut refresh = false;
+                st::block(ui, |ui| {
+                    st::warn(ui, "Задача запуска администратором устарела или удалена.");
+                    refresh = st::primary(ui, "Обновить задачу", accent).clicked();
+                });
+                if refresh {
                     let result: AdminJobResult = Arc::new(Mutex::new(None));
                     let slot = result.clone();
                     let ctx = ui.ctx().clone();
@@ -773,12 +776,16 @@ impl App {
                     self.status = "Windows спросит разрешение (один раз)…".into();
                 }
             } else if self.daemon_admin.0 == Some(false) {
-                ui.colored_label(warn_color(ui), "Typed сейчас работает без прав администратора — в окнах администратора раскладка не переключится.");
-                if ui.button("Перезапустить с правами администратора").clicked() {
+                let mut restart = false;
+                st::block(ui, |ui| {
+                    st::warn(ui, "Typed сейчас работает без прав администратора — в окнах администратора раскладка не переключится.");
+                    restart = st::primary(ui, "Перезапустить с правами администратора", accent).clicked();
+                });
+                if restart {
                     crate::platform::stop_daemon();
                     match win_admin::run_task() {
                         Ok(()) => self.status = "Перезапускаю Typed с правами администратора…".into(),
-                        Err(e) => self.status = format!("Не удалось запустить задачу «{}»: {e}. Снимите и снова поставьте галочку.", win_admin::TASK_NAME),
+                        Err(e) => self.status = format!("Не удалось запустить задачу «{}»: {e}. Выключите и снова включите запуск администратором.", win_admin::TASK_NAME),
                     }
                     self.daemon_admin = (None, true, None);
                 }
@@ -787,20 +794,7 @@ impl App {
     }
 
     fn apply_theme(&self, ctx: &egui::Context) {
-        let mut visuals = if self.cfg.light_theme {
-            egui::Visuals::light()
-        } else {
-            egui::Visuals::dark()
-        };
-        let p = crate::logos::palette(self.cfg.logo_style, self.cfg.light_theme);
-        visuals.selection.bg_fill = p.accent;
-        visuals.selection.stroke = egui::Stroke::new(1.0_f32, p.on_accent);
-        visuals.hyperlink_color = p.accent;
-        visuals.widgets.hovered.bg_stroke.color = p.accent_hover;
-        visuals.widgets.active.bg_stroke.color = p.accent;
-        visuals.widgets.active.bg_fill = p.accent_soft;
-        visuals.widgets.hovered.weak_bg_fill = p.accent_soft;
-        ctx.set_visuals(visuals);
+        st::apply(ctx, !self.cfg.light_theme, self.tab.color());
     }
 
     fn apply_logo(&mut self, ctx: &egui::Context) {
@@ -832,258 +826,449 @@ impl App {
             .clone()
     }
 
-    fn tab_strip(&mut self, ui: &mut egui::Ui) -> egui::Rect {
-        let before = self.tab;
-        let r = ui.horizontal(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.selectable_value(&mut self.tab, Tab::Layouts, "Раскладки");
-            ui.selectable_value(&mut self.tab, Tab::Exceptions, "Исключения");
-            ui.selectable_value(&mut self.tab, Tab::Words, "Словарь");
-            let t = if self.vault.is_unlocked() {
-                "Сейф 🔓"
-            } else {
-                "Сейф 🔒"
-            };
-            ui.selectable_value(&mut self.tab, Tab::Vault, t);
-            ui.selectable_value(&mut self.tab, Tab::Settings, "Настройки");
-            ui.selectable_value(&mut self.tab, Tab::Donate, "💰").on_hover_text("Поддержать Typed");
-        })
-        .response
-        .rect;
-        if self.tab != before {
-            // A message belongs to the tab that produced it.
+    fn go(&mut self, tab: Tab) {
+        if self.tab != tab {
+            // A message belongs to the section that produced it.
             self.status.clear();
+            self.tab = tab;
         }
-        r
+    }
+
+    /// Short live status shown on a square and under the section title.
+    fn section_status(&self, tab: Tab) -> String {
+        match tab {
+            Tab::Home => String::new(),
+            Tab::Layouts => count(self.cfg.apps.len(), ["программа", "программы", "программ"]),
+            Tab::Exceptions => match self.cfg.exception_apps.len() {
+                0 => "нет".into(),
+                n => count(n, ["исключение", "исключения", "исключений"]),
+            },
+            Tab::Words => count(self.cfg.custom_words.len(), ["слово", "слова", "слов"]),
+            Tab::Vault => self.vault.state_text().into(),
+            Tab::Settings => {
+                if !self.cfg.autocorrect {
+                    "автоисправление выкл.".into()
+                } else if !self.cfg.fix_typos {
+                    "опечатки выкл.".into()
+                } else {
+                    format!("смелость: {}", level_name(self.cfg.typo_level).to_lowercase())
+                }
+            }
+            Tab::Donate => "Boosty, USDT, GRAM".into(),
+        }
+    }
+
+    /// Home: five colour squares, one per section, a little uneven like paper cut-outs.
+    fn home(&mut self, ui: &mut egui::Ui) {
+        let t = st::cur(ui);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(APP_NAME).size(26.0).color(t.ink));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new(concat!("ver. ", env!("CARGO_PKG_VERSION"))).small().color(t.muted));
+            });
+        });
+        ui.add_space(10.0);
+        let full = ui.available_width();
+        let g = 10.0;
+        let unit = ((full - 2.0 * g) / 3.0).max(60.0);
+        // Row of three, then two shifted right: sides and offsets are a little uneven on
+        // purpose, like the reference cut-outs. Everything scales with the window width.
+        let (s0, s1, s2) = (unit * 1.06, unit * 0.94, unit);
+        let y2 = s0 + g + 6.0;
+        let (s3, s4) = (unit * 1.08, unit);
+        let x3 = unit * 0.42;
+        let layout: [(Tab, f32, f32, f32); 5] = [
+            (Tab::Layouts, 0.0, 0.0, s0),
+            (Tab::Exceptions, s0 + g, 14.0, s1),
+            (Tab::Words, s0 + s1 + 2.0 * g, 4.0, s2),
+            (Tab::Vault, x3, y2, s3),
+            (Tab::Settings, x3 + s3 + g, y2 + 10.0, s4),
+        ];
+        let origin = ui.cursor().min;
+        let mut bottom = origin.y;
+        let mut clicked = None;
+        for (i, &(tab, x, y, s)) in layout.iter().enumerate() {
+            let (x, y) = (origin.x + x, origin.y + y);
+            let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(s, s));
+            bottom = bottom.max(rect.bottom());
+            let resp = ui.interact(rect, ui.id().with(("square", i)), egui::Sense::click());
+            let lift = if resp.hovered() { -3.0 } else { 0.0 };
+            let r = rect.translate(egui::vec2(0.0, lift));
+            let color = tab.color();
+            let p = ui.painter();
+            p.rect_filled(r, 0.0, if resp.is_pointer_button_down_on() { st::shade(color, -0.1) } else { color });
+            let pad = if s < 120.0 { 10.0 } else { 12.0 };
+            let status = self.section_status(tab);
+            let sg = st::line_galley(ui, &status, st::font(12.0), st::INK_ON_COLOR.gamma_multiply(0.75), s - pad * 2.0);
+            p.galley(egui::pos2(r.left() + pad, r.top() + pad), sg, st::INK_ON_COLOR);
+            // The title shrinks a little rather than being cut on a narrow window.
+            let natural = st::text_w(ui, tab.title(), st::font(16.0));
+            let size = if natural > s - pad * 2.0 { (16.0 * (s - pad * 2.0) / natural).max(12.0) } else { 16.0 };
+            let lg = st::line_galley(ui, tab.title(), st::font(size), st::INK_ON_COLOR, s - pad * 2.0);
+            p.galley(egui::pos2(r.left() + pad, r.bottom() - pad - lg.size().y), lg, st::INK_ON_COLOR);
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                clicked = Some(tab);
+            }
+        }
+        ui.allocate_rect(egui::Rect::from_min_max(origin, egui::pos2(origin.x + full, bottom)), egui::Sense::hover());
+        // The support link sits at the bottom edge of the window (or right below the
+        // squares when the window is short).
+        let room = ui.clip_rect().bottom() - st::PAD - 20.0 - ui.cursor().top();
+        ui.add_space(room.max(18.0));
+        // Donations: a small square, not a sixth section.
+        let label = "Поддержать Typed";
+        let w = 14.0 + 8.0 + st::text_w(ui, label, st::font(13.0));
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 20.0), egui::Sense::click());
+        let p = ui.painter();
+        let sq = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - 7.0), egui::vec2(14.0, 14.0));
+        p.rect_filled(sq, 0.0, if resp.hovered() { st::shade(st::SAND, -0.15) } else { st::SAND });
+        p.text(egui::pos2(sq.right() + 8.0, rect.center().y), egui::Align2::LEFT_CENTER, label, st::font(13.0), if resp.hovered() { t.ink } else { t.muted });
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            clicked = Some(Tab::Donate);
+        }
+        if let Some(tab) = clicked {
+            self.go(tab);
+        }
+    }
+
+    /// Section header: a full-width band in the section colour, a back square, the
+    /// title with its status, and the five squares as a small switcher on the right.
+    fn section_header(&mut self, ui: &mut egui::Ui) {
+        let tab = self.tab;
+        let color = tab.color();
+        let mut target = None;
+        ui.horizontal(|ui| {
+            ui.set_min_height(40.0);
+            if st::back_square(ui, color).clicked() {
+                target = Some(Tab::Home);
+            }
+            ui.add_space(4.0);
+            let nav_w = 5.0 * 14.0 + 4.0 * 5.0;
+            let title_w = (ui.available_width() - nav_w - 12.0).max(60.0);
+            ui.vertical(|ui| {
+                ui.set_width(title_w);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.add(egui::Label::new(egui::RichText::new(tab.title()).size(20.0).color(st::INK_ON_COLOR)).truncate());
+                let s = self.section_status(tab);
+                ui.add(egui::Label::new(egui::RichText::new(s).size(12.0).color(st::INK_ON_COLOR.gamma_multiply(0.75))).truncate());
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                for &other in SECTIONS.iter().rev() {
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
+                    let p = ui.painter();
+                    let fill = if other == tab { st::INK_ON_COLOR } else { other.color() };
+                    p.rect_filled(rect, 0.0, fill);
+                    if other != tab {
+                        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, st::shade(color, -0.2)));
+                    }
+                    let resp = resp.on_hover_text(other.title());
+                    if resp.clicked() {
+                        target = Some(other);
+                    }
+                }
+            });
+        });
+        if let Some(t) = target {
+            self.go(t);
+        }
     }
 
     fn logo_picker(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        const TILE: f32 = 64.0;
-        const ROUND: f32 = 16.0;
-        let spacing = ui.spacing().item_spacing.x;
-        let mut total = 0.0_f32;
-        for style in LogoStyle::ALL {
-            let w = TILE.max(ui_text_width(ui, crate::logos::label(style), egui::TextStyle::Body));
-            total += w;
-        }
-        total += spacing * (LogoStyle::ALL.len().saturating_sub(1) as f32);
+        const TILE: f32 = 56.0;
+        let spacing = 12.0;
+        let col = |ui: &egui::Ui, style| TILE.max(st::text_w(ui, crate::logos::label(style), st::font(13.0)));
+        let total: f32 = LogoStyle::ALL.iter().map(|&s| col(ui, s)).sum::<f32>() + spacing * (LogoStyle::ALL.len().saturating_sub(1) as f32);
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = spacing;
             ui.add_space(((ui.available_width() - total) * 0.5).max(0.0));
             for style in LogoStyle::ALL {
-                let col_w = TILE.max(ui_text_width(ui, crate::logos::label(style), egui::TextStyle::Body));
-                ui.allocate_ui_with_layout(
-                    egui::vec2(col_w, 88.0),
-                    egui::Layout::top_down(egui::Align::Center),
-                    |ui| {
-                        let tex = self.logo_texture(ui.ctx(), style);
-                        let img = egui::Image::new(&tex)
-                            .fit_to_exact_size(egui::vec2(TILE, TILE))
-                            .maintain_aspect_ratio(false)
-                            .rounding(ROUND)
-                            .sense(egui::Sense::click());
-                        let response = ui.add(img);
-                        if self.cfg.logo_style == style {
-                            let gold = crate::logos::palette(style, self.cfg.light_theme).gold;
-                            ui.painter().rect_stroke(
-                                response.rect,
-                                ROUND,
-                                egui::Stroke::new(2.0_f32, gold),
-                            );
-                        }
-                        if response.clicked() && self.cfg.logo_style != style {
-                            self.cfg.logo_style = style;
-                            changed = true;
-                            self.apply_logo(ui.ctx());
-                        }
-                        ui.add(egui::Label::new(crate::logos::label(style)));
-                    },
-                );
+                let col_w = col(ui, style);
+                ui.allocate_ui_with_layout(egui::vec2(col_w, 84.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    let tex = self.logo_texture(ui.ctx(), style);
+                    let img = egui::Image::new(&tex)
+                        .fit_to_exact_size(egui::vec2(TILE, TILE))
+                        .maintain_aspect_ratio(false)
+                        .rounding(12.0)
+                        .sense(egui::Sense::click());
+                    let response = ui.add(img);
+                    let selected = self.cfg.logo_style == style;
+                    if selected {
+                        // Flat marker: a bar under the chosen icon.
+                        let bar = egui::Rect::from_min_size(egui::pos2(response.rect.left(), response.rect.bottom() + 2.0), egui::vec2(TILE, 3.0));
+                        ui.painter().rect_filled(bar, 0.0, st::cur(ui).ink);
+                    }
+                    if response.clicked() && !selected {
+                        self.cfg.logo_style = style;
+                        changed = true;
+                        self.apply_logo(ui.ctx());
+                    }
+                    ui.add_space(2.0);
+                    ui.label(egui::RichText::new(crate::logos::label(style)).size(13.0));
+                });
             }
         });
         changed
     }
 
-    fn welcome_panel(&mut self, ui: &mut egui::Ui) -> (egui::Rect, egui::Rect) {
-        let tab_rect = self.tab_strip(ui);
-        let full = ui.max_rect();
+    fn welcome_panel(&mut self, ui: &mut egui::Ui) {
         let heading = egui::Color32::from_rgb(18, 42, 48);
         let body = egui::Color32::from_rgb(36, 58, 64);
-
-        ui.painter().rect_filled(
-            egui::Rect::from_min_max(egui::pos2(full.left(), ui.cursor().top()), full.max),
-            0.0,
-            egui::Color32::WHITE,
-        );
-
-        let tex = self.faded_logo_texture(ui.ctx(), self.cfg.logo_style);
-        let size = tex.size_vec2();
-        if size.x > 0.0 && size.y > 0.0 {
-            let logo_w = ui.available_width();
-            let logo_h = logo_w * (size.y / size.x);
-            ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(logo_w, logo_h)));
-        }
-
-        ui.add_space(10.0);
-        ui.style_mut().visuals.override_text_color = Some(body);
-        ui.add(egui::Label::new(egui::RichText::new("Typed").color(heading).size(28.0)).halign(egui::Align::Center));
-        ui.add(egui::Label::new(egui::RichText::new(concat!("ver. ", env!("CARGO_PKG_VERSION"))).color(body).small()).halign(egui::Align::Center));
-        ui.add_space(8.0);
-        ui.add(
-            egui::Label::new(egui::RichText::new(
-                "Typed запоминает, какая раскладка нужна в каждой программе, и сам исправляет слова, набранные не в той раскладке: «зуфсу» становится «peace».",
-            ).color(body))
-            .wrap()
-            .halign(egui::Align::Center),
-        );
-        ui.add_space(8.0);
-        for line in [
-            "• Память раскладки для каждого приложения",
-            "• Автоисправление при пробеле, знаке препинания и Enter",
-            "• Свой словарь",
-            "• Сейф паролей и карт — только на этом компьютере, открывается мастер-паролем",
-            "• Ctrl+Shift+V открывает окно сразу на вкладке «Сейф»",
-            "• Окно сворачивается в трей",
-        ] {
-            ui.add(egui::Label::new(egui::RichText::new(line).color(body)).wrap().halign(egui::Align::Center));
-        }
-        ui.add_space(10.0);
-        ui.add(egui::Label::new(egui::RichText::new("Выберите значок: он задаст цвета кнопок и акцентов.").color(body)).wrap().halign(egui::Align::Center));
-        ui.add_space(10.0);
-        if self.logo_picker(ui) {
-            self.save();
-        }
-        ui.add_space(14.0);
-        let btn_w = ui_text_width(ui, "Далее", egui::TextStyle::Button) + ui.spacing().button_padding.x * 2.0;
-        let chk_w = ui.spacing().icon_width
-            + ui.spacing().icon_spacing
-            + ui_text_width(ui, "Не показывать снова", egui::TextStyle::Body);
-        let footer_w = btn_w + 12.0 + chk_w;
+        // The welcome page is always light: the faded logo is drawn on white.
+        ui.visuals_mut().override_text_color = Some(body);
+        ui.visuals_mut().dark_mode = false;
+        ui.vertical_centered(|ui| {
+            let tex = self.faded_logo_texture(ui.ctx(), self.cfg.logo_style);
+            let size = tex.size_vec2();
+            if size.x > 0.0 && size.y > 0.0 {
+                let logo_w = ui.available_width().min(300.0);
+                let logo_h = logo_w * (size.y / size.x);
+                ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(logo_w, logo_h)));
+            }
+            // The five section colours as a small strip.
+            ui.add_space(4.0);
+            let (strip, _) = ui.allocate_exact_size(egui::vec2(5.0 * 14.0 + 4.0 * 6.0, 14.0), egui::Sense::hover());
+            for (i, tab) in SECTIONS.iter().enumerate() {
+                let x = strip.left() + i as f32 * 20.0;
+                ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(14.0, 14.0)), 0.0, tab.color());
+            }
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("Typed").color(heading).size(28.0));
+            ui.label(egui::RichText::new(concat!("ver. ", env!("CARGO_PKG_VERSION"))).color(body).small());
+            ui.add_space(8.0);
+            ui.add(
+                egui::Label::new(egui::RichText::new(
+                    "Typed запоминает, какая раскладка нужна в каждой программе, и сам исправляет слова, набранные не в той раскладке: «зуфсу» становится «peace».",
+                ).color(body))
+                .wrap(),
+            );
+            ui.add_space(8.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            for line in [
+                "Память раскладки для каждого приложения",
+                "Автоисправление при пробеле, знаке препинания и Enter",
+                "Свой словарь",
+                "Сейф паролей и карт — только на этом компьютере, открывается мастер-паролем",
+                "Ctrl+Shift+V открывает окно сразу в разделе «Сейф»",
+                "Окно сворачивается в трей",
+            ] {
+                ui.add(egui::Label::new(egui::RichText::new(line).color(body)).wrap());
+            }
+            ui.spacing_mut().item_spacing.y = st::GAP;
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("Выберите значок окна и трея:").color(body));
+            if self.logo_picker(ui) {
+                self.save();
+            }
+            ui.add_space(10.0);
+        });
+        let next_w = st::text_w(ui, "Далее", st::font(14.0)) + 24.0;
+        let chk_w = 26.0 + st::text_w(ui, "Не показывать снова", st::font(14.0));
+        let footer_w = next_w + 20.0 + chk_w;
         ui.horizontal(|ui| {
             ui.add_space(((ui.available_width() - footer_w) * 0.5).max(0.0));
-            ui.style_mut().visuals.override_text_color = None;
-            let pal = crate::logos::palette(self.cfg.logo_style, true);
-            let next = egui::Button::new(egui::RichText::new("Далее").color(pal.on_accent)).fill(pal.accent);
-            if ui.add(next).clicked() {
+            if st::primary(ui, "Далее", st::CYAN).clicked() {
                 self.welcome_open = false;
                 self.cfg.welcome_gen = layout_keeper_core::config::CURRENT_WELCOME_GEN;
                 self.cfg.hide_welcome = self.welcome_dont_show;
                 self.save();
             }
             ui.add_space(12.0);
-            ui.style_mut().visuals.override_text_color = Some(body);
-            ui.checkbox(&mut self.welcome_dont_show, "Не показывать снова");
+            st::check(ui, &mut self.welcome_dont_show, "Не показывать снова", st::CYAN);
         });
         ui.add_space(8.0);
-        let used = egui::Rect::from_min_max(tab_rect.min, egui::pos2(full.max.x, ui.cursor().top()));
-        (tab_rect, used)
     }
 
-    fn apply_window_limits(&mut self, ctx: &egui::Context, tab_rect: egui::Rect, used: egui::Rect) {
-        const PAD: f32 = 10.0;
-        let origin = ctx.screen_rect().min;
-        let inset = (tab_rect.min.x - origin.x).max(0.0);
-        let width = (tab_rect.width() + inset * 2.0).max(1.0);
-        let min = egui::vec2(width, (tab_rect.bottom() - origin.y).max(1.0));
-        let mut target_h = (used.bottom() - origin.y + PAD).max(min.y);
-        let (monitor, inner_rect, outer_rect) = ctx.input(|i| {
-            (
-                i.viewport().monitor_size,
-                i.viewport().inner_rect,
-                i.viewport().outer_rect,
-            )
+    /// One frame of the window content (everything below the OS title bar).
+    fn draw(&mut self, ctx: &egui::Context, focus: &Focus) {
+        self.apply_theme(ctx);
+        let t = st::theme(!self.cfg.light_theme);
+        if self.welcome_open {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(egui::Color32::WHITE).inner_margin(egui::Margin::same(st::PAD)))
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
+                        self.welcome_panel(ui);
+                    });
+                });
+            return;
+        }
+        if self.tab != Tab::Home {
+            let color = self.tab.color();
+            egui::TopBottomPanel::top("section")
+                .frame(egui::Frame::none().fill(color).inner_margin(egui::Margin::symmetric(12.0, 12.0)))
+                .show_separator_line(false)
+                .show(ctx, |ui| self.section_header(ui));
+        }
+        if !self.status.is_empty() {
+            egui::TopBottomPanel::bottom("status")
+                .frame(egui::Frame::none().fill(t.surface).inner_margin(egui::Margin::symmetric(st::PAD, 8.0)))
+                .show_separator_line(false)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let (sq, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                        ui.painter().rect_filled(sq, 0.0, self.tab.color());
+                        ui.add(egui::Label::new(egui::RichText::new(&self.status).small().color(t.ink)).wrap());
+                    });
+                });
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(t.bg).inner_margin(egui::Margin::ZERO))
+            .show(ctx, |ui| {
+                let scroll = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    egui::Frame::none().inner_margin(egui::Margin::same(st::PAD)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        if !platform::accessibility_trusted() {
+                            st::block(ui, |ui| {
+                                st::warn(ui, "Нет разрешения «Универсальный доступ» — без него не работают автозамена и горячие клавиши.");
+                                if st::primary(ui, "Открыть настройки доступа", self.tab.color()).clicked() {
+                                    platform::open_accessibility_settings();
+                                }
+                            });
+                            ui.add_space(4.0);
+                        }
+                        match self.tab {
+                            Tab::Home => self.home(ui),
+                            Tab::Vault => {
+                                if self.vault.show(ui, focus.app.clone(), &mut self.cfg.vault_idle_minutes) {
+                                    self.save();
+                                }
+                            }
+                            Tab::Words => self.words_tab(ui),
+                            Tab::Exceptions => self.exceptions_tab(ui, focus),
+                            Tab::Layouts => self.layouts_tab(ui, focus),
+                            Tab::Settings => self.settings_tab(ui),
+                            Tab::Donate => self.donate_tab(ui),
+                        }
+                    });
+                });
+                self.content_overflow = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
+            });
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AppAction {
+    Remove,
+    Hide(bool),
+    Set(Lang),
+}
+
+const SECTIONS: [Tab; 5] = [Tab::Layouts, Tab::Exceptions, Tab::Words, Tab::Vault, Tab::Settings];
+
+impl Tab {
+    fn color(self) -> egui::Color32 {
+        match self {
+            Tab::Home => st::CYAN,
+            Tab::Layouts => st::YELLOW,
+            Tab::Exceptions => st::ORANGE,
+            Tab::Words => st::RED,
+            Tab::Vault => st::LIME,
+            Tab::Settings => st::CYAN,
+            Tab::Donate => st::SAND,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Tab::Home => APP_NAME,
+            Tab::Layouts => "Раскладки",
+            Tab::Exceptions => "Исключения",
+            Tab::Words => "Словарь",
+            Tab::Vault => "Сейф",
+            Tab::Settings => "Настройки",
+            Tab::Donate => "Поддержать",
+        }
+    }
+}
+
+fn level_name(l: TypoLevel) -> &'static str {
+    match l {
+        TypoLevel::Cautious => "Осторожно",
+        TypoLevel::Normal => "Обычно",
+        TypoLevel::Aggressive => "Смело",
+    }
+}
+
+/// "3 программы": Russian plural forms [1, 2–4, 5+].
+fn count(n: usize, forms: [&str; 3]) -> String {
+    let (d10, d100) = (n % 10, n % 100);
+    let f = if d10 == 1 && d100 != 11 {
+        forms[0]
+    } else if (2..=4).contains(&d10) && !(12..=14).contains(&d100) {
+        forms[1]
+    } else {
+        forms[2]
+    };
+    format!("{n} {f}")
+}
+
+fn toggle_path(set: &mut HashSet<String>, id: &str) {
+    if !set.remove(id) {
+        set.insert(id.to_string());
+    }
+}
+
+/// Icon + short app name (cut to fit, full id on hover) + "…" revealing the full path
+/// on the next line.
+fn app_label(ui: &mut egui::Ui, icons: &mut IconCache, expanded: &mut HashSet<String>, id: &str) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            icons.show(ui, id);
+            let title = platform::app_display_name(id).unwrap_or_else(|| basename(id).to_string());
+            if has_path(id) {
+                let open = expanded.contains(id);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button(if open { "▾" } else { "…" })
+                        .on_hover_text(if open { "Скрыть путь" } else { "Показать полный путь" })
+                        .clicked()
+                    {
+                        toggle_path(expanded, id);
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(&title)).truncate()).on_hover_text(id);
+                    });
+                });
+            } else {
+                ui.add(egui::Label::new(egui::RichText::new(&title)).truncate()).on_hover_text(id);
+            }
         });
-        if let Some(monitor) = monitor {
-            if monitor.y > 80.0 {
-                // InnerSize is the client area; subtract the title bar so the outer
-                // window stays on the monitor the window is currently on.
-                let frame = match (outer_rect, inner_rect) {
-                    (Some(outer), Some(inner)) => (outer.height() - inner.height()).max(0.0),
-                    _ => 32.0,
-                };
-                target_h = target_h.min((monitor.y - frame).max(min.y));
+        if expanded.contains(id) {
+            let c = st::cur(ui).muted;
+            ui.add(egui::Label::new(egui::RichText::new(id).monospace().small().color(c)).wrap().selectable(true));
+        }
+    });
+}
+
+/// Wrapped chips; returns the index whose trash was clicked.
+fn chips(ui: &mut egui::Ui, words: &[String]) -> Option<usize> {
+    if words.is_empty() {
+        st::hint(ui, "Пока пусто.");
+        return None;
+    }
+    let mut hit = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        for (i, w) in words.iter().enumerate() {
+            if st::chip(ui, w, None) {
+                hit = Some(i);
             }
         }
-        let max = egui::vec2(width, target_h).max(min);
-        let limits_changed = self.last_min_size.map(|v| (v - min).length() > 1.0).unwrap_or(true)
-            || self.last_max_size.map(|v| (v - max).length() > 1.0).unwrap_or(true);
-        if limits_changed {
-            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(min));
-            ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(max));
-            self.last_min_size = Some(min);
-            self.last_max_size = Some(max);
-        }
-
-        let current_h = inner_rect.map(|r| r.height()).unwrap_or(0.0);
-        let last = self.fitted_height.unwrap_or(f32::NAN);
-        if last.is_nan() || (target_h - last).abs() > 1.0 || current_h > target_h + 1.0 {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(max));
-            self.fitted_height = Some(target_h);
-        }
-    }
-}
-
-fn warn_color(ui: &egui::Ui) -> egui::Color32 {
-    if ui.visuals().dark_mode {
-        egui::Color32::from_rgb(232, 196, 72)
-    } else {
-        egui::Color32::from_rgb(148, 90, 0)
-    }
-}
-
-fn ui_text_width(ui: &egui::Ui, text: &str, style: egui::TextStyle) -> f32 {
-    let font_id = style.resolve(ui.style());
-    ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font_id, egui::Color32::WHITE).size().x)
-}
-
-
-/// One dictionary word as a compact chip so many words wrap across the window width.
-fn word_chip(ui: &mut egui::Ui, word: &str, lang: &str) -> bool {
-    chip(ui, word, Some(lang))
-}
-
-/// A compact chip: monospace text, optional small tag, trash icon. Returns true when deleted.
-fn chip(ui: &mut egui::Ui, word: &str, lang: Option<&str>) -> bool {
-    let spacing = ui.spacing().item_spacing.x.max(4.0);
-    let color = ui.visuals().text_color();
-    let word_font = egui::TextStyle::Monospace.resolve(ui.style());
-    let lang_font = egui::TextStyle::Small.resolve(ui.style());
-    let word_w = ui.fonts(|f| f.layout_no_wrap(word.to_owned(), word_font, color)).size().x;
-    let lang_w = lang.map_or(0.0, |l| ui.fonts(|f| f.layout_no_wrap(l.to_owned(), lang_font, color)).size().x + spacing);
-    let icon = 18.0;
-    let pad_x = 6.0;
-    let fixed = pad_x + spacing + lang_w + icon + pad_x;
-    // A chip never grows wider than the row: a long entry (a full path) would
-    // otherwise stretch the whole tab and push the controls below off the window.
-    let max_w = ui.max_rect().width().max(fixed + 40.0);
-    let word_w_shown = word_w.min(max_w - fixed);
-    let truncated = word_w_shown < word_w;
-    let width = fixed + word_w_shown;
-    let height = ui.spacing().interact_size.y.max(22.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
-    let mut deleted = false;
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    child.spacing_mut().item_spacing.x = spacing;
-    child.add_space(pad_x * 0.5);
-    if truncated {
-        child
-            .add_sized([word_w_shown, height], egui::Label::new(egui::RichText::new(word).monospace()).truncate())
-            .on_hover_text(word);
-    } else {
-        child.add(egui::Label::new(egui::RichText::new(word).monospace())).on_hover_text(word);
-    }
-    if let Some(l) = lang {
-        child.small(l);
-    }
-    if delete_icon_button(&mut child).clicked() {
-        deleted = true;
-    }
-    deleted
+    });
+    hit
 }
 
 fn lang_name(l: Lang) -> &'static str {
@@ -1190,8 +1375,9 @@ impl eframe::App for App {
             }
             return;
         }
-        self.apply_theme(ctx);
         ctx.request_repaint_after(Duration::from_millis(200));
+        // Esc in a section goes back to the squares (not while assigning a hotkey).
+        let capturing = self.capturing_hotkey.is_some();
         if let Some(slot) = self.capturing_hotkey {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.capturing_hotkey = None;
@@ -1206,61 +1392,12 @@ impl eframe::App for App {
                 self.save();
             }
         }
+        if !capturing && !self.welcome_open && self.tab != Tab::Home && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.go(Tab::Home);
+        }
         let focus = self.focus.lock().map(|f| f.clone()).unwrap_or_default();
         self.vault.tick(ctx, self.cfg.vault_idle_minutes);
-
-        let (tab_rect, used) = if self.welcome_open {
-            egui::CentralPanel::default().show(ctx, |ui| self.welcome_panel(ui)).inner
-        } else {
-            let inner = egui::CentralPanel::default().show(ctx, |ui| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                let tab_rect = self.tab_strip(ui);
-                if !platform::accessibility_trusted() {
-                    ui.colored_label(
-                        warn_color(ui),
-                        "Нет разрешения «Универсальный доступ» — без него не работают автозамена и горячие клавиши.",
-                    );
-                    if ui.button("Открыть настройки доступа").clicked() {
-                        platform::open_accessibility_settings();
-                    }
-                    ui.add_space(6.0);
-                }
-
-                let scroll = egui::ScrollArea::vertical()
-                    .auto_shrink([true, true])
-                    .show(ui, |ui| {
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                        ui.set_max_width(tab_rect.width());
-                        match self.tab {
-                            Tab::Vault => {
-                                if self.vault.show(ui, focus.app.clone(), &mut self.cfg.vault_idle_minutes) {
-                                    self.save();
-                                }
-                            }
-                            Tab::Words => self.words_tab(ui),
-                            Tab::Exceptions => self.exceptions_tab(ui, &focus),
-                            Tab::Layouts => self.layouts_tab(ui, &focus),
-                            Tab::Settings => self.settings_tab(ui),
-                            Tab::Donate => self.donate_tab(ui),
-                        }
-                        ui.add_space(6.0);
-                        if !self.status.is_empty() {
-                            ui.add(egui::Label::new(&self.status).wrap());
-                        }
-                    });
-
-                let used = egui::Rect::from_min_max(
-                    tab_rect.min.min(scroll.inner_rect.min),
-                    egui::pos2(
-                        tab_rect.right().max(scroll.inner_rect.min.x + scroll.content_size.x),
-                        tab_rect.bottom().max(scroll.inner_rect.min.y + scroll.content_size.y),
-                    ),
-                );
-                (tab_rect, used)
-            });
-            inner.inner
-        };
-        self.apply_window_limits(ctx, tab_rect, used);
+        self.draw(ctx, &focus);
     }
 }
 
@@ -1371,16 +1508,15 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         manual_id: String::new(),
         manual_lang: Lang::Ru,
         exception_draft: String::new(),
-        tab: if open_vault { Tab::Vault } else { Tab::Layouts },
+        tab: if open_vault { Tab::Vault } else { Tab::Home },
         vault: crate::vault_ui::VaultUi::new(),
         capturing_hotkey: None,
         word_draft: String::new(),
         expanded_paths: HashSet::new(),
         show_system_apps: false,
         icons: IconCache::default(),
-        fitted_height: None,
-        last_min_size: None,
-        last_max_size: None,
+        open_groups: HashSet::new(),
+        content_overflow: 0.0,
         welcome_open,
         welcome_dont_show: false,
         logo_textures: [None, None, None],
@@ -1398,7 +1534,9 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
     let viewport = {
         let mut vp = egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
-            .with_inner_size([480.0, 360.0]);
+            .with_inner_size([440.0, 600.0])
+            .with_min_inner_size([380.0, 440.0])
+            .with_resizable(true);
         if start_hidden {
             vp = vp.with_visible(false);
         }
@@ -1421,7 +1559,15 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         viewport,
         ..Default::default()
     };
-    eframe::run_native(APP_NAME, opts, Box::new(|_cc| Ok(Box::new(app)))).map_err(|e| e.to_string())
+    eframe::run_native(
+        APP_NAME,
+        opts,
+        Box::new(|cc| {
+            st::install_fonts(&cc.egui_ctx);
+            Ok(Box::new(app))
+        }),
+    )
+    .map_err(|e| e.to_string())
 }
 
 
@@ -1536,6 +1682,10 @@ fn qr_image(text: &str) -> egui::ColorImage {
     }
     egui::ColorImage { size: [n as usize, n as usize], pixels: px }
 }
+
+#[cfg(test)]
+#[path = "gui_shots.rs"]
+mod shots;
 
 #[cfg(test)]
 mod qr_tests {

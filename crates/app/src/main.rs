@@ -27,6 +27,7 @@ mod logos;
 mod platform;
 mod selection;
 mod tray;
+mod ui_style;
 mod trial;
 mod vault_ui;
 
