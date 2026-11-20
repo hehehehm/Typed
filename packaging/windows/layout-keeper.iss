@@ -1,5 +1,5 @@
 ﻿#ifndef MyAppVersion
-  #define MyAppVersion "0.3.73"
+  #define MyAppVersion "0.3.74"
 #endif
 #ifndef BuildDir
   #define BuildDir "..\..\target\release"

@@ -8,6 +8,12 @@
 //! * Candidates: words of the 40 000-word list that keep the first letter (or swap the
 //!   first two). Score = edit cost × [`EDIT_WEIGHT`] + ln(rank + [`RANK_OFFSET`]), minus a
 //!   bonus for keeping the typed last two letters (the case ending).
+//! * Spelling errors (since 0.3.74): a missing double letter ([`DOUBLE_MISSING`]) and
+//!   confused unstressed Russian vowels ([`VOWEL_COST`]) cost less than a slip, and real
+//!   forms outside the 40 000-word list reachable by up to two such errors compete as
+//!   rank [`SPELL_RANK`] (`стелаж` / `сталлежу` → `стеллаж` / `стеллажу`; not into
+//!   proper-name forms, not one lone vowel at the default level). A spelling fix one slip
+//!   ([`CLOSER_GAP`]) closer than a frequent word wins over it (`сталлеж`: not `стала`).
 //! * Ambiguity guard: the runner-up must score at least [`margin`] worse, otherwise the
 //!   word is left alone (`тта` is not guessed into `там`).
 //! * Same safety rules as the strict search: not just another ending of the same word,
@@ -135,7 +141,29 @@ pub(crate) fn adjacent_fast(x: char, y: char, lang: Lang) -> bool {
     }
 }
 
-fn subst_cost(x: char, y: char, n: usize, lang: Lang) -> u32 {
+/// A doubled letter typed once (`стелаж`, `програма`): the most common spelling error,
+/// cheaper than any keyboard slip (7 up to 0.3.73).
+pub const DOUBLE_MISSING: u32 = 5;
+/// A letter typed twice (`адресс`, a key bounce): unchanged since 0.3.72 (4 and 5 were
+/// tried: more wrong fixes of keyboard slips, see docs/eval-0.3.74).
+pub const DOUBLE_EXTRA: u32 = 6;
+/// Two Russian vowels confused when unstressed (а/о, е/и, е/а, е/я, и/я, а/я; not е/э:
+/// `бекап` / `бэкап` are both in use), in words of 6+ letters, not at the last letter
+/// (11 up to 0.3.73 and for other vowel pairs; 15 up to 5 letters).
+pub const VOWEL_COST: u32 = 7;
+
+/// Unstressed vowels confused in Russian spelling.
+pub(crate) fn vowel_confusion(x: char, y: char, lang: Lang) -> bool {
+    const GROUPS: [(char, char); 6] = [('а', 'о'), ('е', 'и'), ('е', 'а'), ('е', 'я'), ('и', 'я'), ('а', 'я')];
+    lang == Lang::Ru && GROUPS.iter().any(|&(a, b)| (a, b) == (x, y) || (b, a) == (x, y))
+}
+
+/// `inner`: neither letter is the last of its word (a last vowel is mostly an ending:
+/// `ввести` / `ввесия` is not a spelling error).
+fn subst_cost(x: char, y: char, n: usize, inner: bool, lang: Lang) -> u32 {
+    if inner && n > crate::typo::SHORT_SUBST_LEN && vowel_confusion(x, y, lang) {
+        return VOWEL_COST;
+    }
     let (adj, sound) = match (slot(x, lang), slot(y, lang)) {
         (Some(i), Some(j)) => {
             let p = pairs(lang);
@@ -158,7 +186,7 @@ fn del_cost(a: &[char], i: usize, lang: Lang) -> u32 {
     let prev = i.checked_sub(1).map(|k| a[k]);
     let next = a.get(i + 1).copied();
     if prev == Some(c) || next == Some(c) {
-        6
+        DOUBLE_EXTRA
     } else if prev.is_some_and(|p| adjacent_fast(c, p, lang)) || next.is_some_and(|p| adjacent_fast(c, p, lang)) {
         9
     } else {
@@ -170,7 +198,7 @@ fn del_cost(a: &[char], i: usize, lang: Lang) -> u32 {
 fn ins_cost(b: &[char], j: usize) -> u32 {
     let c = b[j];
     if (j > 0 && b[j - 1] == c) || b.get(j + 1) == Some(&c) {
-        7
+        DOUBLE_MISSING
     } else {
         10
     }
@@ -207,7 +235,7 @@ fn wdist_with(a: &[char], dels: &[u32], b: &[char], max: u32, lang: Lang, s: &mu
         cur[0] = prev[0] + d;
         let mut row_min = cur[0];
         for j in 1..=m {
-            let sub = if a[i - 1] == b[j - 1] { 0 } else { subst_cost(a[i - 1], b[j - 1], n, lang) };
+            let sub = if a[i - 1] == b[j - 1] { 0 } else { subst_cost(a[i - 1], b[j - 1], n, i < n && j < m, lang) };
             let mut v = (prev[j] + d).min(cur[j - 1] + ins_cost(b, j - 1)).min(prev[j - 1] + sub);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] && a[i - 1] != a[i - 2] {
                 v = v.min(prev2[j - 2] + TRANSPOSE);
@@ -232,6 +260,118 @@ struct Scored {
     score: f64,
     word: String,
     ok: bool,
+    cost: u32,
+    spell: bool,
+}
+
+fn offer(best: &mut Option<Scored>, second: &mut Option<f64>, s: Scored) {
+    match best {
+        Some(b) if b.word == s.word => {}
+        Some(b) if s.score < b.score => {
+            *second = Some(second.map_or(b.score, |x| x.min(b.score)));
+            *best = Some(s);
+        }
+        Some(_) => *second = Some(second.map_or(s.score, |x| x.min(s.score))),
+        None => *best = Some(s),
+    }
+}
+
+/// Candidates this much costlier (tenths, one slip) than a spelling-error fix drop out.
+pub const CLOSER_GAP: u32 = 10;
+
+/// Minimum letters for a spelling-error fix into an unranked form.
+pub const SPELL_MIN_LEN: usize = 5;
+/// At most this many spelling operations (see [`spelling_variants`]).
+pub const SPELL_OPS: usize = 2;
+/// Rank an unranked real form competes with (the end of the frequency list).
+pub const SPELL_RANK: u32 = MAX_RANK;
+
+/// Two forms of one word, also reflexive ones (`бахнулись` / `бахнулась`,
+/// `ветвящаяся` / `ветвящееся`): not a spelling error and its fix.
+fn ending_variant(a: &str, b: &str) -> bool {
+    morph::only_ending_differs(a, b)
+        || ["ся", "сь"].iter().any(|r| match (a.strip_suffix(r), b.strip_suffix(r)) {
+            (Some(x), Some(y)) => morph::only_ending_differs(x, y),
+            _ => false,
+        })
+}
+
+/// The typed last two letters kept, or only an unstressed vowel before the last letter
+/// confused in a 6+ letter word (`сталлеж` → `стеллаж`).
+fn spell_tail_ok(typed: &[char], cand: &[char], lang: Lang) -> bool {
+    let (n, m) = (typed.len(), cand.len());
+    if n < 2 || m < 2 {
+        return false;
+    }
+    typed[n - 2..] == cand[m - 2..]
+        || (n >= 6 && typed[n - 1] == cand[m - 1] && vowel_confusion(typed[n - 2], cand[m - 2], lang))
+}
+
+/// Real forms (full-form set) reachable from `w` by up to [`SPELL_OPS`] spelling
+/// operations, never at the first letter: a letter doubled (`стелаж` → `стеллаж`), a
+/// doubled letter made single (`адресс` → `адрес`), a confused unstressed vowel
+/// ([`vowel_confusion`]).
+fn spelling_variants(d: &Dictionary, w: &[char], lang: Lang) -> Vec<(String, bool)> {
+    let vowels: &[char] = match lang {
+        Lang::Ru => &['а', 'о', 'е', 'и', 'я'],
+        Lang::En => &[],
+    };
+    // Each letter is touched once (`бритвой` is not `братвой` through и → я → а), and
+    // the doubled pair is never the first two letters (`ввязали` / `вязали`: prefix).
+    let step = |v: &[char], t: &[bool]| -> Vec<(Vec<char>, Vec<bool>, bool)> {
+        let mut out = Vec::new();
+        for i in 1..v.len() {
+            let c = v[i];
+            if t[i] {
+                continue;
+            }
+            let last = i + 1 == v.len();
+            if v[i - 1] == c {
+                if i >= 2 && !t[i - 1] {
+                    let (mut u, mut ut) = (v.to_vec(), t.to_vec());
+                    u.remove(i);
+                    ut.remove(i);
+                    ut[i - 1] = true;
+                    out.push((u, ut, false));
+                }
+            } else if v.get(i + 1) != Some(&c) && !vowels.contains(&c) {
+                let (mut u, mut ut) = (v.to_vec(), t.to_vec());
+                u.insert(i, c);
+                ut[i] = true;
+                ut.insert(i, true);
+                out.push((u, ut, false));
+            }
+            for &x in vowels {
+                if !last && x != c && vowel_confusion(c, x, lang) {
+                    let (mut u, mut ut) = (v.to_vec(), t.to_vec());
+                    u[i] = x;
+                    ut[i] = true;
+                    out.push((u, ut, true));
+                }
+            }
+        }
+        out
+    };
+    let mut seen: std::collections::HashSet<Vec<char>> = std::collections::HashSet::new();
+    let mut frontier = vec![(w.to_vec(), vec![false; w.len()])];
+    seen.insert(w.to_vec());
+    let mut found = Vec::new();
+    for depth in 0..SPELL_OPS {
+        let mut next = Vec::new();
+        for (v, t) in &frontier {
+            for (u, ut, vowel) in step(v, t) {
+                if seen.insert(u.clone()) {
+                    let s: String = u.iter().collect();
+                    if d.in_full_forms(&s) && !d.is_name_form(&s) && !d.is_brand(&s) {
+                        found.push((s, depth == 0 && vowel));
+                    }
+                    next.push((u, ut));
+                }
+            }
+        }
+        frontier = next;
+    }
+    found
 }
 
 /// The scored search. `None` when nothing fits or the top two are too close.
@@ -268,8 +408,7 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
     let first: String = lower[..1].iter().collect();
     let swapped: String = [lower[1], lower[0]].iter().collect();
     let pool = d.starting_with(&first).chain(d.starting_with(&swapped).filter(|_| lower[0] != lower[1]));
-    let mut best: Option<Scored> = None;
-    let mut second: Option<f64> = None;
+    let mut all: Vec<Scored> = Vec::new();
     let tail2 = &lower[n - 2..];
     // Typos of two or more slips (and any fix of a Capitalised word) need a sign of a
     // slip in the typed word: a letter pair unusual in the language (`ghbdtn`-style
@@ -316,16 +455,48 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
         if has_ctx {
             score -= CONTEXT_WEIGHT * ngram::fit(ctx, cand, lang).unwrap_or(0.0);
         }
-        let s = Scored { score, word: cand.to_string(), ok };
-        match &best {
-            Some(b) if b.word == s.word => {}
-            Some(b) if s.score < b.score => {
-                second = Some(second.map_or(b.score, |x| x.min(b.score)));
-                best = Some(s);
+        all.push(Scored { score, word: cand.to_string(), ok, cost, spell: false });
+    }
+    // Spelling errors into real forms outside the frequency list (`стелаж` → `стеллаж`,
+    // `сталлежу` → `стеллажу`): only doubled / single letters and confused unstressed
+    // vowels, at most [`SPELL_OPS`] of them. These forms have no rank and compete as
+    // rank [`SPELL_RANK`].
+    if lowercase && n >= SPELL_MIN_LEN && lang == Lang::Ru {
+        for (cand, lone_vowel) in spelling_variants(d, &lower, lang) {
+            if d.rank_exact(&cand).is_some() {
+                continue;
             }
-            Some(_) => second = Some(second.map_or(s.score, |x| x.min(s.score))),
-            None => best = Some(s),
+            cv.clear();
+            cv.extend(cand.chars());
+            let cost = wdist_with(&lower, &dels, &cv, max, lang, &mut scratch);
+            if cost > max || cost == 0 {
+                continue;
+            }
+            // One confused vowel alone is how many real words and names differ
+            // (`азриэлю` / `азриелю`): into an unranked form only at the bold level.
+            let ok = (!lone_vowel || level == Level::Aggressive)
+                && spell_tail_ok(&lower, &cv, lang)
+                && !(lang == Lang::Ru && ending_variant(&lower_s, &cand))
+                && !(lang == Lang::En && (en_affix_only(&lower_s, &cand) || en_end_letter_only(&lower_s, &cand)));
+            let mut score = cost as f64 / 10.0 * EDIT_WEIGHT + (SPELL_RANK as f64 + RANK_OFFSET).ln();
+            if cv.len() >= 2 && cv[cv.len() - 2..] == *tail2 {
+                score -= TAIL_BONUS;
+            }
+            if has_ctx {
+                score -= CONTEXT_WEIGHT * ngram::fit(ctx, &cand, lang).unwrap_or(0.0);
+            }
+            all.push(Scored { score, word: cand, ok, cost, spell: true });
         }
+    }
+    // A spelling-error fix much closer than a frequent word (`сталлеж`: `стеллаж` at two
+    // confused vowels, `стала` at three slips) is not outvoted or blocked by it.
+    if let Some(c) = all.iter().filter(|s| s.spell && s.ok).map(|s| s.cost).min() {
+        all.retain(|s| s.cost < c + CLOSER_GAP);
+    }
+    let mut best: Option<Scored> = None;
+    let mut second: Option<f64> = None;
+    for s in all {
+        offer(&mut best, &mut second, s);
     }
     let best = best?;
     if !best.ok {
@@ -434,6 +605,66 @@ mod tests {
         // The strict rules alone (Level::Cautious) leave all of these.
         for (w, l) in [("превт", Lang::Ru), ("сгоднч", Lang::Ru), ("wierd", Lang::En), ("ввесия", Lang::Ru)] {
             assert_eq!(crate::typo::suggest_level(w, l, Level::Cautious), None, "{w}");
+        }
+    }
+
+    #[test]
+    fn spelling_errors() {
+        // A doubled letter typed once or twice, confused unstressed vowels (since 0.3.74),
+        // also into forms outside the frequency list (`стеллаж`), at every wide level.
+        let cases = [
+            ("стелаж", "стеллаж"),
+            ("стелажу", "стеллажу"),
+            ("сталлежу", "стеллажу"),
+            ("сталлеж", "стеллаж"),
+            ("програма", "программа"),
+            ("калектив", "коллектив"),
+            ("адресс", "адрес"),
+            ("апарат", "аппарат"),
+            ("милиардер", "миллиардер"),
+            ("паралельно", "параллельно"),
+            ("кристалический", "кристаллический"),
+        ];
+        for level in [Level::Normal, Level::Aggressive] {
+            for (typed, fix) in cases {
+                assert_eq!(crate::typo::suggest_level(typed, Lang::Ru, level).as_deref(), Some(fix), "{typed} {level:?}");
+            }
+            assert_eq!(crate::typo::suggest_level("adress", Lang::En, level).as_deref(), Some("address"));
+        }
+        // Not into a proper-name form, not across a prefix (`вв-`), not another ending
+        // of the same word.
+        let d = dict::get(Lang::Ru);
+        for (w, not) in [("азриэлю", "азриелю"), ("ввязали", "вязали"), ("бахнулись", "бахнулась"), ("бритвой", "братвой")] {
+            assert_ne!(crate::typo::suggest_as_unknown_level(d, w, Lang::Ru, Level::Normal).as_deref(), Some(not), "{w}");
+        }
+        // One confused vowel alone into an unranked form only at the bold level.
+        assert!(spelling_variants(d, &"стелаж".chars().collect::<Vec<_>>(), Lang::Ru).iter().any(|(w, lone)| w == "стеллаж" && !lone));
+    }
+
+    #[test]
+    fn spelling_in_a_sentence() {
+        use crate::{Engine, EngineOptions, Key};
+        for level in [Level::Normal, Level::Aggressive] {
+            let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: level, ..Default::default() });
+            let mut out: Vec<char> = Vec::new();
+            for k in "по сталлежу".chars().map(Key::Char).chain([Key::Boundary(' ')]) {
+                if let Key::Char(c) = k {
+                    out.push(c);
+                }
+                match e.feed(k, false) {
+                    Some(r) => {
+                        let keep = out.len().saturating_sub(r.delete);
+                        out.truncate(keep);
+                        out.extend(r.insert.chars());
+                    }
+                    None => {
+                        if let Key::Boundary(c) = k {
+                            out.push(c);
+                        }
+                    }
+                }
+            }
+            assert_eq!(out.into_iter().collect::<String>().trim_end(), "по стеллажу", "{level:?}");
         }
     }
 

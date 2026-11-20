@@ -101,7 +101,8 @@ fn pool(lang: Lang, len: usize, n: usize) -> Vec<String> {
         .filter(|(w, r)| *r < limit && w.chars().count() == len && w.chars().all(char::is_alphabetic) && layout::detect_script(w) == Some(lang))
         .map(|(w, r)| (w.to_string(), r))
         .collect();
-    v.sort_by_key(|x| x.1);
+    // Rank, then the word: extras share one rank, and the map order must not decide.
+    v.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     if v.len() <= n { return v.into_iter().map(|x| x.0).collect(); }
     (0..n).map(|i| v[i * v.len() / n].0.clone()).collect()
 }
@@ -297,4 +298,86 @@ Kpop Bizon Manul Shmel Kotik Pesik
 Tallinn Riga Vilnius Kyiv Lviv Minsk Almaty Tashkent Bishkek Tbilisi Yerevan Baku
 ";
     s.split_whitespace().map(str::to_string).collect()
+}
+
+/// One spelling error (not a keyboard slip), never at the first letter: a doubled letter
+/// typed once, a single consonant doubled, or (Russian) a confused unstressed vowel.
+fn spelling_error(w: &str, lang: Lang, rng: &mut Rng) -> Option<String> {
+    let v: Vec<char> = w.chars().collect();
+    let n = v.len();
+    let groups: &[(char, char)] = &[('а', 'о'), ('е', 'и'), ('е', 'а'), ('е', 'я'), ('и', 'я'), ('а', 'я')];
+    let mut opts: Vec<Vec<char>> = vec![];
+    for i in 1..n {
+        if v[i - 1] == v[i] {
+            let mut u = v.clone();
+            u.remove(i);
+            opts.push(u);
+        }
+        let vowel = "аеиоуыэюяaeiouy".contains(v[i]);
+        if !vowel && v[i - 1] != v[i] && v.get(i + 1) != Some(&v[i]) {
+            let mut u = v.clone();
+            u.insert(i, v[i]);
+            opts.push(u);
+        }
+        if lang == Lang::Ru {
+            for &(a, b) in groups {
+                for (x, y) in [(a, b), (b, a)] {
+                    if v[i] == x {
+                        let mut u = v.clone();
+                        u[i] = y;
+                        opts.push(u);
+                    }
+                }
+            }
+        }
+    }
+    if opts.is_empty() {
+        return None;
+    }
+    // Prefer the dropped double letter (the classic error) when there is one.
+    let doubles: Vec<&Vec<char>> = opts.iter().filter(|u| u.len() + 1 == n).collect();
+    let pick = if !doubles.is_empty() && rng.next(2) == 0 { doubles[rng.next(doubles.len())].clone() } else { opts[rng.next(opts.len())].clone() };
+    Some(pick.into_iter().collect())
+}
+
+/// Spelling-error recall (since 0.3.74): frequent words and rare real forms (outside the
+/// ranked lists) with one or two spelling errors, through the engine.
+#[test]
+#[ignore]
+fn spelling_eval() {
+    let e = engine();
+    let mut report = String::from("# Spelling-error eval\n\n| set | right | wrong | n |\n|---|---|---|---|\n");
+    let mut ex: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for lang in [Lang::Ru, Lang::En] {
+        let d = dict::get(lang);
+        let ranked = dict::ranked_only(lang);
+        let mut rare: Vec<String> = full_only(lang, &ranked).into_iter().filter(|w| w.chars().count() >= 5).collect();
+        rare.truncate(1500);
+        let mut freq: Vec<String> = vec![];
+        for len in 5..=12 { freq.extend(pool(lang, len, 120)); }
+        for (set, words) in [("frequent", &freq), ("rare form", &rare)] {
+            for k in [1usize, 2] {
+                let mut rng = Rng(23 + k as u64);
+                let (mut n, mut right, mut wrong) = (0u32, 0u32, 0u32);
+                for w in words.iter() {
+                    let mut t = Some(w.clone());
+                    for _ in 0..k { t = t.and_then(|x| spelling_error(&x, lang, &mut rng)); }
+                    let Some(t) = t else { continue };
+                    if d.is_word(&t) || t == *w { continue; }
+                    n += 1;
+                    match out_text(&e, &t) {
+                        Some(g) if Dictionary::normalize(&g) == *w => right += 1,
+                        Some(g) => { wrong += 1; let x = ex.entry(format!("{lang:?} {set} {k} wrong")).or_default(); if x.len() < 10 { x.push(format!("{t}→{g} ({w})")); } }
+                        None => { let x = ex.entry(format!("{lang:?} {set} {k} miss")).or_default(); if x.len() < 10 { x.push(format!("{t} ({w})")); } }
+                    }
+                }
+                let pc = |x: u32| if n == 0 { 0.0 } else { 100.0 * x as f64 / n as f64 };
+                let _ = writeln!(report, "| {lang:?} {set}, {k} error(s) | {:.0}% | {:.1}% | {n} |", pc(right), pc(wrong));
+            }
+        }
+    }
+    report += "\n## Examples\n\n";
+    for (k, v) in &ex { let _ = writeln!(report, "* {k}: {}", v.join(", ")); }
+    println!("{report}");
+    if let Ok(p) = std::env::var("EVAL_OUT") { std::fs::write(p, &report).unwrap(); }
 }

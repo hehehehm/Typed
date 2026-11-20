@@ -178,7 +178,6 @@ fn context_eval() {
         let mut unknown = [0u32; 3];
         let mut unknown_rare = [0u32; 3];
         let mut unknown_examples: Vec<String> = vec![];
-        let mut rng = Rng(0x5eed ^ lang as u64);
         let mut ex_rng = Rng(0xe5 ^ lang as u64);
         let mut usable = vec![];
         for s in &sents {
@@ -194,6 +193,11 @@ fn context_eval() {
             if ok { usable.push(*s); }
         }
         for s in &usable {
+            // Per-sentence random streams: a sentence dropped from `usable` by a change in
+            // the engine must not shift the samples of all the following ones.
+            let h = s.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+            let mut rng = Rng(0x5eed ^ lang as u64 ^ h);
+            let mut pick_rng = Rng(0xe5 ^ lang as u64 ^ h.rotate_left(17));
             let chars: Vec<char> = s.chars().collect();
             let ws = words(&chars);
             let cands: Vec<usize> = (0..ws.len())
@@ -205,7 +209,7 @@ fn context_eval() {
             if cands.is_empty() { continue; }
             // Unknown-word proxy in a real sentence: the word treated as unknown (a name or
             // slang the lists miss) — would it be changed, with and without its context?
-            for &ui in cands.iter().filter(|_| ex_rng.next(2) == 0) {
+            for &ui in cands.iter().filter(|_| pick_rng.next(2) == 0) {
                 let (a, b) = ws[ui];
                 let w: String = chars[a..b].iter().collect();
                 let ctx = sentence_context(&chars, &ws, ui);

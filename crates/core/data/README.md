@@ -117,3 +117,10 @@ evaluation by ≤ 0.5 point). Rebuild: `tools/ngrams/fetch.sh` (in an empty dir)
 fst: `examples/build_ngrams.rs`). The same run writes `tests/data/heldout_{ru,en}.txt`:
 3 000 held-out Tatoeba sentences per language (**CC BY 2.0 FR**) for `tests/context_eval.rs`.
 Debug: `cargo run --release -p layout_keeper_core --example ctx_fit -- ru "я не" знаю знаб`.
+
+## Proper-name forms (since 0.3.74)
+
+`ru_names.fst` (408 142 forms, 0.3 MB): OpenCorpora word forms (via `pymorphy3-dicts-ru`,
+**CC-BY-SA 3.0**) whose every parse is tagged `Name`, `Surn`, `Patr`, `Geox`, `Orgn` or
+`Trad`, made by `tools/wordsets/oc_names.py` and `examples/build_wordset.rs`. Used only to
+keep such forms out of spelling-error fixes into unranked forms (`typo_wide`).

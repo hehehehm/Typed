@@ -34,6 +34,10 @@ static EN_KNOWN: &[u8] = include_bytes!("../data/en_known.fst");
 static RU_KNOWN: &[u8] = include_bytes!("../data/ru_known.fst");
 /// Brand / product / company / service names (Wikidata CC0 + curated), since 0.3.65.
 /// Known-only like the full-form sets: never offered as a correction.
+/// Russian forms that are only proper names (OpenCorpora Name / Surn / Patr / Geox / Orgn /
+/// Trad, built by `tools/wordsets/oc_names.py`), since 0.3.74: never the target of a
+/// spelling-error fix (`азриэлю` is not "fixed" into the name form `азриелю`).
+static RU_NAMES: &[u8] = include_bytes!("../data/ru_names.fst");
 static EN_BRANDS: &str = include_str!("../data/en_brands.txt");
 static RU_BRANDS: &str = include_str!("../data/ru_brands.txt");
 
@@ -59,6 +63,8 @@ pub struct Dictionary {
     known: Option<fst::Set<&'static [u8]>>,
     /// Brand and product names (see [`Dictionary::with_brands`]).
     brands: HashSet<String>,
+    /// Proper-name-only forms (see [`Dictionary::is_name_form`]).
+    names: Option<fst::Set<&'static [u8]>>,
 }
 
 /// One byte per letter for the full-form sets: `a`–`z` as ASCII, `а`–`я` as
@@ -111,13 +117,26 @@ impl Dictionary {
         let bigrams = counts.into_iter().filter(|&(_, n)| n >= MIN_BIGRAM_WORDS).map(|(k, _)| k).collect();
         let mut sorted: Vec<String> = ranks.keys().cloned().collect();
         sorted.sort_unstable();
-        Dictionary { lang, ranks, bigrams, sorted, known: None, brands: HashSet::new() }
+        Dictionary { lang, ranks, bigrams, sorted, known: None, brands: HashSet::new(), names: None }
     }
 
     /// Attach a full-form set built by `examples/build_wordset.rs`.
     pub fn with_known_set(mut self, fst_bytes: &'static [u8]) -> Self {
         self.known = fst::Set::new(fst_bytes).ok();
         self
+    }
+
+    /// Attach a proper-name-only form set (FST like [`Dictionary::with_known_set`]).
+    pub fn with_name_set(mut self, fst_bytes: &'static [u8]) -> Self {
+        self.names = fst::Set::new(fst_bytes).ok();
+        self
+    }
+
+    /// A form that is only a proper name (a first name, surname, patronymic, place or
+    /// organisation in OpenCorpora): never offered as a spelling-error fix.
+    pub fn is_name_form(&self, word: &str) -> bool {
+        let Some(set) = &self.names else { return false };
+        key_bytes(&Self::normalize(word)).is_some_and(|k| set.contains(k))
     }
 
     /// Attach a brand-name list (`#` comment lines ignored). Brands count as full forms:
@@ -277,7 +296,7 @@ pub fn get(lang: Lang) -> &'static Dictionary {
     static RU: OnceLock<Dictionary> = OnceLock::new();
     match lang {
         Lang::En => EN.get_or_init(|| Dictionary::with_extras(Lang::En, EN_WORDS, EN_EXTRA).with_known_set(EN_KNOWN).with_brands(EN_BRANDS)),
-        Lang::Ru => RU.get_or_init(|| Dictionary::with_extras(Lang::Ru, RU_WORDS, RU_EXTRA).with_known_set(RU_KNOWN).with_brands(RU_BRANDS)),
+        Lang::Ru => RU.get_or_init(|| Dictionary::with_extras(Lang::Ru, RU_WORDS, RU_EXTRA).with_known_set(RU_KNOWN).with_brands(RU_BRANDS).with_name_set(RU_NAMES)),
     }
 }
 
