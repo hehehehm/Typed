@@ -441,12 +441,13 @@ mod tests {
     }
 
     #[test]
-    fn default_config_does_not_learn() {
+    fn default_config_learns_layout() {
         let mut c = Controller::new(Config::default(), None);
+        assert!(c.config.auto_learn);
         c.tick(Some("code"), Some(Lang::En));
         c.tick(Some("code"), Some(Lang::Ru));
         c.tick(Some("x"), Some(Lang::En));
-        assert_eq!(c.config.layout_for("code"), None);
+        assert_eq!(c.config.layout_for("code"), Some(Lang::Ru));
     }
 
     #[test]

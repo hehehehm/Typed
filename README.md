@@ -651,13 +651,11 @@ Linux — `~/.config/autostart/typed.desktop` или systemd user unit. Трея
   после первых ~3 секунд стабилизации фокуса утилита не возвращает раскладку насильно, но и **назначение не перезаписывает**. В следующий раз
   при переходе в приложение снова включится назначенная раскладка.
 * Изменить назначение можно только явно: `typed set-app`, `remove-app` или в окне `gui`.
-* Авто-обучение (`auto_learn`, для новых конфигов **выключено**): если включено, заполняет раскладку
+* Авто-обучение (`auto_learn`, для новых конфигов **включено**): заполняет раскладку
   только для приложений, у которых назначения ещё нет (по ручному переключению или по раскладке, на
   которой приложение оставили). Уже назначенное оно **никогда** не перезаписывает.
-* Обновление с 0.1.0: в существующем `config.json` останется `"auto_learn": true` — новое значение по
-  умолчанию касается только новых файлов. Но правило «не перезаписывать назначенное» работает
-  сразу, так что уже назначенные приложения после обновления не собьются. Чтобы новые приложения
-  тоже не запоминались сами, выключите автозапоминание в `gui` или `typed set auto-learn off`.
+  Если в уже сохранённом `config.json` стоит `"auto_learn": false`, это значение не меняется.
+  Чтобы новые приложения не запоминались сами, выключите автозапоминание в `gui` или `typed set auto-learn off`.
 * Исключения (`exception_apps`, подстрока, без учёта регистра): менеджеры паролей, терминалы,
   удалённые рабочие столы/VM. В этих приложениях **автозамена и горячая клавиша конвертации
   никогда не срабатывают**. Память раскладки работает как обычно: язык можно назначить в `gui`
@@ -669,9 +667,12 @@ Windows `%APPDATA%\typed\`. При первом запуске файлы коп
 ```json
 {
   "apps": { "firefox": "en", "telegramdesktop": "ru" },
-  "auto_learn": false,
+  "auto_learn": true,
   "autocorrect": true,
   "convert_single_letters": true,
+  "fix_typos": true,
+  "use_context": true,
+  "fix_missing_spaces": true,
   "exception_apps": ["keepass", "1password", "terminal", "..."],
   "hotkey": "Pause",
   "summon_hotkey": "Ctrl+Shift+V",
@@ -1312,7 +1313,7 @@ settings does not stop the daemon.
   (Windows: exe path, macOS: bundle id, Linux: WM_CLASS) and restores it when the app gets focus;
   the assigned layout is sticky (since 0.2.0): it is re-applied on every focus, and switching the
   layout inside the app never overwrites it (manual changes are left alone after the ~3-second focus grace period). Change it only via `set-app`/`remove-app` or the GUI.
-  `auto_learn` (off for new configs) only fills in apps that have no assignment yet.
+  `auto_learn` (on for new configs) only fills in apps that have no assignment yet; a saved `"auto_learn": false` is kept.
   Exception apps skip autocorrect only; their assigned layout is still remembered and applied.
 * **Settings GUI** — `typed gui` (egui): assign the focused app EN/RU, edit/remove remembered
   apps, toggles, and hotkeys (press-to-assign, plus presets). Separate process that edits the same

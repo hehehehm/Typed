@@ -42,6 +42,12 @@ pub(crate) fn is_self(app: &str) -> bool {
 /// Shortest gap between frames while the window is hidden or minimized.
 const IDLE_FRAME: Duration = Duration::from_millis(250);
 
+const SETTINGS_GROUPS: &[&str] = &["fix", "typo", "undo", "keys", "admin", "look", "about"];
+
+fn default_open_groups() -> HashSet<&'static str> {
+    SETTINGS_GROUPS.iter().copied().collect()
+}
+
 pub(crate) fn hide_window(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -68,7 +74,8 @@ struct App {
     capturing_hotkey: Option<HotkeySlot>,
     word_draft: String,
     icons: IconCache,
-    /// Settings groups opened in this session (all closed at start).
+    /// Settings groups opened in this session (all open by default; the Settings
+    /// section itself starts behind the home square).
     open_groups: HashSet<&'static str>,
     /// How much the last frame's content was wider than the window (should stay 0).
     content_overflow: f32,
@@ -791,7 +798,7 @@ impl App {
             if resp.has_focus() {
                 p.rect_stroke(rect.shrink(0.5), 0.0, st::hair(st::INK_ON_COLOR));
             }
-            let u = st::snap((s * 0.16).max(st::U), st::U).min(st::U * 2.0);
+            let u = st::snap((s * 0.16).max(st::MARK / 2.0), st::MARK / 2.0).min(st::MARK);
             st::paint_home_icon(p, egui::pos2(rect.center().x, rect.top() + s * 0.42), u, i);
             let pad = st::GAP;
             let max_w = (s - pad * 2.0).max(st::U);
@@ -839,7 +846,7 @@ impl App {
                 for &other in SECTIONS.iter().rev() {
                     // 32×32 hit target, 16×16 colour square centred in it.
                     let (rect, resp) = ui.allocate_exact_size(egui::vec2(st::HIT, st::HIT), egui::Sense::click());
-                    let vis = egui::Rect::from_center_size(rect.center(), egui::vec2(st::U * 2.0, st::U * 2.0));
+                    let vis = egui::Rect::from_center_size(rect.center(), egui::vec2(st::MARK, st::MARK));
                     let p = ui.painter();
                     let fill = if other == tab { st::INK_ON_COLOR } else { other.color() };
                     p.rect_filled(vis, 0.0, fill);
@@ -908,7 +915,7 @@ impl App {
                 ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(logo_w, logo_h)).rounding(0.0));
             }
             ui.add_space(st::GAP);
-            let chip = st::U * 2.0;
+            let chip = st::MARK;
             let (strip, _) = ui.allocate_exact_size(egui::vec2(5.0 * chip + 4.0 * st::GAP, chip), egui::Sense::hover());
             for (i, tab) in SECTIONS.iter().enumerate() {
                 let x = strip.left() + i as f32 * (chip + st::GAP);
@@ -1313,7 +1320,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         capturing_hotkey: None,
         word_draft: String::new(),
         icons: IconCache::default(),
-        open_groups: HashSet::new(),
+        open_groups: default_open_groups(),
         content_overflow: 0.0,
         welcome_open,
         welcome_dont_show: false,
@@ -1332,8 +1339,8 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
     let viewport = {
         let mut vp = egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
-            .with_inner_size([544.0, 240.0])
-            .with_min_inner_size([504.0, 200.0])
+            .with_inner_size([512.0, 192.0])
+            .with_min_inner_size([432.0, 160.0])
             .with_resizable(true);
         if start_hidden {
             vp = vp.with_visible(false);

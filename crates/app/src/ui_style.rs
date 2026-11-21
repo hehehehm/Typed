@@ -1,10 +1,11 @@
 //! Modular geometric look of the settings window.
 //!
-//! One base unit `U` = 8 px. Every size, gap and padding is an integer multiple
-//! of `U`. Gutters are always `GAP` (= `U`). Interactive targets are at least
-//! `HIT` (= 4`U` = 32 px). Surfaces are monochrome; the five section colours
-//! are the only accents. Hairlines are 1 px and only used where structure
-//! (a field, a focused widget, a segmented cell) needs an edge.
+//! One base unit `U` = 4 px. Every size, gap and padding is an integer multiple
+//! of `U`. Gutters are always `GAP` (= `U`). Interactive targets stay
+//! `HIT` = 32 px (8`U`). Rows and headers are `ROW` = 40 px (10`U` = hit + two
+//! gutters). Surfaces are monochrome; the five section colours are the only
+//! accents. Hairlines are 1 px and only used where structure (a field, a focused
+//! widget, a segmented cell) needs an edge.
 //!
 //! Layout rule: no widget asks for more width than `ui.available_width()`.
 //! Long text is truncated with the full text on hover.
@@ -13,15 +14,17 @@ use eframe::egui::{self, Color32, FontId, Rect, Sense, Stroke, Ui, Vec2};
 use std::sync::Arc;
 
 /// Base module, in logical pixels.
-pub const U: f32 = 8.0;
+pub const U: f32 = 4.0;
 /// Identical gutter everywhere.
 pub const GAP: f32 = U;
 /// Window and section padding (2U).
 pub const PAD: f32 = U * 2.0;
-/// Minimum hit target (4U).
-pub const HIT: f32 = U * 4.0;
-/// List row / header / toggle row height (6U = 8 + 32 + 8).
-pub const ROW: f32 = U * 6.0;
+/// Minimum hit target (8U), kept at 32 px for accessibility.
+pub const HIT: f32 = U * 8.0;
+/// List row / header / toggle row height (10U = 4 + 32 + 4).
+pub const ROW: f32 = HIT + GAP * 2.0;
+/// Visual marks, expanders, nav chips and plus/back arms (4U = 16 px).
+pub const MARK: f32 = U * 4.0;
 /// 1 px structural hairline.
 pub const HAIR: f32 = 1.0;
 
@@ -163,11 +166,11 @@ pub fn apply(ctx: &egui::Context, dark: bool, accent: Color32) {
         s.spacing.item_spacing = egui::vec2(GAP, GAP);
         s.spacing.button_padding = egui::vec2(GAP, GAP);
         s.spacing.interact_size = egui::vec2(HIT, HIT);
-        s.spacing.icon_width = U * 2.0;
-        s.spacing.icon_width_inner = U;
+        s.spacing.icon_width = MARK;
+        s.spacing.icon_width_inner = MARK / 2.0;
         s.spacing.window_margin = egui::Margin::same(PAD);
         let mut sc = egui::style::ScrollStyle::solid();
-        sc.bar_width = U;
+        sc.bar_width = U * 2.0;
         sc.bar_inner_margin = 0.0;
         s.spacing.scroll = sc;
     });
@@ -277,7 +280,7 @@ pub fn plus_square(ui: &mut Ui, accent: Color32, tip: &str) -> egui::Response {
         p.rect_filled(rect, 0.0, bg);
         let c = rect.center();
         let s = hair(INK_ON_COLOR);
-        let arm = U;
+        let arm = MARK / 2.0;
         p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x + arm, c.y)], s);
         p.line_segment([egui::pos2(c.x, c.y - arm), egui::pos2(c.x, c.y + arm)], s);
         focus_ring(ui, rect, resp.has_focus());
@@ -529,7 +532,7 @@ pub fn back_square(ui: &mut Ui, color: Color32) -> egui::Response {
     p.rect_filled(rect, 0.0, bg);
     let c = rect.center();
     let s = hair(INK_ON_COLOR);
-    let arm = U;
+    let arm = MARK / 2.0;
     p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x + arm, c.y)], s);
     p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x, c.y - arm)], s);
     p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x, c.y + arm)], s);
@@ -555,8 +558,8 @@ fn mark_width(ui: &Ui, mark: &Mark) -> f32 {
         Mark::None => 0.0,
         Mark::Label(s) => text_w(ui, s, font_md()).max(U),
         Mark::Value(s) => text_w(ui, s, font_mono()).max(U),
-        Mark::Count { of, .. } => *of as f32 * (U * 2.0) + (*of as f32 - 1.0).max(0.0) * U,
-        Mark::Toggle(_) | Mark::Theme { .. } => U * 2.0,
+        Mark::Count { of, .. } => *of as f32 * MARK + (*of as f32 - 1.0).max(0.0) * GAP,
+        Mark::Toggle(_) | Mark::Theme { .. } => MARK,
     }
 }
 
@@ -589,8 +592,8 @@ fn paint_mark(ui: &Ui, right: f32, cy: f32, mark: &Mark, accent: Color32) -> f32
             p.galley(egui::pos2(x0, cy - g.size().y / 2.0), g, t.muted);
         }
         Mark::Count { on, of } => {
-            let side = U * 2.0;
-            let step = side + U;
+            let side = MARK;
+            let step = side + GAP;
             for i in 0..*of {
                 let x = x0 + i as f32 * step;
                 let r = Rect::from_min_size(egui::pos2(x, cy - side / 2.0), Vec2::splat(side));
@@ -602,11 +605,11 @@ fn paint_mark(ui: &Ui, right: f32, cy: f32, mark: &Mark, accent: Color32) -> f32
             }
         }
         Mark::Toggle(on) => {
-            let r = Rect::from_center_size(egui::pos2(right - U, cy), Vec2::splat(U * 2.0));
+            let r = Rect::from_center_size(egui::pos2(right - MARK / 2.0, cy), Vec2::splat(MARK));
             paint_onoff(ui, r, *on, accent);
         }
         Mark::Theme { light } => {
-            let r = Rect::from_center_size(egui::pos2(right - U, cy), Vec2::splat(U * 2.0));
+            let r = Rect::from_center_size(egui::pos2(right - MARK / 2.0, cy), Vec2::splat(MARK));
             p.rect_stroke(r.shrink(0.5), 0.0, hair(t.muted));
             let half = if *light {
                 Rect::from_min_max(r.min, egui::pos2(r.center().x, r.max.y))
@@ -626,12 +629,13 @@ pub fn group_header(ui: &mut Ui, open: bool, title: &str, mark: &Mark, accent: C
     let p = ui.painter();
     p.rect_filled(rect, 0.0, if resp.hovered() { t.surface_hover } else { t.surface });
     // Expand marker: a 2U square. Closed = plus of two hairlines; open = one hairline (minus).
-    let mark_box = Rect::from_center_size(egui::pos2(rect.right() - GAP - U, rect.center().y), Vec2::splat(U * 2.0));
+    let mark_box = Rect::from_center_size(egui::pos2(rect.right() - GAP - MARK / 2.0, rect.center().y), Vec2::splat(MARK));
     p.rect_stroke(mark_box.shrink(0.5), 0.0, hair(t.ink));
     let s = hair(t.ink);
-    p.line_segment([egui::pos2(mark_box.center().x - U / 2.0, mark_box.center().y), egui::pos2(mark_box.center().x + U / 2.0, mark_box.center().y)], s);
+    let arm = MARK / 2.0 - U / 2.0;
+    p.line_segment([egui::pos2(mark_box.center().x - arm, mark_box.center().y), egui::pos2(mark_box.center().x + arm, mark_box.center().y)], s);
     if !open {
-        p.line_segment([egui::pos2(mark_box.center().x, mark_box.center().y - U / 2.0), egui::pos2(mark_box.center().x, mark_box.center().y + U / 2.0)], s);
+        p.line_segment([egui::pos2(mark_box.center().x, mark_box.center().y - arm), egui::pos2(mark_box.center().x, mark_box.center().y + arm)], s);
     }
     let summary_right = mark_box.left() - GAP;
     let mw = paint_mark(ui, summary_right, rect.center().y, mark, accent);
@@ -751,11 +755,13 @@ mod contrast_tests {
 
     #[test]
     fn grid_constants_are_multiples_of_u() {
-        for (n, v) in [("GAP", GAP), ("PAD", PAD), ("HIT", HIT), ("ROW", ROW)] {
+        for (n, v) in [("GAP", GAP), ("PAD", PAD), ("HIT", HIT), ("ROW", ROW), ("MARK", MARK)] {
             assert!((v / U).fract().abs() < 1e-6, "{n}={v} is not a multiple of {U}");
         }
+        assert_eq!(U, 4.0);
         assert_eq!(HIT, 32.0);
-        assert_eq!(ROW, 48.0);
+        assert_eq!(ROW, 40.0);
+        assert_eq!(MARK, 16.0);
         assert!((FONT_LG / FONT_MD - FONT_MD / FONT_SM).abs() < 1e-6, "type scale is not a single ratio");
         assert!((FONT_MD / FONT_SM - 4.0 / 3.0).abs() < 1e-6);
     }

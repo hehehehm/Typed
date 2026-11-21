@@ -284,8 +284,8 @@ pub struct Config {
     /// Convert single letters toward the focused app's assigned language.
     #[serde(default = "default_convert_single_letters")]
     pub convert_single_letters: bool,
-    /// Fix one-letter typos (поечаток → опечаток). Off by default.
-    #[serde(default)]
+    /// Fix one-letter typos (поечаток → опечаток). On by default.
+    #[serde(default = "default_true")]
     pub fix_typos: bool,
     /// Never autocorrect or hotkey-convert in these apps (substring match, case-insensitive).
     /// Layout memory still applies: assigned defaults are saved and restored on focus.
@@ -362,10 +362,10 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             apps: BTreeMap::new(),
-            auto_learn: false,
+            auto_learn: true,
             autocorrect: true,
             convert_single_letters: default_convert_single_letters(),
-            fix_typos: false,
+            fix_typos: true,
             exception_apps: default_exceptions(),
             hotkey: Hotkey::default(),
             summon_hotkey: default_summon_hotkey(),
@@ -674,7 +674,9 @@ mod tests {
     #[test]
     fn defaults() {
         let c = Config::default();
-        assert!(!c.auto_learn && c.autocorrect);
+        assert!(c.auto_learn && c.autocorrect && c.fix_typos);
+        assert!(c.use_context && c.undo_on_backspace && c.convert_single_letters && c.fix_missing_spaces);
+        assert!(!c.light_theme && !c.run_as_admin && !c.hide_welcome);
         assert!(c.is_exception("org.keepassxc.KeePassXC"));
         assert!(c.is_exception("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"));
         assert!(c.is_exception("gnome-terminal-server"));
@@ -806,5 +808,15 @@ mod tests {
         let off = Config::from_json(r#"{"fix_missing_spaces":false}"#).unwrap();
         assert!(!off.engine_options().fix_missing_spaces);
         assert_eq!(Config::from_json(&off.to_json()).unwrap(), off);
+    }
+
+    #[test]
+    fn feature_toggles_default_on_but_saved_false_is_kept() {
+        let fresh = Config::from_json("{}").unwrap();
+        assert!(fresh.fix_typos && fresh.auto_learn && fresh.use_context);
+        assert!(fresh.autocorrect && fresh.convert_single_letters && fresh.fix_missing_spaces && fresh.undo_on_backspace);
+        let saved = Config::from_json(r#"{"fix_typos":false,"auto_learn":false,"use_context":false}"#).unwrap();
+        assert!(!saved.fix_typos && !saved.auto_learn && !saved.use_context);
+        assert_eq!(Config::from_json(&saved.to_json()).unwrap(), saved);
     }
 }
