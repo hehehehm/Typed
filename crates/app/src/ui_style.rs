@@ -1,40 +1,49 @@
-//! Modular geometric look of the settings window.
+//! Geometric look of the settings window: «Супрематический» pass.
 //!
-//! One base unit `U` = 4 px. Every size, gap and padding is an integer multiple
-//! of `U`. Gutters are always `GAP` (= `U`). Interactive targets stay
-//! `HIT` = 32 px (8`U`). Rows and headers are `ROW` = 40 px (10`U` = hit + two
-//! gutters). Surfaces are monochrome; the five section colours are the only
-//! accents. Hairlines are 1 px and only used where structure (a field, a focused
-//! widget, a segmented cell) needs an edge.
+//! One base unit `U` = 4 px; every size is an integer multiple of `U`.
+//! Composition: each section screen is its home square enlarged into a full-height
+//! colour *spine* on the left (glyph or large numeral, vertical title, five-square
+//! navigation); content sits on the plain ground to the right on a strict column,
+//! separated by 1 px rules, never by grey cards. Controls live in one right column.
 //!
+//! Type scale is one ratio, 4:3: 12 · 16 · 21⅓ · 28⁴⁄₉ · 37.9 · 50.6.
 //! Layout rule: no widget asks for more width than `ui.available_width()`.
-//! Long text is truncated with the full text on hover.
 
 use eframe::egui::{self, Color32, FontId, Rect, Sense, Stroke, Ui, Vec2};
 use std::sync::Arc;
 
 /// Base module, in logical pixels.
 pub const U: f32 = 4.0;
-/// Identical gutter everywhere.
+/// Small gutter (U).
 pub const GAP: f32 = U;
-/// Window and section padding (2U).
+/// Padding (2U).
 pub const PAD: f32 = U * 2.0;
-/// Minimum hit target (8U), kept at 32 px for accessibility.
+/// Content margin from the spine and the window edge (4U).
+pub const MARGIN: f32 = U * 4.0;
+/// Minimum hit target (8U), 32 px for accessibility.
 pub const HIT: f32 = U * 8.0;
-/// List row / header / toggle row height (10U = 4 + 32 + 4).
+/// Row height (10U = 4 + 32 + 4).
 pub const ROW: f32 = HIT + GAP * 2.0;
-/// Visual marks, expanders, nav chips and plus/back arms (4U = 16 px).
+/// Visual marks, nav chips (4U).
 pub const MARK: f32 = U * 4.0;
-/// DIN-rail breaker housing (6U × 8U), centred in a 32×32 hit target.
-pub const BREAKER_W: f32 = U * 6.0;
-pub const BREAKER_H: f32 = HIT;
+/// Width of the colour spine on section screens (24U).
+pub const SPINE: f32 = U * 24.0;
+/// Switch: 2:1 track (12U × 6U) with a 4U square knob.
+pub const SWITCH_W: f32 = U * 12.0;
+pub const SWITCH_H: f32 = U * 6.0;
+pub const KNOB: f32 = U * 4.0;
+/// Keycap height (6U).
+pub const CAP_H: f32 = U * 6.0;
 /// 1 px structural hairline.
 pub const HAIR: f32 = 1.0;
 
-/// Type scale: three sizes, one ratio 4:3 (12 : 16 : 21⅓).
+/// Type scale, ratio 4:3.
 pub const FONT_SM: f32 = 12.0;
 pub const FONT_MD: f32 = FONT_SM * 4.0 / 3.0;
 pub const FONT_LG: f32 = FONT_MD * 4.0 / 3.0;
+pub const FONT_XL: f32 = FONT_LG * 4.0 / 3.0;
+pub const FONT_XXL: f32 = FONT_XL * 4.0 / 3.0;
+pub const FONT_HUGE: f32 = FONT_XXL * 4.0 / 3.0;
 
 /// Section colours (same in both themes; ink on them is `INK_ON_COLOR`).
 pub const YELLOW: Color32 = Color32::from_rgb(0xE8, 0xC4, 0x68); // Программы
@@ -47,6 +56,7 @@ pub const INK_ON_COLOR: Color32 = Color32::from_rgb(0x23, 0x26, 0x2B);
 
 #[derive(Clone, Copy)]
 pub struct Theme {
+    #[allow(dead_code)]
     pub dark: bool,
     pub bg: Color32,
     pub surface: Color32,
@@ -185,17 +195,10 @@ pub fn font_sm() -> FontId {
 pub fn font_md() -> FontId {
     FontId::proportional(FONT_MD)
 }
-pub fn font_lg() -> FontId {
-    FontId::proportional(FONT_LG)
-}
 pub fn font_mono() -> FontId {
     FontId::monospace(FONT_MD)
 }
 
-/// Deprecated alias kept so older call sites compile during the pass; prefer `font_md`.
-pub fn font(size: f32) -> FontId {
-    FontId::proportional(size)
-}
 
 pub fn line_galley(ui: &Ui, text: &str, font: FontId, color: Color32, max_w: f32) -> Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
@@ -207,10 +210,17 @@ pub fn text_w(ui: &Ui, text: &str, font: FontId) -> f32 {
     ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font, Color32::WHITE).size().x)
 }
 
-fn focus_ring(ui: &Ui, rect: Rect, focused: bool) {
+pub fn focus_ring(ui: &Ui, rect: Rect, focused: bool) {
     if focused {
-        ui.painter().rect_stroke(rect.shrink(0.5), 0.0, hair(cur(ui).ink));
+        ui.painter().rect_stroke(rect.expand(1.5), 0.0, hair(cur(ui).ink));
     }
+}
+
+/// Linear blend of two colours, `t` in 0..1.
+pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
 
 pub fn warn(ui: &mut Ui, text: &str) {
@@ -218,19 +228,27 @@ pub fn warn(ui: &mut Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).color(c)).wrap());
 }
 
+/// Small spaced capitals, muted.
 pub fn caption(ui: &mut Ui, text: &str, tip: &str) {
     let c = cur(ui).muted;
-    let r = ui.add(egui::Label::new(egui::RichText::new(text.to_uppercase()).size(FONT_SM).color(c).extra_letter_spacing(0.8)).truncate());
+    let r = ui.add(egui::Label::new(egui::RichText::new(text.to_uppercase()).size(FONT_SM).color(c).extra_letter_spacing(1.2)).truncate());
     if !tip.is_empty() {
         r.on_hover_text(tip);
     }
 }
 
-pub fn block<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+/// Full-width 1 px rule.
+pub fn rule(ui: &mut Ui) {
     let t = cur(ui);
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(egui::vec2(w, HAIR), Sense::hover());
+    ui.painter().rect_filled(r, 0.0, t.line);
+}
+
+/// Plain group: no fill, content padded by GAP vertically.
+pub fn block<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::none()
-        .fill(t.surface)
-        .inner_margin(egui::Margin::same(GAP))
+        .inner_margin(egui::Margin::symmetric(0.0, GAP))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
@@ -238,25 +256,34 @@ pub fn block<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
+/// Flat text tile, 32 high. `fill` transparent = outlined.
 pub fn tile(ui: &mut Ui, text: &str, fill: Color32, fg: Color32) -> egui::Response {
+    let t = cur(ui);
     let f = font_md();
-    let natural = text_w(ui, text, f.clone()) + GAP * 2.0;
+    let natural = text_w(ui, text, f.clone()) + PAD * 2.0;
     let w = natural.min(ui.available_width().max(HIT)).max(HIT);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, HIT), Sense::click());
     if ui.is_rect_visible(rect) {
-        let mut bg = fill;
-        if resp.is_pointer_button_down_on() {
-            bg = shade(fill, -0.12);
-        } else if resp.hovered() {
-            bg = shade(fill, if cur(ui).dark { 0.06 } else { -0.06 });
+        let p = ui.painter();
+        if fill == Color32::TRANSPARENT {
+            if resp.hovered() {
+                p.rect_filled(rect, 0.0, t.surface);
+            }
+            p.rect_stroke(rect.shrink(0.5), 0.0, hair(t.muted));
+        } else {
+            let mut bg = fill;
+            if resp.is_pointer_button_down_on() {
+                bg = shade(fill, -0.12);
+            } else if resp.hovered() {
+                bg = shade(fill, -0.06);
+            }
+            p.rect_filled(rect, 0.0, bg);
         }
-        ui.painter().rect_filled(rect, 0.0, bg);
-        let g = line_galley(ui, text, f, fg, w - GAP * 2.0);
-        ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
+        let g = line_galley(ui, text, f, fg, w - PAD * 2.0);
+        p.galley(rect.center() - g.size() / 2.0, g, fg);
         focus_ring(ui, rect, resp.has_focus());
     }
-    let resp = if natural > w { resp.on_hover_text(text) } else { resp };
-    resp
+    if natural > w { resp.on_hover_text(text) } else { resp }
 }
 
 pub fn primary(ui: &mut Ui, text: &str, accent: Color32) -> egui::Response {
@@ -265,7 +292,24 @@ pub fn primary(ui: &mut Ui, text: &str, accent: Color32) -> egui::Response {
 
 pub fn secondary(ui: &mut Ui, text: &str) -> egui::Response {
     let t = cur(ui);
-    tile(ui, text, t.surface_hover, t.ink)
+    tile(ui, text, Color32::TRANSPARENT, t.ink)
+}
+
+/// Text-only action (no box): ink text, accent underline on hover.
+pub fn link(ui: &mut Ui, text: &str, accent: Color32) -> egui::Response {
+    let t = cur(ui);
+    let f = font_md();
+    let w = (text_w(ui, text, f.clone()) + PAD).min(ui.available_width()).max(HIT);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, HIT), Sense::click());
+    let g = line_galley(ui, text, f, t.ink, w);
+    let pos = egui::pos2(rect.right() - g.size().x - U, rect.center().y - g.size().y / 2.0);
+    let base = pos.y + g.size().y + 1.0;
+    let gw = g.size().x;
+    ui.painter().galley(pos, g, t.ink);
+    let c = if resp.hovered() { accent } else { t.line };
+    ui.painter().line_segment([egui::pos2(pos.x, base), egui::pos2(pos.x + gw, base)], Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, c));
+    focus_ring(ui, rect, resp.has_focus());
+    resp
 }
 
 /// 32×32 `+` square in the section accent colour.
@@ -282,51 +326,38 @@ pub fn plus_square(ui: &mut Ui, accent: Color32, tip: &str) -> egui::Response {
         let p = ui.painter();
         p.rect_filled(rect, 0.0, bg);
         let c = rect.center();
-        let s = hair(INK_ON_COLOR);
         let arm = MARK / 2.0;
-        p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x + arm, c.y)], s);
-        p.line_segment([egui::pos2(c.x, c.y - arm), egui::pos2(c.x, c.y + arm)], s);
+        p.rect_filled(Rect::from_center_size(c, egui::vec2(arm * 2.0, 2.0)), 0.0, INK_ON_COLOR);
+        p.rect_filled(Rect::from_center_size(c, egui::vec2(2.0, arm * 2.0)), 0.0, INK_ON_COLOR);
         focus_ring(ui, rect, resp.has_focus());
     }
     if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
 }
 
-/// DIN-rail breaker: vertical housing, lever UP (accent, «I») when on,
-/// DOWN (neutral grey, «O») when off. `rect` is the hit target (≥ 32×32).
-fn paint_onoff(ui: &Ui, rect: Rect, on: bool, accent: Color32) {
+/// The switch: a 2:1 flat track with a square knob that slides.
+/// Off — ink outline, ink knob on the left. On — accent track, ink knob on the right.
+/// `rect` is the hit target; the track is centred in it.
+pub fn paint_switch(ui: &Ui, rect: Rect, id: egui::Id, on: bool, hovered: bool, accent: Color32) {
     let t = cur(ui);
+    let k = ui.ctx().animate_bool_with_time(id.with("sw"), on, 0.12);
+    let track = Rect::from_center_size(rect.center(), egui::vec2(SWITCH_W, SWITCH_H));
     let p = ui.painter();
-    let w = BREAKER_W.min(rect.width());
-    let h = BREAKER_H.min(rect.height()).max(MARK);
-    let house = Rect::from_center_size(rect.center(), Vec2::new(w, h));
-    p.rect_filled(house, 0.0, t.field);
-    p.rect_stroke(house.shrink(0.5), 0.0, hair(t.line));
-    let slot = Rect::from_center_size(house.center(), Vec2::new(w - U * 2.0, h - U * 2.0));
-    p.rect_stroke(slot.shrink(0.5), 0.0, hair(t.line));
-    let lever_h = (slot.height() / 2.0).max(U);
-    let lever = if on {
-        Rect::from_min_size(slot.min, Vec2::new(slot.width(), lever_h))
-    } else {
-        Rect::from_min_size(egui::pos2(slot.min.x, slot.max.y - lever_h), Vec2::new(slot.width(), lever_h))
-    };
     let enabled = ui.is_enabled();
-    // Off paddle is a mid-dark grey (≥ 3:1 vs the housing) so the down position
-    // reads as a solid block in both themes; marks on it are light (≥ 4.5:1).
-    let off_fill = if t.dark {
-        Color32::from_rgb(0x6A, 0x6E, 0x76)
-    } else {
-        Color32::from_rgb(0x70, 0x6D, 0x68)
-    };
-    let light_mark = Color32::from_rgb(0xF7, 0xF6, 0xF2);
-    let fill = if on && enabled { accent } else { off_fill };
-    p.rect_filled(lever, 0.0, fill);
-    let c = lever.center();
-    if on {
-        let mark = if enabled { INK_ON_COLOR } else { light_mark };
-        p.rect_filled(Rect::from_center_size(c, Vec2::new(U, U * 2.0)), 0.0, mark);
-    } else {
-        p.rect_stroke(Rect::from_center_size(c, Vec2::new(U * 2.0, U * 2.0)).shrink(0.5), 0.0, hair(light_mark));
+    let accent = if enabled { accent } else { t.muted };
+    let off_fill = if hovered { t.surface } else { t.bg };
+    let on_fill = if hovered { shade(accent, -0.06) } else { accent };
+    p.rect_filled(track, 0.0, mix(off_fill, on_fill, k));
+    if k < 1.0 {
+        let c = mix(t.ink, on_fill, k);
+        p.rect_stroke(track.shrink(0.5), 0.0, hair(c));
     }
+    let inset = (SWITCH_H - KNOB) / 2.0;
+    let x0 = track.left() + inset;
+    let x1 = track.right() - inset - KNOB;
+    let x = x0 + (x1 - x0) * k;
+    let knob = Rect::from_min_size(egui::pos2(x, track.top() + inset), Vec2::splat(KNOB));
+    let knob_c = mix(t.ink, INK_ON_COLOR, k);
+    p.rect_filled(knob, 0.0, knob_c);
 }
 
 fn state_tip(on: bool, tip: &str) -> String {
@@ -334,22 +365,18 @@ fn state_tip(on: bool, tip: &str) -> String {
     if tip.is_empty() { state.into() } else { format!("{tip} · {state}") }
 }
 
-/// Full-width row, 10U tall, one-word label + DIN-rail breaker (32×32 hit).
+/// Ruled row: label left, switch in the right column; the whole row toggles.
 pub fn toggle_row(ui: &mut Ui, on: &mut bool, title: &str, tip: &str, accent: Color32) -> bool {
     let t = cur(ui);
     let id = ui.next_auto_id();
-    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered()) && ui.is_enabled();
-    let fill = if hovered { t.surface_hover } else { t.surface };
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, fill);
     let resp = ui.interact(rect, id, Sense::click());
-    let pad = GAP;
-    let label_w = (rect.width() - pad * 3.0 - HIT).max(U);
+    let label_w = (rect.width() - SWITCH_W - GAP).max(U);
     let g = line_galley(ui, title, font_md(), t.ink, label_w);
-    ui.painter().galley(egui::pos2(rect.left() + pad, rect.center().y - g.size().y / 2.0), g, t.ink);
-    let box_r = Rect::from_center_size(egui::pos2(rect.right() - pad - HIT / 2.0, rect.center().y), Vec2::splat(HIT));
-    paint_onoff(ui, box_r, *on, accent);
-    focus_ring(ui, rect, resp.has_focus());
+    ui.painter().galley(egui::pos2(rect.left(), rect.center().y - g.size().y / 2.0), g, t.ink);
+    let sw = Rect::from_min_size(egui::pos2(rect.right() - SWITCH_W, rect.center().y - HIT / 2.0), egui::vec2(SWITCH_W, HIT));
+    paint_switch(ui, sw, id, *on, resp.hovered(), accent);
+    focus_ring(ui, Rect::from_center_size(sw.center(), egui::vec2(SWITCH_W, SWITCH_H)), resp.has_focus());
     let resp = resp.on_hover_text(state_tip(*on, tip));
     if resp.clicked() {
         *on = !*on;
@@ -359,116 +386,132 @@ pub fn toggle_row(ui: &mut Ui, on: &mut bool, title: &str, tip: &str, accent: Co
     }
 }
 
-pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str, &str)], accent: Color32) -> bool {
-    let n = options.len().max(1) as f32;
-    let w = snap((ui.available_width() - GAP * (n - 1.0)) / n, HIT);
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = GAP;
-        for &(v, name, tip) in options {
-            let r = choice_tile(ui, *value == v, name, w, accent);
-            let clicked = r.clicked();
-            if !tip.is_empty() {
-                r.on_hover_text(tip);
-            }
-            if clicked && *value != v {
-                *value = v;
-                changed = true;
-            }
-        }
-    });
-    changed
-}
-
-/// Equal-width cells of a 3-way (or N-way) choice, height `HIT`, no gap (hairlines between).
+/// Compact flag of cells (e.g. EN · RU · ∅): outlined strip, the chosen cell filled.
 pub fn segment_strip<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str, &str)], total_w: f32, accent: Color32) -> bool {
     let n = options.len().max(1);
     let w = (total_w / n as f32).max(HIT);
     let h = HIT;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w * n as f32, h), Sense::hover());
     let t = cur(ui);
-    let p = ui.painter();
     let mut changed = false;
     for (i, &(v, name, tip)) in options.iter().enumerate() {
         let cell = Rect::from_min_size(egui::pos2(rect.left() + i as f32 * w, rect.top()), egui::vec2(w, h));
         let resp = ui.interact(cell, ui.id().with(("seg", i, name)), Sense::click());
         let selected = *value == v;
+        let p = ui.painter();
         if selected {
             p.rect_filled(cell, 0.0, accent);
         } else if resp.hovered() {
-            p.rect_filled(cell, 0.0, t.surface_hover);
-        } else {
             p.rect_filled(cell, 0.0, t.surface);
         }
-        if i > 0 && !selected {
-            p.line_segment([cell.left_top(), cell.left_bottom()], hair(t.line));
-        }
-        let fg = if selected { INK_ON_COLOR } else { t.ink };
-        let g = line_galley(ui, name, font_md(), fg, w - U);
+        let fg = if selected { INK_ON_COLOR } else { t.muted };
+        let g = line_galley(ui, name, font_sm(), fg, w - U);
         p.galley(cell.center() - g.size() / 2.0, g, fg);
         focus_ring(ui, cell, resp.has_focus());
-        let resp = resp.on_hover_text(if tip.is_empty() { name } else { tip });
+        let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
+        if resp.clicked() && !selected {
+            *value = v;
+            changed = true;
+        }
+    }
+    ui.painter().rect_stroke(rect.shrink(0.5), 0.0, hair(t.line));
+    changed
+}
+
+/// Three-step geometric scale: squares of 2U, 4U, 6U on one baseline;
+/// steps up to the chosen one are filled with the accent.
+pub fn scale3<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str, &str); 3], accent: Color32) -> bool {
+    let t = cur(ui);
+    let mut changed = false;
+    let chosen = options.iter().position(|o| o.0 == *value).unwrap_or(1);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(HIT * 3.0, HIT), Sense::hover());
+    for (i, &(v, name, tip)) in options.iter().enumerate() {
+        let cell = Rect::from_min_size(egui::pos2(rect.left() + i as f32 * HIT, rect.top()), Vec2::splat(HIT));
+        let resp = ui.interact(cell, ui.id().with(("scale", i, name)), Sense::click());
+        let side = U * 2.0 * (i as f32 + 1.0);
+        // Equal pitch (one hit target per step); the strip is shifted so the
+        // largest square ends flush with the right column.
+        let shift = (HIT - U * 6.0) / 2.0;
+        let sq = Rect::from_min_size(egui::pos2(cell.center().x + shift - side / 2.0, cell.bottom() - U - side), Vec2::splat(side));
+        let p = ui.painter();
+        if i <= chosen {
+            p.rect_filled(sq, 0.0, if resp.hovered() { shade(accent, -0.08) } else { accent });
+        } else {
+            p.rect_stroke(sq.shrink(0.5), 0.0, hair(if resp.hovered() { t.ink } else { t.muted }));
+        }
+        focus_ring(ui, cell, resp.has_focus());
+        let resp = resp.on_hover_text(format!("{name} — {tip}"));
         if resp.clicked() && *value != v {
             *value = v;
             changed = true;
         }
     }
-    p.rect_stroke(rect.shrink(0.5), 0.0, hair(t.line));
     changed
 }
 
-pub fn choice_tile(ui: &mut Ui, selected: bool, text: &str, w: f32, accent: Color32) -> egui::Response {
+/// Flat keycaps for a combo such as `Ctrl+Alt+Z`, right-aligned in `max_w`.
+/// Returns the clickable response covering all caps.
+pub fn keycaps(ui: &mut Ui, combo: &str, max_w: f32, active: bool, accent: Color32) -> egui::Response {
     let t = cur(ui);
-    let f = font_md();
-    let natural = text_w(ui, text, f.clone()) + GAP * 2.0;
-    let w = if w > 0.0 { w } else { natural }.min(ui.available_width().max(HIT)).max(HIT);
+    let f = font_sm();
+    let parts: Vec<&str> = if combo.contains('+') && combo.len() > 1 { combo.split('+').collect() } else { vec![combo] };
+    let pad = PAD;
+    let widths: Vec<f32> = parts.iter().map(|s| (text_w(ui, s, f.clone()) + pad * 2.0).max(CAP_H)).collect();
+    let total: f32 = widths.iter().sum::<f32>() + GAP * (parts.len().saturating_sub(1) as f32);
+    let fits = total <= max_w;
+    let w = if fits { total } else { max_w.max(HIT) };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, HIT), Sense::click());
-    if ui.is_rect_visible(rect) {
-        let bg = if selected {
-            accent
-        } else if resp.hovered() {
-            t.surface_hover
-        } else {
-            t.surface
-        };
-        ui.painter().rect_filled(rect, 0.0, bg);
-        let fg = if selected { INK_ON_COLOR } else { t.ink };
-        let g = line_galley(ui, text, f, fg, w - GAP);
-        ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
-        focus_ring(ui, rect, resp.has_focus());
-    }
-    if natural > w {
-        resp.on_hover_text(text)
+    let p = ui.painter();
+    let fill = if active { accent } else if resp.hovered() { t.surface } else { t.bg };
+    let fg = if active { INK_ON_COLOR } else { t.ink };
+    let edge = if active { INK_ON_COLOR } else { t.muted };
+    let cap = |r: Rect, s: &str, max: f32| {
+        p.rect_filled(r, 0.0, fill);
+        p.rect_stroke(r.shrink(0.5), 0.0, hair(edge));
+        // Keycap base: a 2 px foot.
+        p.rect_filled(Rect::from_min_max(egui::pos2(r.left(), r.bottom() - 2.0), r.max), 0.0, edge);
+        let g = line_galley(ui, s, f.clone(), fg, max);
+        p.galley(egui::pos2(r.center().x - g.size().x / 2.0, r.center().y - 1.0 - g.size().y / 2.0), g, fg);
+    };
+    let top = rect.center().y - CAP_H / 2.0;
+    if fits {
+        let mut x = rect.left();
+        for (s, cw) in parts.iter().zip(&widths) {
+            cap(Rect::from_min_size(egui::pos2(x, top), egui::vec2(*cw, CAP_H)), s, cw - pad);
+            x += cw + GAP;
+        }
     } else {
-        resp
+        cap(Rect::from_min_size(egui::pos2(rect.left(), top), egui::vec2(w, CAP_H)), combo, w - pad);
     }
+    focus_ring(ui, rect, resp.has_focus());
+    if fits { resp } else { resp.on_hover_text(combo) }
 }
 
+/// Text field: no box, a baseline rule; focus thickens it to 2 px accent.
 pub fn field(ui: &mut Ui, text: &mut String, hint_text: &str, width: f32, password: bool, accent: Color32) -> egui::Response {
     let t = cur(ui);
     let w = width.min(ui.available_width()).max(HIT);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, HIT), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, t.field);
     let resp = ui.put(
         rect,
         egui::TextEdit::singleline(text)
-            .hint_text(hint_text)
+            .hint_text(egui::RichText::new(hint_text).color(t.muted))
             .password(password)
             .frame(false)
-            .margin(egui::vec2(GAP, GAP))
-            .desired_width(w - GAP * 2.0)
+            .margin(egui::vec2(0.0, GAP))
+            .desired_width(w)
             .vertical_align(egui::Align::Center),
     );
-    let stroke = if resp.has_focus() { hair(accent) } else { hair(t.line) };
-    ui.painter().rect_stroke(rect.shrink(0.5), 0.0, stroke);
+    let (c, h) = if resp.has_focus() { (accent, 2.0) } else if resp.hovered() { (t.ink, 1.0) } else { (t.muted, 1.0) };
+    ui.painter().rect_filled(Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - h), rect.max), 0.0, c);
     resp
 }
 
 pub fn add_line_plus(ui: &mut Ui, text: &mut String, hint_text: &str, tip: &str, accent: Color32) -> bool {
     let mut go = false;
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = GAP;
-        let fw = (ui.available_width() - HIT - GAP).max(HIT * 2.0);
+        ui.spacing_mut().item_spacing.x = PAD;
+        let fw = (ui.available_width() - HIT - PAD).max(HIT * 2.0);
         let r = field(ui, text, hint_text, fw, false, accent);
         go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         go |= plus_square(ui, accent, tip).clicked();
@@ -484,51 +527,69 @@ pub fn password_bg(ui: &mut Ui, text: &mut String, hint_text: &str, width: f32, 
     field(ui, text, hint_text, width, true, accent)
 }
 
+/// Row: label left, actions right (right-to-left), 32 high. `fill` ignored except
+/// TRANSPARENT = no vertical padding; otherwise a ruled 40 px row.
 pub fn row(ui: &mut Ui, fill: Color32, label: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui)) -> egui::Response {
-    let margin = if fill == Color32::TRANSPARENT {
-        egui::Margin::ZERO
-    } else {
-        egui::Margin::symmetric(GAP, GAP)
-    };
-    egui::Frame::none()
-        .fill(fill)
+    let ruled = fill != Color32::TRANSPARENT;
+    let margin = if ruled { egui::Margin::symmetric(0.0, GAP) } else { egui::Margin::ZERO };
+    let r = egui::Frame::none()
         .inner_margin(margin)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.set_min_height(HIT);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = GAP;
+                    ui.spacing_mut().item_spacing.x = PAD;
                     actions(ui);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = PAD;
                         ui.set_max_width(ui.available_width());
                         label(ui);
                     });
                 });
             });
         })
-        .response
+        .response;
+    r
 }
 
+/// 40 px row (rules between rows are drawn by the caller with `rule`).
+pub fn line_row(ui: &mut Ui, label: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui)) -> egui::Response {
+    let t = cur(ui);
+    row(ui, t.bg, label, actions)
+}
+
+/// Group heading: spaced caption, a count in tabular figures, optional `+`.
+pub fn heading(ui: &mut Ui, text: &str, count: usize, tip: &str) {
+    let t = cur(ui);
+    ui.horizontal(|ui| {
+        ui.set_min_height(HIT);
+        caption(ui, text, tip);
+        ui.label(egui::RichText::new(count.to_string()).size(FONT_SM).color(t.ink).monospace());
+    });
+}
+
+/// Word token: outlined, mono word, muted tag, trash on the right.
 pub fn chip(ui: &mut Ui, word: &str, tag: Option<&str>) -> bool {
     let t = cur(ui);
     let wf = font_mono();
     let tf = font_sm();
     let word_w = text_w(ui, word, wf.clone());
-    let tag_w = tag.map_or(0.0, |s| text_w(ui, s, tf.clone()) + GAP);
+    let tag_w = tag.map_or(0.0, |s| text_w(ui, s, tf.clone()) + PAD);
     let icon = HIT;
-    let pad = GAP;
+    let pad = PAD;
     let fixed = pad + tag_w + icon;
     let max_w = ui.max_rect().width().max(fixed + HIT);
     let shown = word_w.min(max_w - fixed);
-    let width = snap(fixed + shown, HIT);
+    let width = (fixed + shown).ceil();
+    let width = (width / U).ceil() * U;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, HIT), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 0.0, t.surface);
+    p.rect_stroke(rect.shrink(0.5), 0.0, hair(t.line));
     let g = line_galley(ui, word, wf, t.ink, shown + 0.5);
     p.galley(egui::pos2(rect.left() + pad, rect.center().y - g.size().y / 2.0), g, t.ink);
     if let Some(s) = tag {
-        p.text(egui::pos2(rect.left() + pad + shown + U, rect.center().y), egui::Align2::LEFT_CENTER, s, tf, t.muted);
+        p.text(egui::pos2(rect.left() + pad + shown + PAD, rect.center().y), egui::Align2::LEFT_CENTER, s, tf, t.muted);
     }
     if shown < word_w {
         resp.on_hover_text(word);
@@ -538,16 +599,17 @@ pub fn chip(ui: &mut Ui, word: &str, tag: Option<&str>) -> bool {
     crate::icons::delete_icon_button(&mut child).clicked()
 }
 
+/// Switch followed by its label.
 pub fn check(ui: &mut Ui, on: &mut bool, text: &str, accent: Color32) -> bool {
     let t = cur(ui);
     let f = font_md();
-    let w = (HIT + GAP + text_w(ui, text, f.clone())).min(ui.available_width()).max(HIT);
+    let w = (SWITCH_W + PAD + text_w(ui, text, f.clone())).min(ui.available_width()).max(SWITCH_W);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, HIT), Sense::click());
-    let b = Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - HIT / 2.0), Vec2::splat(HIT));
-    paint_onoff(ui, b, *on, accent);
-    let g = line_galley(ui, text, f, t.ink, w - HIT - GAP);
-    ui.painter().galley(egui::pos2(b.right() + GAP, rect.center().y - g.size().y / 2.0), g, t.ink);
-    focus_ring(ui, rect, resp.has_focus());
+    let b = Rect::from_min_size(rect.min, egui::vec2(SWITCH_W, HIT));
+    paint_switch(ui, b, resp.id, *on, resp.hovered(), accent);
+    let g = line_galley(ui, text, f, t.ink, w - SWITCH_W - PAD);
+    ui.painter().galley(egui::pos2(b.right() + PAD, rect.center().y - g.size().y / 2.0), g, t.ink);
+    focus_ring(ui, Rect::from_center_size(b.center(), egui::vec2(SWITCH_W, SWITCH_H)), resp.has_focus());
     let resp = resp.on_hover_text(state_tip(*on, text));
     if resp.clicked() {
         *on = !*on;
@@ -557,146 +619,23 @@ pub fn check(ui: &mut Ui, on: &mut bool, text: &str, accent: Color32) -> bool {
     }
 }
 
-pub fn back_square(ui: &mut Ui, color: Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(HIT), Sense::click());
-    let bg = if resp.is_pointer_button_down_on() {
-        shade(color, -0.22)
-    } else if resp.hovered() {
-        shade(color, -0.16)
-    } else {
-        shade(color, -0.10)
-    };
-    let p = ui.painter();
-    p.rect_filled(rect, 0.0, bg);
+/// Text painted rotated 90° counter-clockwise (reads bottom → top), its left end at `bottom_left`.
+pub fn vertical_text(p: &egui::Painter, bottom_left: egui::Pos2, galley: Arc<egui::Galley>, color: Color32) {
+    let shape = egui::epaint::TextShape::new(bottom_left, galley, color).with_angle(-std::f32::consts::FRAC_PI_2);
+    p.add(shape);
+}
+
+/// Back arrow in ink, 2 px strokes, inside a 32×32 hit target.
+pub fn paint_back_arrow(p: &egui::Painter, rect: Rect, hovered: bool) {
     let c = rect.center();
-    let s = hair(INK_ON_COLOR);
+    let s = Stroke::new(2.0, INK_ON_COLOR);
     let arm = MARK / 2.0;
+    if hovered {
+        p.rect_stroke(rect.shrink(0.5), 0.0, hair(INK_ON_COLOR));
+    }
     p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x + arm, c.y)], s);
-    p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x, c.y - arm)], s);
-    p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x, c.y + arm)], s);
-    focus_ring(ui, rect, resp.has_focus());
-    resp.on_hover_text("Назад (Esc)")
-}
-
-/// Geometric summary drawn on a group header (values, not labels).
-pub enum Mark {
-    None,
-    Label(&'static str),
-    Value(String),
-    /// `on` filled squares out of `of` (e.g. 2 of 3).
-    Count { on: u8, of: u8 },
-    /// DIN-rail breaker: lever up = on, down = off.
-    Toggle(bool),
-    /// Half-filled square: left half = light, right half = dark.
-    Theme { light: bool },
-}
-
-fn mark_width(ui: &Ui, mark: &Mark) -> f32 {
-    match mark {
-        Mark::None => 0.0,
-        Mark::Label(s) => text_w(ui, s, font_md()).max(U),
-        Mark::Value(s) => text_w(ui, s, font_mono()).max(U),
-        Mark::Count { of, .. } => *of as f32 * MARK + (*of as f32 - 1.0).max(0.0) * GAP,
-        Mark::Toggle(_) => BREAKER_W,
-        Mark::Theme { .. } => MARK,
-    }
-}
-
-fn mark_tip(mark: &Mark) -> String {
-    match mark {
-        Mark::None => String::new(),
-        Mark::Label(s) => (*s).to_string(),
-        Mark::Value(s) => s.clone(),
-        Mark::Count { on, of } => format!("{on} из {of}"),
-        Mark::Toggle(true) => "вкл".into(),
-        Mark::Toggle(false) => "выкл".into(),
-        Mark::Theme { light: true } => "светлая".into(),
-        Mark::Theme { light: false } => "тёмная".into(),
-    }
-}
-
-fn paint_mark(ui: &Ui, right: f32, cy: f32, mark: &Mark, accent: Color32) -> f32 {
-    let t = cur(ui);
-    let p = ui.painter();
-    let w = mark_width(ui, mark);
-    let x0 = right - w;
-    match mark {
-        Mark::None => {}
-        Mark::Label(s) => {
-            let g = line_galley(ui, s, font_md(), t.muted, w);
-            p.galley(egui::pos2(x0, cy - g.size().y / 2.0), g, t.muted);
-        }
-        Mark::Value(s) => {
-            let g = line_galley(ui, s, font_mono(), t.muted, w);
-            p.galley(egui::pos2(x0, cy - g.size().y / 2.0), g, t.muted);
-        }
-        Mark::Count { on, of } => {
-            let side = MARK;
-            let step = side + GAP;
-            for i in 0..*of {
-                let x = x0 + i as f32 * step;
-                let r = Rect::from_min_size(egui::pos2(x, cy - side / 2.0), Vec2::splat(side));
-                if i < *on {
-                    p.rect_filled(r, 0.0, accent);
-                } else {
-                    p.rect_stroke(r.shrink(0.5), 0.0, hair(t.muted));
-                }
-            }
-        }
-        Mark::Toggle(on) => {
-            let r = Rect::from_center_size(egui::pos2(right - BREAKER_W / 2.0, cy), Vec2::new(BREAKER_W, BREAKER_H));
-            paint_onoff(ui, r, *on, accent);
-        }
-        Mark::Theme { light } => {
-            let r = Rect::from_center_size(egui::pos2(right - MARK / 2.0, cy), Vec2::splat(MARK));
-            p.rect_stroke(r.shrink(0.5), 0.0, hair(t.muted));
-            let half = if *light {
-                Rect::from_min_max(r.min, egui::pos2(r.center().x, r.max.y))
-            } else {
-                Rect::from_min_max(egui::pos2(r.center().x, r.min.y), r.max)
-            };
-            p.rect_filled(half.shrink(1.0), 0.0, t.ink);
-        }
-    }
-    w
-}
-
-pub fn group_header(ui: &mut Ui, open: bool, title: &str, mark: &Mark, accent: Color32) -> egui::Response {
-    let t = cur(ui);
-    let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, ROW), Sense::click());
-    let p = ui.painter();
-    p.rect_filled(rect, 0.0, if resp.hovered() { t.surface_hover } else { t.surface });
-    // Expand marker: a 2U square. Closed = plus of two hairlines; open = one hairline (minus).
-    let mark_box = Rect::from_center_size(egui::pos2(rect.right() - GAP - MARK / 2.0, rect.center().y), Vec2::splat(MARK));
-    p.rect_stroke(mark_box.shrink(0.5), 0.0, hair(t.ink));
-    let s = hair(t.ink);
-    let arm = MARK / 2.0 - U / 2.0;
-    p.line_segment([egui::pos2(mark_box.center().x - arm, mark_box.center().y), egui::pos2(mark_box.center().x + arm, mark_box.center().y)], s);
-    if !open {
-        p.line_segment([egui::pos2(mark_box.center().x, mark_box.center().y - arm), egui::pos2(mark_box.center().x, mark_box.center().y + arm)], s);
-    }
-    let summary_right = mark_box.left() - GAP;
-    let mw = paint_mark(ui, summary_right, rect.center().y, mark, accent);
-    let title_x = rect.left() + GAP;
-    let title_max = (summary_right - mw - GAP - title_x).max(U);
-    let tg = line_galley(ui, title, font_md(), t.ink, title_max);
-    p.galley(egui::pos2(title_x, rect.center().y - tg.size().y / 2.0), tg, t.ink);
-    focus_ring(ui, rect, resp.has_focus());
-    let tip = mark_tip(mark);
-    if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
-}
-
-/// 32×32 letter square used as an app glyph when no icon is available.
-pub fn letter_square(ui: &mut Ui, letter: &str, tip: &str) {
-    let t = cur(ui);
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(HIT), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, t.surface_hover);
-    let g = line_galley(ui, letter, font_md(), t.ink, HIT - U);
-    ui.painter().galley(rect.center() - g.size() / 2.0, g, t.ink);
-    if !tip.is_empty() {
-        resp.on_hover_text(tip);
-    }
+    p.line_segment([egui::pos2(c.x - arm + 0.7, c.y), egui::pos2(c.x - arm / 4.0, c.y - arm * 0.75)], s);
+    p.line_segment([egui::pos2(c.x - arm + 0.7, c.y), egui::pos2(c.x - arm / 4.0, c.y + arm * 0.75)], s);
 }
 
 /// Crisp geometric symbol painted inside each of the 5 home squares (`idx` 0..5).
@@ -744,6 +683,7 @@ pub fn paint_home_icon(p: &egui::Painter, c: egui::Pos2, u: f32, idx: usize) {
 }
 
 /// sRGB relative luminance (WCAG 2).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn relative_luminance(c: Color32) -> f32 {
     fn lin(v: u8) -> f32 {
         let x = v as f32 / 255.0;
@@ -752,6 +692,7 @@ pub fn relative_luminance(c: Color32) -> f32 {
     0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
     let (l1, l2) = (relative_luminance(a), relative_luminance(b));
     let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
@@ -794,16 +735,19 @@ mod contrast_tests {
 
     #[test]
     fn grid_constants_are_multiples_of_u() {
-        for (n, v) in [("GAP", GAP), ("PAD", PAD), ("HIT", HIT), ("ROW", ROW), ("MARK", MARK), ("BREAKER_W", BREAKER_W), ("BREAKER_H", BREAKER_H)] {
+        for (n, v) in [("GAP", GAP), ("PAD", PAD), ("MARGIN", MARGIN), ("HIT", HIT), ("ROW", ROW), ("MARK", MARK), ("SPINE", SPINE), ("SWITCH_W", SWITCH_W), ("SWITCH_H", SWITCH_H), ("KNOB", KNOB), ("CAP_H", CAP_H)] {
             assert!((v / U).fract().abs() < 1e-6, "{n}={v} is not a multiple of {U}");
         }
         assert_eq!(U, 4.0);
         assert_eq!(HIT, 32.0);
         assert_eq!(ROW, 40.0);
         assert_eq!(MARK, 16.0);
-        assert_eq!(BREAKER_W, 24.0);
-        assert_eq!(BREAKER_H, 32.0);
+        assert_eq!(SWITCH_W, 2.0 * SWITCH_H, "switch track is 2:1");
+        assert_eq!(SWITCH_H - KNOB, 2.0 * U, "knob inset is one U on each side");
         assert!((FONT_LG / FONT_MD - FONT_MD / FONT_SM).abs() < 1e-6, "type scale is not a single ratio");
         assert!((FONT_MD / FONT_SM - 4.0 / 3.0).abs() < 1e-6);
+        for (a, b) in [(FONT_LG, FONT_XL), (FONT_XL, FONT_XXL), (FONT_XXL, FONT_HUGE)] {
+            assert!((b / a - 4.0 / 3.0).abs() < 1e-6);
+        }
     }
 }

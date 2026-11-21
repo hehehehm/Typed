@@ -94,7 +94,7 @@ impl IconCache {
         }
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         let p = ui.painter();
-        p.rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill);
+        p.rect_stroke(rect.shrink(0.5), 0.0, egui::Stroke::new(1.0, crate::ui_style::cur(ui).line));
         let letter = basename(id).chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
         p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(crate::ui_style::FONT_MD), ui.visuals().text_color());
     }

@@ -20,14 +20,24 @@ use zeroize::{Zeroize, Zeroizing};
 /// The section colour (lime square on the home screen).
 const ACCENT: egui::Color32 = st::LIME;
 
-/// Caption with a count on the left, an add tile on the right.
-fn heading_row(ui: &mut egui::Ui, caption: &str, button: &str, clicked: &mut bool) {
+/// Ruled group heading: spaced caption + count on the left, `+` square on the right.
+fn heading_row(ui: &mut egui::Ui, caption: &str, count: usize, tip: &str, clicked: &mut bool) {
+    let t = st::cur(ui);
+    ui.add_space(st::MARGIN);
     st::row(
         ui,
         egui::Color32::TRANSPARENT,
-        |ui| st::caption(ui, caption, ""),
-        |ui| *clicked = st::primary(ui, button, ACCENT).clicked(),
+        |ui| {
+            st::caption(ui, caption, "");
+            ui.label(egui::RichText::new(count.to_string()).size(st::FONT_SM).monospace().color(t.ink));
+        },
+        |ui| *clicked = st::plus_square(ui, ACCENT, tip).clicked(),
     );
+}
+
+/// 1 px rule under an entry.
+fn entry_rule(ui: &mut egui::Ui) {
+    st::rule(ui);
 }
 
 enum Edit {
@@ -80,6 +90,11 @@ impl VaultUi {
         v.path = path;
         v.vault = vault;
         v
+    }
+
+    /// Number of saved entries while open (logins + cards); `None` while locked.
+    pub fn entry_count(&self) -> Option<usize> {
+        self.vault.as_ref().map(|v| v.data.logins.len() + v.data.cards.len())
     }
 
     /// One-word state for the home square and the section header.
@@ -184,7 +199,7 @@ impl VaultUi {
                     ui,
                     egui::Color32::TRANSPARENT,
                     |ui| {
-                        let r = st::primary(ui, "Заблокировать", ACCENT);
+                        let r = st::secondary(ui, "Заблокировать");
                         let tip = format!("Файл: {}", self.path.display());
                         if r.on_hover_text(tip).clicked() {
                             self.lock();
@@ -194,8 +209,8 @@ impl VaultUi {
                     |ui| {
                         ui.scope(|ui| {
                             let v = &mut ui.visuals_mut().widgets;
-                            v.inactive.weak_bg_fill = t.field;
-                            v.inactive.bg_stroke = egui::Stroke::new(1.0, t.line);
+                            v.inactive.weak_bg_fill = t.bg;
+                            v.inactive.bg_stroke = egui::Stroke::new(1.0, t.muted);
                             v.hovered.bg_stroke = egui::Stroke::new(1.0, t.muted);
                             cfg_changed |= ui
                                 .add_sized([st::ROW, st::HIT], egui::DragValue::new(idle_minutes).range(1..=120))
@@ -283,7 +298,8 @@ impl VaultUi {
 
         // ---- logins
         let mut add_login = false;
-        heading_row(ui, "Логины", "+ Логин", &mut add_login);
+        let n_logins = self.vault.as_ref().map_or(0, |v| v.data.logins.len());
+        heading_row(ui, "Логины", n_logins, "Добавить логин", &mut add_login);
         if add_login {
             let mut l = Login::default();
             if let Some(a) = &focus_app {
@@ -297,7 +313,10 @@ impl VaultUi {
         order.sort_by_key(|&i| !is_match(i));
         let matches: Vec<bool> = order.iter().map(|&i| is_match(i)).collect();
         let mut action: Option<(usize, &'static str)> = None;
-        for (&i, &m) in order.iter().zip(&matches) {
+        for (k, (&i, &m)) in order.iter().zip(&matches).enumerate() {
+            if k > 0 {
+                entry_rule(ui);
+            }
             let l = &self.vault.as_ref().unwrap().data.logins[i];
             let revealed = self.reveal == Some(i);
             st::block(ui, |ui| {
@@ -369,12 +388,15 @@ impl VaultUi {
         // ---- cards
         let n = self.vault.as_ref().unwrap().data.cards.len();
         let mut add_card = false;
-        heading_row(ui, "Карты", "+ Карта", &mut add_card);
+        heading_row(ui, "Карты", n, "Добавить карту", &mut add_card);
         if add_card {
             self.edit = Edit::Card(None, Card::default());
         }
         let mut caction: Option<(usize, &'static str)> = None;
         for i in 0..n {
+            if i > 0 {
+                entry_rule(ui);
+            }
             let c = &self.vault.as_ref().unwrap().data.cards[i];
             st::block(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = st::GAP;

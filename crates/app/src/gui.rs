@@ -44,7 +44,7 @@ const IDLE_FRAME: Duration = Duration::from_millis(250);
 /// Home window: five squares in one short row.
 const HOME_INNER: [f32; 2] = [512.0, 192.0];
 /// Section window: settings (and other tabs) fit this height without scrolling.
-const SECTION_INNER: [f32; 2] = [512.0, 416.0];
+const SECTION_INNER: [f32; 2] = [512.0, if cfg!(windows) { 456.0 } else { 416.0 }];
 
 pub(crate) fn hide_window(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -102,6 +102,7 @@ struct App {
 type AdminJobResult = Arc<Mutex<Option<Result<(), String>>>>;
 
 #[derive(PartialEq, Clone, Copy)]
+#[repr(u8)]
 enum HotkeySlot {
     Convert,
     Summon,
@@ -200,33 +201,35 @@ impl App {
         let accent = Tab::Apps.color();
         let t = st::cur(ui);
         let mut changed = false;
+        let flag = |mode: &mut AppMode, ui: &mut egui::Ui, off_tip: &str| {
+            st::segment_strip(
+                ui,
+                mode,
+                &[
+                    (AppMode::En, "EN", "Английская раскладка"),
+                    (AppMode::Ru, "RU", "Русская раскладка"),
+                    (AppMode::Off, "∅", off_tip),
+                ],
+                st::HIT * 3.0,
+                accent,
+            )
+        };
 
-        // Add row: [ program / path ] [EN|RU|∅] [+] — all 32 px, gutters of 8.
-        st::block(ui, |ui| {
-            let mut go = false;
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = st::GAP;
-                let seg_w = st::HIT * 3.0;
-                let fw = (ui.available_width() - seg_w - st::HIT - st::GAP * 2.0).max(st::HIT * 2.0);
-                let r = st::field_bg(ui, &mut self.app_draft, "программа / путь", fw, accent);
-                go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                go |= st::segment_strip(
-                    ui,
-                    &mut self.app_mode,
-                    &[
-                        (AppMode::En, "EN", "Английская раскладка"),
-                        (AppMode::Ru, "RU", "Русская раскладка"),
-                        (AppMode::Off, "∅", "Выкл — исключить из автоисправления"),
-                    ],
-                    seg_w,
-                    accent,
-                );
-                go |= st::plus_square(ui, accent, "Добавить").clicked();
-            });
-            if go {
-                changed |= self.add_app_entry();
-            }
+        // Add line: [ program / path ________ ] [EN|RU|∅] [+]
+        let mut go = false;
+        ui.horizontal(|ui| {
+            ui.set_min_height(st::ROW);
+            ui.spacing_mut().item_spacing.x = st::PAD;
+            let fw = (ui.available_width() - st::HIT * 4.0 - st::PAD * 2.0).max(st::HIT * 2.0);
+            let r = st::field_bg(ui, &mut self.app_draft, "программа или путь", fw, accent);
+            go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            go |= flag(&mut self.app_mode, ui, "Выкл — исключить из автоисправления");
+            go |= st::plus_square(ui, accent, "Добавить").clicked();
         });
+        if go {
+            changed |= self.add_app_entry();
+        }
+        ui.add_space(st::PAD);
 
         // Merged per-app list: apps (EN / RU) first, then exception_apps (Выкл).
         let mut entries: Vec<(String, AppMode)> = self
@@ -242,7 +245,6 @@ impl App {
             })
             .collect();
         entries.sort_by(|a, b| basename(&a.0).to_lowercase().cmp(&basename(&b.0).to_lowercase()).then_with(|| a.0.cmp(&b.0)));
-
         for item in &self.cfg.exception_apps {
             let lower = item.to_lowercase();
             if !entries.iter().any(|(k, _)| k.to_lowercase() == lower) {
@@ -251,32 +253,25 @@ impl App {
         }
 
         let mut act: Option<(String, Option<AppMode>)> = None;
-        for (id, cur) in entries {
+        for (k, (id, cur)) in entries.into_iter().enumerate() {
+            if k > 0 {
+                st::rule(ui);
+            }
             let icons = &mut self.icons;
             let mut mode = cur;
-            st::row(
+            st::line_row(
                 ui,
-                t.surface,
                 |ui| {
                     icons.show(ui, &id);
-                    ui.add(egui::Label::new(egui::RichText::new(&id).monospace().color(t.ink)).truncate())
-                        .on_hover_text(&id);
+                    let name = basename(&id);
+                    let shown = if name.is_empty() { id.as_str() } else { name };
+                    ui.add(egui::Label::new(egui::RichText::new(shown).color(t.ink)).truncate()).on_hover_text(&id);
                 },
                 |ui| {
                     if delete_icon_button(ui).clicked() {
                         act = Some((id.clone(), None));
                     }
-                    if st::segment_strip(
-                        ui,
-                        &mut mode,
-                        &[
-                            (AppMode::En, "EN", "Английская раскладка"),
-                            (AppMode::Ru, "RU", "Русская раскладка"),
-                            (AppMode::Off, "∅", "Выкл — автоисправление выключено"),
-                        ],
-                        st::HIT * 3.0,
-                        accent,
-                    ) {
+                    if flag(&mut mode, ui, "Выкл — автоисправление выключено") {
                         act = Some((id.clone(), Some(mode)));
                     }
                 },
@@ -298,58 +293,53 @@ impl App {
     fn words_tab(&mut self, ui: &mut egui::Ui) {
         let accent = Tab::Words.color();
         let mut changed = false;
-        st::block(ui, |ui| {
-            if st::add_line_plus(
-                ui,
-                &mut self.word_draft,
-                "слово",
-                "Добавить слово (без пробелов; можно цифры и знаки)",
-                accent,
-            ) {
+        egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::GAP)).show(ui, |ui| {
+            if st::add_line_plus(ui, &mut self.word_draft, "слово", "Добавить слово (без пробелов; можно цифры и знаки)", accent) {
                 changed |= self.add_custom_word();
             }
         });
-        let words = self.cfg.custom_words.clone();
-        if !words.is_empty() {
-            st::caption(ui, "Свои", "Приоритет выше встроенного словаря");
+
+        let groups: [(&str, &str, u8); 3] = [
+            ("Свои", "Приоритет выше встроенного словаря", 0),
+            ("Пропуск", "Слова, исправление которых вы отменили дважды", 1),
+            ("Без опечаток", "Отменена только правка опечаток; раскладка исправляется", 2),
+        ];
+        for (title, tip, which) in groups {
+            let words = match which {
+                0 => self.cfg.custom_words.clone(),
+                1 => self.cfg.never_correct.clone(),
+                _ => self.cfg.never_typo_fix.clone(),
+            };
+            if words.is_empty() {
+                continue;
+            }
+            ui.add_space(st::MARGIN);
+            st::heading(ui, title, words.len(), tip);
             let mut remove_at = None;
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
                 for (i, w) in words.iter().enumerate() {
-                    let lang = match userdict::classify(w) {
-                        Ok(l) => lang_name(l),
-                        Err(_) => "?",
+                    let tag = if which == 0 {
+                        Some(match userdict::classify(w) {
+                            Ok(l) => lang_name(l),
+                            Err(_) => "?",
+                        })
+                    } else {
+                        None
                     };
-                    if st::chip(ui, w, Some(lang)) {
+                    if st::chip(ui, w, tag) {
                         remove_at = Some(i);
                     }
                 }
             });
             if let Some(i) = remove_at {
-                if i < self.cfg.custom_words.len() {
-                    self.cfg.custom_words.remove(i);
-                    changed = true;
-                }
-            }
-        }
-
-        let never = self.cfg.never_correct.clone();
-        if !never.is_empty() {
-            st::caption(ui, "Пропуск", "Слова, исправление которых вы отменили дважды");
-            if let Some(i) = chips(ui, &never) {
-                if i < self.cfg.never_correct.len() {
-                    self.cfg.never_correct.remove(i);
-                    changed = true;
-                }
-            }
-        }
-
-        let never_typo = self.cfg.never_typo_fix.clone();
-        if !never_typo.is_empty() {
-            st::caption(ui, "Без опечаток", "Отменена только правка опечаток; раскладка исправляется");
-            if let Some(i) = chips(ui, &never_typo) {
-                if i < self.cfg.never_typo_fix.len() {
-                    self.cfg.never_typo_fix.remove(i);
+                let list = match which {
+                    0 => &mut self.cfg.custom_words,
+                    1 => &mut self.cfg.never_correct,
+                    _ => &mut self.cfg.never_typo_fix,
+                };
+                if i < list.len() {
+                    list.remove(i);
                     changed = true;
                 }
             }
@@ -384,25 +374,38 @@ impl App {
         let capturing = self.capturing_hotkey == Some(slot);
         let mut picked = None;
         let mut start_capture = false;
-        st::row(
+        let label_w = st::text_w(ui, label, st::font_md()) + st::PAD * 2.0;
+        st::line_row(
             ui,
-            t.surface,
             |ui| {
                 ui.add(egui::Label::new(egui::RichText::new(label).color(t.ink)).truncate());
             },
             |ui| {
+                let max = (ui.available_width() - label_w).max(st::HIT * 2.0);
                 if capturing {
-                    st::primary(ui, "Нажмите…", accent).on_hover_text("Esc — отмена");
+                    st::keycaps(ui, "Нажмите сочетание", max, true, accent).on_hover_text("Esc — отмена");
                     return;
                 }
-                if st::secondary(ui, "…").on_hover_text("Назначить").clicked() {
-                    start_capture = true;
+                let shown = presets.iter().find(|p| p.0 == current).map(|p| p.1.to_string()).unwrap_or_else(|| current.to_string());
+                let r = st::keycaps(ui, &shown, max, false, accent).on_hover_text("Выбрать или назначить");
+                let popup_id = ui.make_persistent_id(("hotkey", slot as u8));
+                if r.clicked() {
+                    ui.memory_mut(|m| m.toggle_popup(popup_id));
                 }
-                for &(h, name) in presets.iter().rev() {
-                    if st::choice_tile(ui, current == h, name, 0.0, accent).on_hover_text(name).clicked() {
-                        picked = Some(h);
+                egui::popup::popup_below_widget(ui, popup_id, &r, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                    ui.set_min_width(st::HIT * 6.0);
+                    ui.spacing_mut().item_spacing.y = st::GAP;
+                    for &(h, name) in presets {
+                        ui.horizontal(|ui| {
+                            if st::keycaps(ui, name, st::HIT * 8.0, current == h, accent).clicked() {
+                                picked = Some(h);
+                            }
+                        });
                     }
-                }
+                    if st::link(ui, "Назначить…", accent).clicked() {
+                        start_capture = true;
+                    }
+                });
             },
         );
         if start_capture {
@@ -420,37 +423,43 @@ impl App {
     }
 
     fn donate_tab(&mut self, ui: &mut egui::Ui) {
-        st::block(ui, |ui| {
-            st::row(
-                ui,
-                egui::Color32::TRANSPARENT,
-                |ui| {
-                    ui.label("Boosty");
-                },
-                |ui| {
-                    if st::primary(ui, "Открыть", Tab::Donate.color()).on_hover_text(BOOSTY_URL).clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(BOOSTY_URL));
-                    }
-                },
-            );
-        });
+        let t = st::cur(ui);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        st::line_row(
+            ui,
+            |ui| {
+                ui.label(egui::RichText::new("Boosty").color(t.ink));
+            },
+            |ui| {
+                if st::primary(ui, "Открыть", Tab::Donate.color()).on_hover_text(BOOSTY_URL).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(BOOSTY_URL));
+                }
+            },
+        );
         self.address_block(ui, "USDT · TRC-20", USDT_TRC20, "Только сеть TRON (TRC-20)");
         self.address_block(ui, "GRAM · TON", GRAM_TON, "Только сеть TON");
     }
 
     fn address_block(&mut self, ui: &mut egui::Ui, title: &str, addr: &'static str, tip: &str) {
+        let t = st::cur(ui);
         let tex = self
             .qr
             .entry(addr)
             .or_insert_with(|| ui.ctx().load_texture(format!("qr-{addr}"), qr_image(addr), egui::TextureOptions::NEAREST))
             .clone();
-        st::block(ui, |ui| {
+        let side = st::U * 22.0;
+        st::rule(ui);
+        egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::PAD)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
-                ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(92.0, 92.0))).on_hover_text(tip);
+                ui.spacing_mut().item_spacing.x = st::MARGIN;
+                ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(side, side))).on_hover_text(tip);
                 ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = st::GAP;
                     ui.set_max_width(ui.available_width());
-                    ui.label(title).on_hover_text(tip);
-                    ui.add(egui::Label::new(egui::RichText::new(addr).monospace().small()).wrap_mode(egui::TextWrapMode::Wrap));
+                    ui.label(egui::RichText::new(title).color(t.ink)).on_hover_text(tip);
+                    ui.add(egui::Label::new(egui::RichText::new(addr).monospace().size(st::FONT_SM).color(t.muted)).wrap_mode(egui::TextWrapMode::Wrap));
+                    ui.add_space(st::GAP);
                     if st::secondary(ui, "Копировать").on_hover_text(tip).clicked() {
                         ui.ctx().copy_text(addr.to_owned());
                         self.status = "Скопировано".into();
@@ -465,60 +474,50 @@ impl App {
         let t = st::cur(ui);
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut changed = false;
-        changed |= st::toggle_row(
-            ui,
-            &mut self.cfg.autocorrect,
-            "Автоисправление",
-            "Исправляет слова не в той раскладке (зуфсу → peace)",
-            accent,
-        );
 
+        // I. Correction.
+        changed |= st::toggle_row(ui, &mut self.cfg.autocorrect, "Автоисправление", "Исправляет слова не в той раскладке (зуфсу → peace)", accent);
+        st::rule(ui);
         let typo_opts = [
             (TypoLevel::Cautious, level_name(TypoLevel::Cautious), "1 ошибка от 4 букв, 2 от 8, только частые"),
             (TypoLevel::Normal, level_name(TypoLevel::Normal), "1 от 3, 2 от 5, 3 от 9; раскладка + опечатка"),
             (TypoLevel::Aggressive, level_name(TypoLevel::Aggressive), "Смелее при близких вариантах"),
         ];
         let mut typo = self.cfg.typo_level;
-        st::row(
+        st::line_row(
             ui,
-            t.surface,
             |ui| {
-                ui.add(egui::Label::new(egui::RichText::new("Смелость").color(t.ink)))
+                ui.add(egui::Label::new(egui::RichText::new("Смелость").color(t.ink)).truncate())
                     .on_hover_text("Насколько смело исправлять опечатки");
             },
             |ui| {
-                let label_need = st::text_w(ui, "Смелость", st::font_md()) + st::GAP * 2.0;
-                let w = (ui.available_width() - label_need).max(st::HIT * 3.0);
-                if st::segment_strip(ui, &mut typo, &typo_opts, w, accent) {
-                    changed = true;
-                }
+                let enabled = self.cfg.autocorrect;
+                ui.add_enabled_ui(enabled, |ui| {
+                    if st::scale3(ui, &mut typo, &typo_opts, accent) {
+                        changed = true;
+                    }
+                });
+                ui.label(egui::RichText::new(level_name(typo)).size(st::FONT_SM).color(t.muted));
             },
         );
-        if typo != self.cfg.typo_level {
-            self.cfg.typo_level = typo;
-        }
+        self.cfg.typo_level = typo;
 
-        ui.add_space(st::GAP);
+        // II. Keys.
+        ui.add_space(st::MARGIN);
         self.hotkey_picker(
             ui,
             HotkeySlot::Convert,
             "Конвертация",
-            &[
-                (Hotkey::Pause, "Pause"),
-                (Hotkey::ShiftShift, "Shift+Shift"),
-                (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
-            ],
+            &[(Hotkey::Pause, "Pause"), (Hotkey::ShiftShift, "Shift+Shift"), (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space")],
         );
+        st::rule(ui);
         self.hotkey_picker(
             ui,
             HotkeySlot::Summon,
             "Окно",
-            &[
-                (Hotkey::CTRL_SHIFT_V, "Ctrl+Shift+V"),
-                (Hotkey::CTRL_SHIFT_K, "Ctrl+Shift+K"),
-                (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
-            ],
+            &[(Hotkey::CTRL_SHIFT_V, "Ctrl+Shift+V"), (Hotkey::CTRL_SHIFT_K, "Ctrl+Shift+K"), (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space")],
         );
+        st::rule(ui);
         self.hotkey_picker(
             ui,
             HotkeySlot::Undo,
@@ -529,37 +528,38 @@ impl App {
                 (Hotkey::SHIFT_PAUSE, "Shift+Pause"),
             ],
         );
-        if self.cfg.hotkey == self.cfg.summon_hotkey
-            || self.cfg.undo_hotkey == self.cfg.hotkey
-            || self.cfg.undo_hotkey == self.cfg.summon_hotkey
-        {
+        if self.cfg.hotkey == self.cfg.summon_hotkey || self.cfg.undo_hotkey == self.cfg.hotkey || self.cfg.undo_hotkey == self.cfg.summon_hotkey {
+            ui.add_space(st::GAP);
             st::warn(ui, "Совпадение сочетаний");
         }
 
-        ui.add_space(st::GAP);
+        // III. Look.
+        ui.add_space(st::MARGIN);
         changed |= st::toggle_row(ui, &mut self.cfg.light_theme, "Светлая тема", "", accent);
-        changed |= self.logo_picker(ui);
+        st::rule(ui);
+        changed |= self.wallpaper_row(ui);
 
-        st::row(
+        #[cfg(windows)]
+        {
+            st::rule(ui);
+            self.admin_section(ui);
+        }
+
+        // IV. About.
+        ui.add_space(st::MARGIN);
+        st::line_row(
             ui,
-            t.surface,
             |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(env!("CARGO_PKG_VERSION")).color(t.muted)))
+                ui.label(egui::RichText::new(env!("CARGO_PKG_VERSION")).color(t.muted).monospace())
                     .on_hover_text(format!("{}", self.path.display()));
             },
             |ui| {
-                if st::secondary(ui, "Приветствие").clicked() {
+                if st::link(ui, "Приветствие", accent).clicked() {
                     self.welcome_dont_show = self.cfg.hide_welcome;
                     self.welcome_open = true;
                 }
             },
         );
-
-        #[cfg(windows)]
-        {
-            ui.add_space(st::GAP);
-            self.admin_section(ui);
-        }
 
         if changed {
             self.save();
@@ -683,6 +683,7 @@ impl App {
             .clone()
     }
 
+    #[allow(dead_code)]
     fn faded_logo_texture(&mut self, ctx: &egui::Context, style: LogoStyle) -> egui::TextureHandle {
         let i = crate::logos::index(style) as usize;
         self.logo_fade_textures[i]
@@ -717,7 +718,26 @@ impl App {
         }
     }
 
-    /// Home: five identical colour squares in one horizontal row, snapped to `U`.
+    /// The live number a section stands for (none = draw its glyph).
+    fn section_count(&self, tab: Tab) -> Option<usize> {
+        match tab {
+            Tab::Apps => {
+                let extra = self
+                    .cfg
+                    .exception_apps
+                    .iter()
+                    .filter(|e| !self.cfg.apps.keys().any(|k| k.eq_ignore_ascii_case(e)))
+                    .count();
+                Some(self.cfg.apps.len() + extra)
+            }
+            Tab::Words => Some(self.cfg.custom_words.len()),
+            Tab::Vault => self.vault.entry_count(),
+            _ => None,
+        }
+    }
+
+    /// Home: five identical colour squares in one row. Each square: glyph top-left,
+    /// live number top-right, caption bottom-left — the same three anchors everywhere.
     fn home(&mut self, ui: &mut egui::Ui) {
         let full = ui.available_width();
         let g = st::GAP;
@@ -727,30 +747,52 @@ impl App {
         let top_pad = st::snap(((ui.available_height() - s) * 0.5).max(0.0), 0.0);
         let origin = ui.cursor().min + egui::vec2(x_pad, top_pad);
         let mut clicked = None;
+        let caption_font = st::font_sm();
+        // One inset for all five: PAD if the longest caption fits, else GAP.
+        let longest = SECTIONS.iter().map(|t| st::text_w(ui, t.title(), caption_font.clone())).fold(0.0_f32, f32::max);
+        let pad = if longest + st::U <= s - st::PAD * 2.0 { st::PAD } else { st::GAP };
         for (i, &tab) in SECTIONS.iter().enumerate() {
             let x = origin.x + i as f32 * (s + g);
             let rect = egui::Rect::from_min_size(egui::pos2(x, origin.y), egui::vec2(s, s));
             let resp = ui.interact(rect, ui.id().with(("square", i)), egui::Sense::click());
             let color = tab.color();
             let p = ui.painter();
-            p.rect_filled(rect, 0.0, if resp.is_pointer_button_down_on() { st::shade(color, -0.1) } else { color });
+            let fill = if resp.is_pointer_button_down_on() {
+                st::shade(color, -0.1)
+            } else if resp.hovered() {
+                st::shade(color, -0.05)
+            } else {
+                color
+            };
+            p.rect_filled(rect, 0.0, fill);
             if resp.has_focus() {
-                p.rect_stroke(rect.shrink(0.5), 0.0, st::hair(st::INK_ON_COLOR));
+                p.rect_stroke(rect.shrink(1.5), 0.0, egui::Stroke::new(2.0, st::INK_ON_COLOR));
             }
-            let u = st::snap((s * 0.16).max(st::MARK / 2.0), st::MARK / 2.0).min(st::MARK);
-            st::paint_home_icon(p, egui::pos2(rect.center().x, rect.top() + s * 0.42), u, i);
-            let pad = st::GAP;
-            let max_w = (s - pad * 2.0).max(st::U);
-            // One size for all five labels: the largest scale step that fits the longest word.
-            let longest = SECTIONS.iter().map(|tab| st::text_w(ui, tab.title(), st::font_md())).fold(0.0_f32, f32::max);
-            let font = if longest > max_w { st::font_sm() } else { st::font_md() };
-            let lg = st::line_galley(ui, tab.title(), font, st::INK_ON_COLOR, max_w);
-            p.galley(egui::pos2(rect.center().x - lg.size().x / 2.0, rect.bottom() - pad - lg.size().y), lg, st::INK_ON_COLOR);
+            // Glyph: a 6U field at the top-left.
+            let u = st::snap(s * 0.14, st::U * 2.0).min(st::MARK);
+            let gc = egui::pos2(rect.left() + pad + u, rect.top() + pad + u);
+            st::paint_home_icon(p, gc, u, i);
+            // Live number, top-right, on the glyph's centre line.
+            if let Some(n) = self.section_count(tab) {
+                let ng = st::line_galley(ui, &n.to_string(), egui::FontId::proportional(st::FONT_LG), st::INK_ON_COLOR, s / 2.0);
+                p.galley(egui::pos2(rect.right() - pad - ng.size().x, gc.y - ng.size().y / 2.0), ng, st::INK_ON_COLOR);
+            } else if tab == Tab::Settings {
+                // Micro-state: a tiny switch showing Автоисправление.
+                let tr = egui::Rect::from_min_size(egui::pos2(rect.right() - pad - st::U * 6.0, gc.y - st::U * 1.5), egui::vec2(st::U * 6.0, st::U * 3.0));
+                if self.cfg.autocorrect {
+                    p.rect_filled(tr, 0.0, st::INK_ON_COLOR);
+                    p.rect_filled(egui::Rect::from_min_size(egui::pos2(tr.right() - st::U * 2.5, tr.top() + st::U * 0.5), egui::vec2(st::U * 2.0, st::U * 2.0)), 0.0, color);
+                } else {
+                    p.rect_stroke(tr.shrink(0.5), 0.0, st::hair(st::INK_ON_COLOR));
+                    p.rect_filled(egui::Rect::from_min_size(egui::pos2(tr.left() + st::U * 0.5, tr.top() + st::U * 0.5), egui::vec2(st::U * 2.0, st::U * 2.0)), 0.0, st::INK_ON_COLOR);
+                }
+            }
+            let lg = st::line_galley(ui, tab.title(), caption_font.clone(), st::INK_ON_COLOR, s - pad * 2.0);
+            p.galley(egui::pos2(rect.left() + pad, rect.bottom() - pad - lg.size().y), lg, st::INK_ON_COLOR);
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            let tip = self.section_tooltip(tab);
-            let resp = resp.on_hover_text(tip);
+            let resp = resp.on_hover_text(self.section_tooltip(tab));
             if resp.clicked() {
                 clicked = Some(tab);
             }
@@ -764,126 +806,186 @@ impl App {
         }
     }
 
-    fn section_header(&mut self, ui: &mut egui::Ui) {
+    /// Left colour spine: the section's home square, stretched to full height.
+    /// Back arrow · large number or glyph · vertical title · five-square navigation.
+    fn spine(&mut self, ui: &mut egui::Ui) {
         let tab = self.tab;
-        let color = tab.color();
+        let rect = ui.max_rect();
+        let p = ui.painter().clone();
+        let pad = st::PAD;
         let mut target = None;
-        ui.horizontal(|ui| {
-            ui.set_min_height(st::ROW);
-            ui.spacing_mut().item_spacing.x = st::GAP;
-            if st::back_square(ui, color).clicked() {
-                target = Some(Tab::Home);
-            }
-            let nav_w = 5.0 * st::HIT;
-            let title_w = (ui.available_width() - nav_w - st::GAP).max(st::HIT);
-            ui.add_sized(
-                [title_w, st::HIT],
-                egui::Label::new(egui::RichText::new(tab.title()).size(st::FONT_LG).color(st::INK_ON_COLOR)).truncate(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                for &other in SECTIONS.iter().rev() {
-                    // 32×32 hit target, 16×16 colour square centred in it.
-                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(st::HIT, st::HIT), egui::Sense::click());
-                    let vis = egui::Rect::from_center_size(rect.center(), egui::vec2(st::MARK, st::MARK));
-                    let p = ui.painter();
-                    let fill = if other == tab { st::INK_ON_COLOR } else { other.color() };
-                    p.rect_filled(vis, 0.0, fill);
-                    if resp.has_focus() {
-                        p.rect_stroke(rect.shrink(0.5), 0.0, st::hair(st::INK_ON_COLOR));
-                    }
-                    if resp.on_hover_text(other.title()).clicked() {
-                        target = Some(other);
-                    }
+
+        let back = egui::Rect::from_min_size(rect.min + egui::vec2(pad, st::MARGIN + st::GAP), egui::Vec2::splat(st::HIT));
+        let r = ui.interact(back, ui.id().with("back"), egui::Sense::click());
+        st::paint_back_arrow(&p, back, r.hovered() || r.has_focus());
+        if r.on_hover_text("Назад (Esc)").clicked() {
+            target = Some(Tab::Home);
+        }
+
+        // Figure: the live number in the largest step that fits, else the glyph.
+        let fig_top = back.bottom() + pad * 2.0;
+        let inner_w = rect.width() - pad * 2.0;
+        let fig = egui::Rect::from_min_size(egui::pos2(rect.left() + pad, fig_top), egui::vec2(inner_w, st::U * 14.0));
+        if let Some(n) = self.section_count(tab) {
+            let text = n.to_string();
+            let mut size = st::FONT_HUGE;
+            for s in [st::FONT_HUGE, st::FONT_XXL, st::FONT_XL] {
+                size = s;
+                if st::text_w(ui, &text, egui::FontId::proportional(s)) <= inner_w {
+                    break;
                 }
-            });
-        });
+            }
+            let g = st::line_galley(ui, &text, egui::FontId::proportional(size), st::INK_ON_COLOR, inner_w);
+            p.galley(egui::pos2(fig.left() - size * 0.04, fig.top() - size * 0.12), g, st::INK_ON_COLOR);
+        } else {
+            let idx = SECTIONS.iter().position(|&s| s == tab).unwrap_or(0);
+            let u = st::U * 6.0;
+            st::paint_home_icon(&p, egui::pos2(fig.left() + u, fig.top() + u), u, idx);
+        }
+        ui.interact(fig, ui.id().with("fig"), egui::Sense::hover()).on_hover_text(self.section_tooltip(tab));
+
+        // Navigation column, bottom-right: 32×32 targets, 16 px squares; the current one is a hollow 24 px frame.
+        let col_x = rect.right() - pad - st::HIT;
+        let y0 = rect.bottom() - pad - st::HIT * SECTIONS.len() as f32;
+        for (i, &other) in SECTIONS.iter().enumerate() {
+            let cell = egui::Rect::from_min_size(egui::pos2(col_x, y0 + i as f32 * st::HIT), egui::Vec2::splat(st::HIT));
+            let resp = ui.interact(cell, ui.id().with(("nav", i)), egui::Sense::click());
+            if other == tab {
+                let fr = egui::Rect::from_center_size(cell.center(), egui::Vec2::splat(st::U * 6.0));
+                p.rect_stroke(fr.shrink(1.0), 0.0, egui::Stroke::new(2.0, st::INK_ON_COLOR));
+            } else {
+                let side = if resp.hovered() { st::U * 5.0 } else { st::MARK };
+                let sq = egui::Rect::from_center_size(cell.center(), egui::Vec2::splat(side));
+                p.rect_filled(sq, 0.0, other.color());
+                p.rect_stroke(sq.shrink(0.5), 0.0, st::hair(st::shade(tab.color(), -0.25)));
+            }
+            if resp.has_focus() {
+                p.rect_stroke(cell.shrink(0.5), 0.0, st::hair(st::INK_ON_COLOR));
+            }
+            if resp.on_hover_text(other.title()).clicked() {
+                target = Some(other);
+            }
+        }
+
+        // Vertical title, reading upward, its start on the navigation's baseline.
+        let font = egui::FontId::proportional(st::FONT_XL);
+        let max_len = rect.bottom() - pad - (fig.bottom() + pad);
+        let g = st::line_galley(ui, tab.title(), font, st::INK_ON_COLOR, max_len);
+        st::vertical_text(&p, egui::pos2(rect.left() + pad - st::U * 0.5, rect.bottom() - pad), g, st::INK_ON_COLOR);
+
         if let Some(t) = target {
             self.go(t);
         }
     }
 
-    fn logo_picker(&mut self, ui: &mut egui::Ui) -> bool {
+    /// «Обои»: three 32 px wallpaper squares in the right column.
+    fn wallpaper_row(&mut self, ui: &mut egui::Ui) -> bool {
+        let t = st::cur(ui);
         let mut changed = false;
-        const TILE: f32 = st::HIT;
-        let spacing = st::GAP * 2.0;
-        let col = |ui: &egui::Ui, style| TILE.max(st::text_w(ui, crate::logos::label(style), st::font_sm()));
-        let total: f32 = LogoStyle::ALL.iter().map(|&s| col(ui, s)).sum::<f32>() + spacing * (LogoStyle::ALL.len().saturating_sub(1) as f32);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = spacing;
-            ui.add_space((ui.available_width() - total).max(0.0));
-            for style in LogoStyle::ALL {
-                let col_w = col(ui, style);
-                ui.allocate_ui_with_layout(egui::vec2(col_w, st::HIT + st::GAP + st::FONT_SM + st::U), egui::Layout::top_down(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.y = st::GAP;
-                    let tex = self.logo_texture(ui.ctx(), style);
-                    let img = egui::Image::new(&tex)
-                        .fit_to_exact_size(egui::vec2(TILE, TILE))
-                        .maintain_aspect_ratio(false)
-                        .rounding(0.0)
-                        .sense(egui::Sense::click());
-                    let response = ui.add(img);
-                    let selected = self.cfg.logo_style == style;
-                    if selected {
-                        let bar = egui::Rect::from_min_size(egui::pos2(response.rect.left(), response.rect.bottom()), egui::vec2(TILE, st::HAIR));
-                        ui.painter().rect_filled(bar, 0.0, st::cur(ui).ink);
-                    }
-                    if response.clicked() && !selected {
-                        self.cfg.logo_style = style;
+        st::line_row(
+            ui,
+            |ui| {
+                ui.label(egui::RichText::new("Обои").color(t.ink));
+            },
+            |ui| {
+                ui.spacing_mut().item_spacing.x = st::PAD;
+                for &style in LogoStyle::ALL.iter().rev() {
+                    if self.wallpaper_tile(ui, style, st::HIT) {
                         changed = true;
-                        self.apply_logo(ui.ctx());
                     }
-                    ui.label(egui::RichText::new(crate::logos::label(style)).size(st::FONT_SM));
-                });
-            }
-        });
+                }
+            },
+        );
         changed
     }
 
+    fn wallpaper_tile(&mut self, ui: &mut egui::Ui, style: LogoStyle, side: f32) -> bool {
+        let t = st::cur(ui);
+        let tex = self.logo_texture(ui.ctx(), style);
+        let (rect, resp) = ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::click());
+        let selected = self.cfg.logo_style == style;
+        egui::Image::new(&tex).maintain_aspect_ratio(false).rounding(0.0).paint_at(ui, rect);
+        if selected {
+            ui.painter().rect_stroke(rect.expand(2.0), 0.0, egui::Stroke::new(2.0, t.ink));
+        } else if resp.hovered() {
+            ui.painter().rect_stroke(rect.expand(1.5), 0.0, st::hair(t.muted));
+        }
+        if resp.has_focus() {
+            ui.painter().rect_stroke(rect.expand(4.5), 0.0, st::hair(t.ink));
+        }
+        let resp = resp.on_hover_text(crate::logos::label(style));
+        if resp.clicked() && !selected {
+            self.cfg.logo_style = style;
+            self.apply_logo(ui.ctx());
+            return true;
+        }
+        false
+    }
+
+    /// Welcome: a poster. Five squares, the name in the largest step, the chosen
+    /// wallpaper as a big square on the right, the three wallpapers to pick, and a footer.
     fn welcome_panel(&mut self, ui: &mut egui::Ui) {
-        let heading = egui::Color32::from_rgb(18, 42, 48);
-        let body = egui::Color32::from_rgb(36, 58, 64);
-        ui.visuals_mut().override_text_color = Some(body);
-        ui.visuals_mut().dark_mode = false;
-        ui.vertical_centered(|ui| {
-            let tex = self.faded_logo_texture(ui.ctx(), self.cfg.logo_style);
-            let size = tex.size_vec2();
-            if size.x > 0.0 && size.y > 0.0 {
-                let logo_w = ui.available_width().min(200.0);
-                let logo_h = logo_w * (size.y / size.x);
-                ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(logo_w, logo_h)).rounding(0.0));
-            }
-            ui.add_space(st::GAP);
-            let chip = st::MARK;
-            let (strip, _) = ui.allocate_exact_size(egui::vec2(5.0 * chip + 4.0 * st::GAP, chip), egui::Sense::hover());
-            for (i, tab) in SECTIONS.iter().enumerate() {
-                let x = strip.left() + i as f32 * (chip + st::GAP);
-                ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(chip, chip)), 0.0, tab.color());
-            }
-            ui.add_space(st::GAP);
-            ui.label(egui::RichText::new("Typed").color(heading).size(st::FONT_LG));
-            ui.label(egui::RichText::new(concat!("ver. ", env!("CARGO_PKG_VERSION"))).color(body).size(st::FONT_SM));
-            ui.add_space(st::GAP);
-            if self.logo_picker(ui) {
-                self.save();
-            }
-            ui.add_space(st::GAP);
+        let t = st::cur(ui);
+        let full = ui.max_rect();
+        let m = st::MARGIN;
+        let footer = m + (st::ROW + st::PAD) + st::HAIR * 2.0 + st::PAD + st::HIT + m;
+        let art = st::snap((full.width() * 0.56).min(full.height() - m - footer), st::HIT * 3.0);
+        let art_rect = egui::Rect::from_min_size(egui::pos2(full.right() - m - art, full.top() + m), egui::Vec2::splat(art));
+        let tex = self.logo_texture(ui.ctx(), self.cfg.logo_style);
+        egui::Image::new(&tex).maintain_aspect_ratio(false).rounding(0.0).paint_at(ui, art_rect);
+
+        let left = full.left() + m;
+        let col_w = (art_rect.left() - m - left).max(st::HIT * 3.0);
+        let p = ui.painter().clone();
+        let chip = st::U * 6.0;
+        for (i, tab) in SECTIONS.iter().enumerate() {
+            let x = left + i as f32 * (chip + st::GAP);
+            p.rect_filled(egui::Rect::from_min_size(egui::pos2(x, full.top() + m), egui::Vec2::splat(chip)), 0.0, tab.color());
+        }
+        let name_top = full.top() + m + chip + st::PAD * 2.0;
+        let g = st::line_galley(ui, APP_NAME, egui::FontId::proportional(st::FONT_HUGE), t.ink, col_w);
+        let name_h = g.size().y;
+        p.galley(egui::pos2(left - st::U * 0.5, name_top), g, t.ink);
+        let vg = st::line_galley(ui, concat!("ver. ", env!("CARGO_PKG_VERSION")), st::font_sm(), t.muted, col_w);
+        p.galley(egui::pos2(left, name_top + name_h), vg, t.muted);
+
+        // Wallpapers row under the poster.
+        let row_top = art_rect.bottom() + m;
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(egui::pos2(left, row_top), egui::pos2(full.right() - m, full.bottom()))));
+        child.spacing_mut().item_spacing = egui::vec2(st::PAD, 0.0);
+        st::rule(&mut child);
+        let mut changed = false;
+        child.horizontal(|ui| {
+            ui.set_min_height(st::ROW + st::PAD);
+            ui.label(egui::RichText::new("Обои").color(t.ink));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = st::PAD;
+                for &style in LogoStyle::ALL.iter().rev() {
+                    changed |= self.wallpaper_tile(ui, style, st::U * 10.0);
+                }
+            });
         });
-        let next_w = st::text_w(ui, "Далее", st::font_md()) + st::PAD * 2.0;
-        let chk_w = st::HIT + st::text_w(ui, "Не показывать", st::font_md());
-        let footer_w = next_w + st::PAD * 2.0 + chk_w;
-        ui.horizontal(|ui| {
-            ui.add_space(((ui.available_width() - footer_w) * 0.5).max(0.0));
-            if st::primary(ui, "Далее", st::CYAN).clicked() {
-                self.welcome_open = false;
-                self.cfg.welcome_gen = layout_keeper_core::config::CURRENT_WELCOME_GEN;
-                self.cfg.hide_welcome = self.welcome_dont_show;
-                self.save();
-            }
-            ui.add_space(st::PAD);
+        st::rule(&mut child);
+        child.add_space(st::PAD);
+        let mut next = false;
+        child.horizontal(|ui| {
+            ui.set_min_height(st::HIT);
             st::check(ui, &mut self.welcome_dont_show, "Не показывать", st::CYAN);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                next = st::primary(ui, "Далее", st::CYAN).clicked();
+            });
         });
-        ui.add_space(st::GAP);
+        let used = child.min_rect();
+        ui.allocate_rect(egui::Rect::from_min_max(full.min, egui::pos2(full.right(), used.bottom() + m)), egui::Sense::hover());
+        if changed {
+            self.save();
+        }
+        if next {
+            self.welcome_open = false;
+            self.cfg.welcome_gen = layout_keeper_core::config::CURRENT_WELCOME_GEN;
+            self.cfg.hide_welcome = self.welcome_dont_show;
+            self.save();
+        }
     }
 
     fn draw(&mut self, ctx: &egui::Context, focus: &Focus) {
@@ -899,30 +1001,37 @@ impl App {
         }
         let t = st::theme(!self.cfg.light_theme);
         if self.welcome_open {
+            let lt = st::theme(false);
+            st::apply(ctx, false, st::CYAN);
             egui::CentralPanel::default()
-                .frame(egui::Frame::none().fill(egui::Color32::WHITE).inner_margin(egui::Margin::same(st::PAD)))
+                .frame(egui::Frame::none().fill(lt.bg).inner_margin(egui::Margin::ZERO))
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                         ui.set_max_width(ui.available_width());
+                        ui.set_min_height(ui.available_height());
                         self.welcome_panel(ui);
                     });
                 });
             return;
         }
         if self.tab != Tab::Home {
-            let color = self.tab.color();
-            egui::TopBottomPanel::top("section")
-                .frame(egui::Frame::none().fill(color).inner_margin(egui::Margin::symmetric(st::PAD, st::GAP)))
+            egui::SidePanel::left("spine")
+                .exact_width(st::SPINE)
+                .resizable(false)
                 .show_separator_line(false)
-                .show(ctx, |ui| self.section_header(ui));
+                .frame(egui::Frame::none().fill(self.tab.color()))
+                .show(ctx, |ui| self.spine(ui));
         }
         if !self.status.is_empty() {
             egui::TopBottomPanel::bottom("status")
-                .frame(egui::Frame::none().fill(t.surface).inner_margin(egui::Margin::symmetric(st::PAD, st::GAP)))
+                .frame(egui::Frame::none().fill(t.bg).inner_margin(egui::Margin::symmetric(st::MARGIN, st::PAD)))
                 .show_separator_line(false)
                 .show(ctx, |ui| {
+                    let r = ui.max_rect();
+                    ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(r.left(), r.top() - st::PAD), egui::vec2(r.width(), st::HAIR)), 0.0, t.line);
                     ui.horizontal(|ui| {
-                        let (sq, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                        ui.spacing_mut().item_spacing.x = st::PAD;
+                        let (sq, _) = ui.allocate_exact_size(egui::vec2(st::PAD, st::PAD), egui::Sense::hover());
                         ui.painter().rect_filled(sq, 0.0, self.tab.color());
                         ui.add(egui::Label::new(egui::RichText::new(&self.status).small().color(t.ink)).truncate());
                     });
@@ -932,7 +1041,8 @@ impl App {
             .frame(egui::Frame::none().fill(t.bg).inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
                 let scroll = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    egui::Frame::none().inner_margin(egui::Margin::same(st::PAD)).show(ui, |ui| {
+                    let margin = if self.tab == Tab::Home { egui::Margin::same(st::PAD) } else { egui::Margin::same(st::MARGIN) };
+                    egui::Frame::none().inner_margin(margin).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         if self.tab == Tab::Home {
                             ui.set_min_height((ui.available_height() - st::PAD * 2.0).max(60.0));
@@ -1007,18 +1117,6 @@ fn level_name(l: TypoLevel) -> &'static str {
 }
 
 
-fn chips(ui: &mut egui::Ui, words: &[String]) -> Option<usize> {
-    let mut hit = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
-        for (i, w) in words.iter().enumerate() {
-            if st::chip(ui, w, None) {
-                hit = Some(i);
-            }
-        }
-    });
-    hit
-}
 
 fn lang_name(l: Lang) -> &'static str {
     match l {
@@ -1056,6 +1154,7 @@ impl eframe::App for App {
                     }
                     crate::tray::TrayCmd::ShowVault => {
                         self.tab = Tab::Vault;
+                        self.grow_for_section = true;
                         show_window(ctx);
                         self.ui_visible = true;
                     }
@@ -1094,7 +1193,7 @@ impl eframe::App for App {
         let want_vault = crate::platform::take_open_vault_request();
         let want_show = crate::platform::take_show_gui_request();
         if want_vault {
-            self.tab = Tab::Vault;
+            self.go(Tab::Vault);
         }
         if want_vault || want_show {
             show_window(ctx);

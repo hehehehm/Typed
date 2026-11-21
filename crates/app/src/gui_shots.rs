@@ -119,18 +119,17 @@ fn shots(with_vault: bool) -> Vec<Shot> {
         v.push(Shot { name: sfx("01-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: home_sz });
         v.push(Shot { name: sfx("02-apps-long-path"), app: app_with(sample_cfg(), Tab::Apps, light), focus: focus(), size: sec_sz });
         v.push(Shot { name: sfx("03-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz });
-        v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: egui::vec2(512.0, 192.0) });
+        v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: sec_sz });
         if with_vault {
             let mut a = app_with(sample_cfg(), Tab::Vault, light);
             a.vault = unlocked_vault(&tmp_dir());
             v.push(Shot { name: sfx("05-vault-open"), app: a, focus: focus(), size: egui::vec2(512.0, 448.0) });
         }
-        v.push(Shot { name: sfx("06-settings-collapsed"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: egui::vec2(512.0, 416.0) });
-        v.push(Shot { name: sfx("07-settings-expanded"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: egui::vec2(512.0, 416.0) });
-        v.push(Shot { name: sfx("08-support"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: egui::vec2(512.0, 368.0) });
+        v.push(Shot { name: sfx("07-settings"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: sec_sz });
+        v.push(Shot { name: sfx("08-support"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: sec_sz });
     }
     v.push(Shot { name: "09-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(432.0, 160.0) });
-    v.push(Shot { name: "10-apps-min-width", app: app_with(sample_cfg(), Tab::Apps, true), focus: focus(), size: egui::vec2(432.0, 352.0) });
+    v.push(Shot { name: "10-apps-min-width", app: app_with(sample_cfg(), Tab::Apps, true), focus: focus(), size: egui::vec2(432.0, 416.0) });
     let mut a = app_with(sample_cfg(), Tab::Home, true);
     a.welcome_open = true;
     v.push(Shot { name: "11-welcome", app: a, focus: focus(), size: egui::vec2(512.0, 448.0) });
