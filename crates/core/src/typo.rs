@@ -557,17 +557,26 @@ pub(crate) fn en_end_letter_only(typed: &str, cand: &str) -> bool {
 /// The fix starts with the typed first letter, or swaps the first two: slips at the
 /// very start are rare, while `упускать` / `пускать`, `входной` / `выходной`,
 /// `ренди` / `бренди` are different words.
-/// Extra neighbour key at the very start of a short unknown word (`лдва` → `два`:
-/// л sits next to д on ЙЦУКЕН). The rest must be a high-frequency word; the typed
-/// token must not itself be a word. First-letter-keeping fixes (above) win first,
-/// so `лдень` stays `лень`, not `день`.
+/// Neighbour-key typo at the very start of an unknown word, after the first-letter-
+/// keeping search. Two cases:
+///
+/// * Insertion of a neighbour before a short frequent word (`лдва` → `два`): only
+///   4-letter tokens, rest rank < [`FIRST_SLIP_RANK_SHORT`]. A 5-letter typo like
+///   `ждети` (for `ждете`) must not become `дети`.
+/// * For longer tokens (6+), insertion of a leading neighbour, or (Russian only)
+///   substitution of the first letter by a neighbouring key (`тллюминатора` →
+///   `иллюминатора`), when the result is a known word or form (not only a frequent
+///   one — long words are rarely ambiguous) and exactly one such candidate exists.
+///   English first-letter substitution is not applied here: unknown names and tools
+///   (`rustup`, `clippy`) too often have a unique dictionary neighbour.
+///
+/// First-letter-keeping fixes still win (`лдень` → `лень`, not `день`). Cautious
+/// never reaches this function.
 fn leading_neighbour_insert(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
     let lower = Dictionary::normalize(word);
     let chars: Vec<char> = lower.chars().collect();
     let n = chars.len();
-    // Only 4-letter tokens (`лдва`): a 5-letter typo like `ждети` (for `ждете`) must
-    // not lose its first neighbour letter to a frequent 4-letter word (`дети`).
-    if n != 4 || !word.chars().all(char::is_alphabetic) {
+    if !word.chars().all(char::is_alphabetic) || n < 4 {
         return None;
     }
     if !assume_unknown {
@@ -581,16 +590,56 @@ fn leading_neighbour_insert(d: &Dictionary, word: &str, lang: Lang, assume_unkno
             return None;
         }
     }
-    if !adjacent_keys(chars[0], chars[1], lang) {
+    if n == 4 {
+        if !adjacent_keys(chars[0], chars[1], lang) {
+            return None;
+        }
+        let rest: String = chars[1..].iter().collect();
+        let rank = match lang {
+            Lang::Ru => morph::candidate_rank(d, &rest).or_else(|| d.rank(&rest)),
+            Lang::En => d.rank(&rest),
+        }?;
+        return (rank < FIRST_SLIP_RANK_SHORT).then(|| match_case(word, &rest));
+    }
+    // 5-letter tokens: no leading insertion (`ждети` must not become `дети`).
+    // First-letter substitution of short words stays on the ranked `suggest_one` path.
+    if n < 6 {
         return None;
     }
-    let rest: String = chars[1..].iter().collect();
-    let rank = match lang {
-        Lang::Ru => morph::candidate_rank(d, &rest).or_else(|| d.rank(&rest)),
-        Lang::En => d.rank(&rest),
-    }?;
-    // The 3-letter rest must be among the most frequent words (`два`, `для`, `the`).
-    (rank < FIRST_SLIP_RANK_SHORT).then(|| match_case(word, &rest))
+    let mut hits: Vec<String> = Vec::new();
+    if adjacent_keys(chars[0], chars[1], lang) {
+        let rest: String = chars[1..].iter().collect();
+        if is_known_leading_target(d, &rest, lang) {
+            hits.push(rest);
+        }
+    }
+    // First-letter substitution is Russian-only: English unknown tokens
+    // (names, tools: rustup, clippy) too often have a unique neighbour
+    // that is a dictionary word (dustup, flippy).
+    if lang == Lang::Ru {
+        for c in RU_ALPHABET.chars() {
+            if c == chars[0] || !adjacent_keys(chars[0], c, lang) {
+                continue;
+            }
+            let mut cand = chars.clone();
+            cand[0] = c;
+            let s: String = cand.iter().collect();
+            if is_known_leading_target(d, &s, lang) && !hits.contains(&s) {
+                hits.push(s);
+            }
+        }
+    }
+    (hits.len() == 1).then(|| match_case(word, &hits[0]))
+}
+
+fn is_known_leading_target(d: &Dictionary, w: &str, lang: Lang) -> bool {
+    if d.is_word(w) {
+        return true;
+    }
+    match lang {
+        Lang::Ru => morph::is_known_form(d, w),
+        Lang::En => d.rank(w).is_some(),
+    }
 }
 
 pub(crate) fn first_letter_kept(typed: &[char], cand: &str) -> bool {
@@ -940,11 +989,25 @@ mod tests {
         assert_eq!(suggest("лдля", Lang::Ru).as_deref(), Some("для"));
         // A first-letter-keeping typo still wins (`лдень` → `лень`, not `день`).
         assert_eq!(suggest("лдень", Lang::Ru).as_deref(), Some("лень"));
+        // 5 letters: do not drop a leading neighbour (`ждети` is a typo of `ждете`, not `дети`).
+        assert_ne!(suggest("ждети", Lang::Ru).as_deref(), Some("дети"));
+        // First-letter neighbour substitution of a long unknown form (`т` sits next to `и`).
+        assert_eq!(suggest("тллюминатора", Lang::Ru).as_deref(), Some("иллюминатора"));
+        assert_eq!(suggest("Тллюминатора", Lang::Ru).as_deref(), Some("Иллюминатора"));
+        assert_eq!(suggest_level("тллюминатора", Lang::Ru, Level::Cautious), None);
+        // Sibling: the other neighbour of `и` on the bottom row (`м`).
+        assert_eq!(suggest("мллюминатора", Lang::Ru).as_deref(), Some("иллюминатора"));
+        // Sibling: leading neighbour insertion on a long known form.
+        assert_eq!(suggest("тиллюминатора", Lang::Ru).as_deref(), Some("иллюминатора"));
         // Real words and non-adjacent extras stay.
-        for w in ["два", "слова", "лето", "льва", "дана", "лдван"] {
+        for w in ["два", "слова", "лето", "льва", "дана", "лдван", "иллюминатора"] {
             assert_eq!(suggest(w, Lang::Ru), None, "{w}");
         }
         assert_eq!(suggest("qzxvbn", Lang::En), None);
+        // English unknown tools/names must not flip the first letter into a dictionary word.
+        for w in ["rustup", "clippy", "Rustup", "Clippy"] {
+            assert_eq!(suggest(w, Lang::En), None, "{w}");
+        }
         // к→й is not a neighbour-key slip, so only the doubled letter is dropped.
         assert_eq!(suggest("опечаткок", Lang::Ru).as_deref(), Some("опечаток"));
     }
