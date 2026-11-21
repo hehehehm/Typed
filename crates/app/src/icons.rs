@@ -1,18 +1,18 @@
 use eframe::egui;
 use std::collections::HashMap;
 
-pub use crate::app_id::{basename, has_path, is_hidden_app};
+pub use crate::app_id::basename;
 
 pub const ICON_SIZE: f32 = 16.0;
 
 /// Compact trash-can button used instead of the word «Удалить».
 pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
-    let size = egui::vec2(18.0, 18.0);
+    let size = egui::vec2(22.0, 22.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let visuals = ui.style().interact(&response);
     let painter = ui.painter();
     if response.hovered() || response.is_pointer_button_down_on() {
-        painter.rect_filled(rect.expand(1.0), 0.0, visuals.bg_fill);
+        painter.rect_filled(rect, 0.0, visuals.bg_fill);
     }
     let stroke = visuals.fg_stroke;
     let c = rect.center();
@@ -25,33 +25,47 @@ pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
         stroke,
     );
     let body = egui::Rect::from_min_max(egui::pos2(c.x - 3.5, c.y - 2.5), egui::pos2(c.x + 3.5, c.y + 5.0));
-    painter.rect_stroke(body, 0.8, stroke);
+    painter.rect_stroke(body, 0.0, stroke);
     painter.line_segment([egui::pos2(c.x, c.y - 1.0), egui::pos2(c.x, c.y + 3.5)], stroke);
     response.on_hover_text("Удалить")
 }
 
-/// Small painted arrow button: down into a tray to hide an app in the collapsed group,
-/// up out of it to bring the app back. Painted (like the trash icon) so it does not
-/// depend on which symbols the bundled fonts have.
-pub fn hide_icon_button(ui: &mut egui::Ui, hide: bool) -> egui::Response {
-    let size = egui::vec2(18.0, 18.0);
+/// Compact painted pencil button used instead of the word «Изменить».
+pub fn edit_icon_button(ui: &mut egui::Ui) -> egui::Response {
+    let size = egui::vec2(22.0, 22.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let visuals = ui.style().interact(&response);
     let painter = ui.painter();
     if response.hovered() || response.is_pointer_button_down_on() {
-        painter.rect_filled(rect.expand(1.0), 0.0, visuals.bg_fill);
+        painter.rect_filled(rect, 0.0, visuals.bg_fill);
     }
     let stroke = visuals.fg_stroke;
     let c = rect.center();
-    // tray
-    painter.line_segment([egui::pos2(c.x - 5.0, c.y + 5.0), egui::pos2(c.x + 5.0, c.y + 5.0)], stroke);
-    // shaft
-    painter.line_segment([egui::pos2(c.x, c.y - 5.0), egui::pos2(c.x, c.y + 2.5)], stroke);
-    // head: pointing down (hide) or up (show again)
-    let (tip, wing) = if hide { (c.y + 2.5, c.y - 0.5) } else { (c.y - 5.0, c.y - 2.0) };
-    painter.line_segment([egui::pos2(c.x - 3.0, wing), egui::pos2(c.x, tip)], stroke);
-    painter.line_segment([egui::pos2(c.x + 3.0, wing), egui::pos2(c.x, tip)], stroke);
-    response.on_hover_text(if hide { "Скрыть в системные" } else { "Вернуть в список" })
+    // Diagonal pencil + baseline
+    painter.line_segment([egui::pos2(c.x - 4.5, c.y + 4.5), egui::pos2(c.x + 4.5, c.y + 4.5)], stroke);
+    painter.line_segment([egui::pos2(c.x - 3.5, c.y + 2.0), egui::pos2(c.x + 3.5, c.y - 5.0)], egui::Stroke::new(2.0, stroke.color));
+    painter.line_segment([egui::pos2(c.x - 4.5, c.y + 3.0), egui::pos2(c.x - 2.5, c.y + 1.0)], stroke);
+    response.on_hover_text("Изменить")
+}
+
+/// Compact painted eye button used to show/hide a password.
+pub fn eye_icon_button(ui: &mut egui::Ui, revealed: bool) -> egui::Response {
+    let size = egui::vec2(22.0, 22.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    let painter = ui.painter();
+    if response.hovered() || response.is_pointer_button_down_on() {
+        painter.rect_filled(rect, 0.0, visuals.bg_fill);
+    }
+    let stroke = visuals.fg_stroke;
+    let c = rect.center();
+    let frame = egui::Rect::from_center_size(c, egui::vec2(12.0, 7.0));
+    painter.rect_stroke(frame, 0.0, stroke);
+    painter.rect_filled(egui::Rect::from_center_size(c, egui::vec2(3.5, 3.5)), 0.0, stroke.color);
+    if revealed {
+        painter.line_segment([egui::pos2(c.x - 6.0, c.y + 4.5), egui::pos2(c.x + 6.0, c.y - 4.5)], stroke);
+    }
+    response.on_hover_text(if revealed { "Скрыть" } else { "Показать" })
 }
 
 /// Texture cache keyed by app id. `None` = extraction failed, use the placeholder.
@@ -73,7 +87,7 @@ impl IconCache {
     /// Draw the icon (or placeholder) for `id`.
     pub fn show(&mut self, ui: &mut egui::Ui, id: &str) {
         let size = egui::vec2(ICON_SIZE, ICON_SIZE);
-        let rounding = 3.0;
+        let rounding = 0.0;
         if let Some(tex) = self.get(ui.ctx(), id) {
             ui.add(egui::Image::new(&tex).fit_to_exact_size(size).rounding(rounding));
             return;
@@ -98,7 +112,7 @@ fn load_rgba(_id: &str) -> Option<egui::ColorImage> {
 
 #[cfg(target_os = "windows")]
 fn load_rgba(id: &str) -> Option<egui::ColorImage> {
-    if !has_path(id) {
+    if !crate::app_id::has_path(id) {
         return None;
     }
     std::panic::catch_unwind(|| unsafe { win::extract(id) }).ok().flatten()

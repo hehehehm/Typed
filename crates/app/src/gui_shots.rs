@@ -27,13 +27,10 @@ fn sample_cfg() -> Config {
         (r"C:\Program Files\Google\Chrome\Application\chrome.exe", Lang::En),
         (r"C:\Users\hehehehm\AppData\Local\Telegram Desktop\Telegram.exe", Lang::Ru),
         (r"C:\Program Files\Microsoft VS Code\Code.exe", Lang::En),
-        ("WindowsTerminal.exe", Lang::En),
-        (r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE", Lang::Ru),
-        (LONG_PATH, Lang::En),
     ] {
         c.set_layout(a, l);
     }
-    c.exception_apps = vec!["powershell".into(), "windowsterminal".into(), LONG_PATH.into(), "mobaxterm".into()];
+    c.exception_apps = vec![LONG_PATH.into(), "powershell".into(), "windowsterminal".into()];
     c.custom_words = ["exe", "ci/cd", "c++", "mp3", "гугл", "кубер", "деплой", "rustup", "egui"].map(String::from).to_vec();
     c.never_correct = ["Мандела", "actix", "kubectl"].map(String::from).to_vec();
     c.never_typo_fix = ["хранилка", "стеллажу"].map(String::from).to_vec();
@@ -52,15 +49,12 @@ fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
         focus: Arc::new(Mutex::new(Focus::default())),
         status: String::new(),
         qr: Default::default(),
-        manual_id: String::new(),
-        manual_lang: Lang::Ru,
-        exception_draft: String::new(),
+        app_draft: String::new(),
+        app_mode: AppMode::Ru,
         tab,
         vault: crate::vault_ui::VaultUi::for_test(dir.join("no-vault.bin"), None),
         capturing_hotkey: None,
         word_draft: String::new(),
-        expanded_paths: HashSet::new(),
-        show_system_apps: false,
         icons: IconCache::default(),
         open_groups: HashSet::new(),
         content_overflow: 0.0,
@@ -120,41 +114,33 @@ fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
 }
 
 fn shots(with_vault: bool) -> Vec<Shot> {
-    let w = egui::vec2(440.0, 600.0);
+    let home_sz = egui::vec2(560.0, 240.0);
+    let sec_sz = egui::vec2(560.0, 380.0);
     let mut v = Vec::new();
     for light in [true, false] {
         let sfx = |s: &'static str| -> &'static str {
             if light { s } else { Box::leak(format!("{s}-dark").into_boxed_str()) }
         };
-        v.push(Shot { name: sfx("01-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: w });
-        v.push(Shot { name: sfx("02-layouts"), app: app_with(sample_cfg(), Tab::Layouts, light), focus: focus(), size: egui::vec2(440.0, 760.0) });
-        v.push(Shot { name: sfx("03-exceptions-long-path"), app: app_with(sample_cfg(), Tab::Exceptions, light), focus: focus(), size: w });
-        v.push(Shot { name: sfx("04-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: w });
-        v.push(Shot { name: sfx("05-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: w });
-        v.push(Shot { name: sfx("07-settings"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: w });
-        let mut s = app_with(sample_cfg(), Tab::Settings, light);
-        all_groups(&mut s);
-        v.push(Shot { name: sfx("08-settings-expanded"), app: s, focus: focus(), size: egui::vec2(440.0, 2000.0) });
-        v.push(Shot { name: sfx("09-donate"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: egui::vec2(440.0, 640.0) });
+        v.push(Shot { name: sfx("01-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: home_sz });
+        v.push(Shot { name: sfx("02-apps-long-path"), app: app_with(sample_cfg(), Tab::Apps, light), focus: focus(), size: sec_sz });
+        v.push(Shot { name: sfx("03-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz });
+        v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: egui::vec2(560.0, 240.0) });
         if with_vault {
             let mut a = app_with(sample_cfg(), Tab::Vault, light);
             a.vault = unlocked_vault(&tmp_dir());
-            v.push(Shot { name: sfx("06-vault-open"), app: a, focus: focus(), size: egui::vec2(440.0, 700.0) });
+            v.push(Shot { name: sfx("05-vault-open"), app: a, focus: focus(), size: egui::vec2(560.0, 480.0) });
         }
+        v.push(Shot { name: sfx("06-settings-collapsed"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: egui::vec2(560.0, 420.0) });
+        let mut s = app_with(sample_cfg(), Tab::Settings, light);
+        all_groups(&mut s);
+        v.push(Shot { name: sfx("07-settings-expanded"), app: s, focus: focus(), size: egui::vec2(560.0, 1280.0) });
+        v.push(Shot { name: sfx("08-support"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: egui::vec2(560.0, 400.0) });
     }
-    // Narrowest window with the long path, and the path expanded in Раскладки.
-    v.push(Shot { name: "10-exceptions-min-width", app: app_with(sample_cfg(), Tab::Exceptions, true), focus: focus(), size: egui::vec2(380.0, 440.0) });
-    let mut a = app_with(sample_cfg(), Tab::Layouts, true);
-    a.expanded_paths.insert(LONG_PATH.into());
-    a.show_system_apps = true;
-    v.push(Shot { name: "11-layouts-min-width-path-open", app: a, focus: focus(), size: egui::vec2(380.0, 760.0) });
-    v.push(Shot { name: "12-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(380.0, 440.0) });
-    let mut a = app_with(sample_cfg(), Tab::Exceptions, true);
-    a.status = "Сохранено — демон применит изменения примерно за секунду.".into();
-    v.push(Shot { name: "13-exceptions-status", app: a, focus: focus(), size: w });
+    v.push(Shot { name: "09-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(400.0, 200.0) });
+    v.push(Shot { name: "10-apps-min-width", app: app_with(sample_cfg(), Tab::Apps, true), focus: focus(), size: egui::vec2(400.0, 380.0) });
     let mut a = app_with(sample_cfg(), Tab::Home, true);
     a.welcome_open = true;
-    v.push(Shot { name: "14-welcome", app: a, focus: focus(), size: egui::vec2(440.0, 900.0) });
+    v.push(Shot { name: "11-welcome", app: a, focus: focus(), size: egui::vec2(560.0, 480.0) });
     v
 }
 
@@ -244,7 +230,6 @@ fn rasterize(ctx: &egui::Context, out: egui::FullOutput, textures: &HashMap<Text
             let maxx = (a.0.max(b.0).max(c.0).ceil() as i64).min(cx1);
             let miny = (a.1.min(b.1).min(c.1).floor() as i64).max(cy0);
             let maxy = (a.1.max(b.1).max(c.1).ceil() as i64).min(cy1);
-            // Edge function and the top-left rule so shared edges are drawn once.
             let edge = |p: (f32, f32), q: (f32, f32), x: f32, y: f32| (q.0 - p.0) * (y - p.1) - (q.1 - p.1) * (x - p.0);
             let tl = |p: (f32, f32), q: (f32, f32)| {
                 let (dx, dy) = (q.0 - p.0, q.1 - p.1);
@@ -300,7 +285,7 @@ fn write_png(path: &std::path::Path, w: usize, h: usize, buf: &[[f32; 4]]) {
 #[test]
 fn every_screen_fits_the_window() {
     for mut shot in shots(false) {
-        for width in [380.0, 440.0] {
+        for width in [400.0, 560.0] {
             shot.size.x = width;
             let _ = run(&mut shot, 1.0);
             assert!(shot.app.content_overflow < 0.5, "{} at {width}px: content {}px wider than the window", shot.name, shot.app.content_overflow);
