@@ -688,6 +688,12 @@ pub fn link(ui: &mut Ui, text: &str, accent: Color32) -> egui::Response {
 
 /// Word token: rounded, hairline, mono word, muted tag, × on the right.
 pub fn chip(ui: &mut Ui, word: &str, tag: Option<&str>) -> bool {
+    chip_with_tip(ui, word, tag, None)
+}
+
+/// Like [`chip`], but `tip` is shown on hover (e.g. a full path). If `tip` is
+/// `None` and the label does not fit, the full `word` is used as the tooltip.
+pub fn chip_with_tip(ui: &mut Ui, word: &str, tag: Option<&str>, tip: Option<&str>) -> bool {
     let t = cur(ui);
     let wf = font_mono();
     let tf = font_sm();
@@ -709,8 +715,9 @@ pub fn chip(ui: &mut Ui, word: &str, tag: Option<&str>) -> bool {
     if let Some(s) = tag {
         p.text(egui::pos2(r.left() + pad + shown + PAD, r.center().y), egui::Align2::LEFT_CENTER, s, tf, t.muted);
     }
-    if shown < word_w {
-        resp.on_hover_text(word);
+    let hover = tip.filter(|s| !s.is_empty()).or_else(|| (shown < word_w - 0.5).then_some(word));
+    if let Some(msg) = hover {
+        resp.clone().on_hover_text(msg);
     }
     let xr = Rect::from_min_size(egui::pos2(r.right() - x_w, r.top()), egui::vec2(x_w, r.height()));
     let xresp = ui.interact(xr, ui.id().with(("chip-x", word)), Sense::click());

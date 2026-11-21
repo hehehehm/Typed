@@ -37,6 +37,26 @@ pub(super) fn sample_cfg() -> Config {
     c
 }
 
+
+fn many_exceptions_cfg(n: usize) -> Config {
+    let mut c = sample_cfg();
+    c.exception_apps.clear();
+    c.add_exception(LONG_PATH);
+    c.add_exception("мобаxterm");
+    c.add_exception("powershell");
+    for i in 0..n {
+        let id = if i % 5 == 0 {
+            format!(r"C:\очень-длинный-путь\документы\проекты\исключение-{i:02}-с-длинным-именем.exe")
+        } else if i % 3 == 0 {
+            format!("Блокнот-{i:02}.exe")
+        } else {
+            format!("app-{i:02}.exe")
+        };
+        c.add_exception(&id);
+    }
+    c
+}
+
 pub(super) fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
     let dir = tmp_dir();
     let mut cfg = cfg;
@@ -142,6 +162,17 @@ fn shots(with_vault: bool) -> Vec<Shot> {
     let mut a = app_with(sample_cfg(), Tab::Apps, true);
     a.apps_pane = AppsPane::Exceptions;
     v.push(Shot { name: "10-exceptions-min-width", app: a, focus: focus(), size: egui::vec2(432.0, 416.0), mac: false });
+    let mut a = app_with(many_exceptions_cfg(24), Tab::Apps, true);
+    a.apps_pane = AppsPane::Exceptions;
+    v.push(Shot { name: "10-exceptions-many", app: a, focus: focus(), size: sec_sz, mac: false });
+    let mut a = app_with(many_exceptions_cfg(24), Tab::Apps, false);
+    a.apps_pane = AppsPane::Exceptions;
+    v.push(Shot { name: "10-exceptions-many-dark", app: a, focus: focus(), size: sec_sz, mac: false });
+    let mut empty = sample_cfg();
+    empty.exception_apps.clear();
+    let mut a = app_with(empty, Tab::Apps, true);
+    a.apps_pane = AppsPane::Exceptions;
+    v.push(Shot { name: "10-exceptions-empty", app: a, focus: focus(), size: sec_sz, mac: false });
     let mut a = app_with(sample_cfg(), Tab::Home, true);
     a.welcome_open = true;
     v.push(Shot { name: "11-welcome", app: a, focus: focus(), size: egui::vec2(512.0, 448.0), mac: false });
@@ -150,6 +181,9 @@ fn shots(with_vault: bool) -> Vec<Shot> {
         let name = |s: &str| -> &'static str { Box::leak(format!("{s}{d}").into_boxed_str()) };
         v.push(Shot { name: name("12-mac-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: home_sz, mac: true });
         v.push(Shot { name: name("13-mac-settings"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: sec_sz, mac: true });
+        let mut a = app_with(sample_cfg(), Tab::Apps, light);
+        a.apps_pane = AppsPane::Exceptions;
+        v.push(Shot { name: name("14-mac-exceptions"), app: a, focus: focus(), size: sec_sz, mac: true });
     }
     v
 }

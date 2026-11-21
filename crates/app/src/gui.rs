@@ -330,28 +330,20 @@ impl App {
                 let mut remove = None;
                 if !entries.is_empty() {
                     ui.add_space(st::PAD);
-                    st::group_title(ui, "Исключения", Some(entries.len()), "Typed полностью выключен");
-                    let icons = &mut self.icons;
                     st::group(ui, |ui| {
-                        for (k, id) in entries.into_iter().enumerate() {
-                            if k > 0 {
-                                st::sep(ui);
-                            }
-                            st::line_row(
-                                ui,
-                                |ui| {
-                                    icons.show(ui, &id);
-                                    let name = basename(&id);
+                        egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::PAD)).show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(st::PAD, st::GAP);
+                                for id in &entries {
+                                    let name = basename(id);
                                     let shown = if name.is_empty() { id.as_str() } else { name };
-                                    ui.add(egui::Label::new(egui::RichText::new(shown).color(t.ink)).truncate()).on_hover_text(&id);
-                                },
-                                |ui| {
-                                    if delete_icon_button(ui).clicked() {
+                                    let tip = if shown != id.as_str() { id.as_str() } else { shown };
+                                    if st::chip_with_tip(ui, shown, None, Some(tip)) {
                                         remove = Some(id.clone());
                                     }
-                                },
-                            );
-                        }
+                                }
+                            });
+                        });
                     });
                 }
                 if let Some(id) = remove {

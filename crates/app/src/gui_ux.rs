@@ -73,6 +73,9 @@ impl Harness {
         } else {
             st::install_fonts(&ctx);
         }
+        ctx.style_mut(|s| {
+            s.interaction.tooltip_delay = 0.0;
+        });
         let mut h = Self {
             ctx,
             app,
@@ -340,7 +343,28 @@ impl Harness {
             self.click(w.interact_rect.center());
             true
         } else {
-            false
+            // Wrapped chips: a small × sits just to the right of the name.
+            let w = self
+                .clickables()
+                .into_iter()
+                .filter(|c| {
+                    let r = c.interact_rect;
+                    (r.center().y - y).abs() < 16.0
+                        && r.left() >= row.rect.right() - 2.0
+                        && r.left() <= row.rect.right() + 28.0
+                })
+                .min_by(|a, b| {
+                    a.interact_rect
+                        .left()
+                        .partial_cmp(&b.interact_rect.left())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            if let Some(w) = w {
+                self.click(w.interact_rect.center());
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -485,6 +509,8 @@ fn text_style(ts: &epaint::TextShape) -> (Color32, f32) {
 #[derive(Clone, Debug)]
 struct Issue {
     kind: &'static str,
+    /// "must", "should", "nice" for usability; "note" for structural checks.
+    severity: &'static str,
     screen: String,
     detail: String,
     rect: Option<Rect>,
@@ -494,6 +520,23 @@ impl Issue {
     fn new(kind: &'static str, screen: &str, detail: String, rect: Option<Rect>) -> Self {
         Self {
             kind,
+            severity: "note",
+            screen: screen.to_owned(),
+            detail,
+            rect,
+        }
+    }
+
+    fn ux(
+        severity: &'static str,
+        kind: &'static str,
+        screen: &str,
+        detail: String,
+        rect: Option<Rect>,
+    ) -> Self {
+        Self {
+            kind,
+            severity,
             screen: screen.to_owned(),
             detail,
             rect,
@@ -1016,36 +1059,730 @@ fn default_sec(tab: Tab, light: bool, cfg: Config) -> Harness {
     Harness::new(app_with(cfg, tab, light), focus(), SEC, 1.0, false)
 }
 
-fn write_issues_report(path: &Path, findings: &Findings, shots: &[(String, PathBuf)]) {
+
+fn many_exc_cfg(n: usize) -> Config {
+    let mut c = empty_cfg();
+    c.add_exception(LONG_PATH);
+    c.add_exception("мобаxterm");
+    c.add_exception("powershell");
+    for i in 0..n {
+        let id = if i % 5 == 0 {
+            format!(r"C:\очень-длинный-путь\документы\проекты\исключение-{i:02}-с-длинным-именем.exe")
+        } else if i % 3 == 0 {
+            format!("Блокнот-{i:02}.exe")
+        } else {
+            format!("app-{i:02}.exe")
+        };
+        c.add_exception(&id);
+    }
+    c
+}
+
+fn find_back(h: &Harness) -> Option<WidgetRect> {
+    h.clickables()
+        .into_iter()
+        .filter(|c| c.interact_rect.center().y < st::HEADER && c.interact_rect.left() < st::HEADER)
+        .min_by(|a, b| {
+            a.interact_rect
+                .left()
+                .partial_cmp(&b.interact_rect.left())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+fn find_plus(h: &Harness) -> Option<WidgetRect> {
+    let header = st::HEADER;
+    h.clickables()
+        .into_iter()
+        .filter(|c| {
+            let r = c.interact_rect;
+            r.top() > header
+                && r.top() < header + st::ROW * 2.0 + st::MARGIN
+                && (r.width() - st::HIT).abs() < 6.0
+                && (r.height() - st::HIT).abs() < 6.0
+        })
+        .max_by(|a, b| {
+            a.interact_rect
+                .right()
+                .partial_cmp(&b.interact_rect.right())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+fn is_icon_only(h: &Harness, w: &WidgetRect) -> bool {
+    !h.texts().iter().any(|t| {
+        t.rect.intersects(w.interact_rect) && t.text.chars().filter(|c| !c.is_whitespace()).count() > 1
+    })
+}
+
+fn inspect_usability(h: &mut Harness, screen: &str, findings: &mut Findings) {
+    ux_placement_and_fitts(h, screen, findings);
+    ux_primary_targets(h, screen, findings);
+    ux_label_clarity(h, screen, findings);
+    ux_alignment(h, screen, findings);
+    ux_consistency(h, screen, findings);
+    // Tooltip-on-icon is checked in the expert review: egui tooltip timing is
+    // not reliable enough in the headless harness for a report-only flag.
+}
+
+fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
+    if h.app.tab != Tab::Home && !h.app.welcome_open {
+        match find_back(h) {
+            None => findings.push(Issue::ux(
+                "must",
+                "ux-placement",
+                screen,
+                "no back button in the top-left of a section screen".into(),
+                None,
+            )),
+            Some(w) => {
+                let r = w.interact_rect;
+                if r.left() > st::MARGIN + 6.0 || r.top() > st::MARGIN + 6.0 {
+                    findings.push(Issue::ux(
+                        "should",
+                        "ux-placement",
+                        screen,
+                        format!("back button is not in the top-left corner ({:.0},{:.0})", r.left(), r.top()),
+                        Some(r),
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(plus) = find_plus(h) {
+        let pr = plus.interact_rect;
+        let y = pr.center().y;
+        // The add field is the wide widget on the same row, immediately left of +.
+        let field = h
+            .clickables()
+            .into_iter()
+            .filter(|c| {
+                let r = c.interact_rect;
+                r.width() > 80.0
+                    && (r.center().y - y).abs() < 16.0
+                    && r.right() <= pr.left() + 2.0
+            })
+            .max_by(|a, b| {
+                a.interact_rect
+                    .width()
+                    .partial_cmp(&b.interact_rect.width())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        if let Some(field) = field {
+            let fr = field.interact_rect;
+            let dy = (pr.center().y - fr.center().y).abs();
+            // On the Programs add row, EN/RU sits between the field and +;
+            // measure the gap to the nearest widget on the left.
+            let nearest_left = h
+                .clickables()
+                .into_iter()
+                .map(|c| c.interact_rect)
+                .filter(|r| (r.center().y - y).abs() < 16.0 && r.right() <= pr.left() + 2.0)
+                .map(|r| r.right())
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap_or(fr.right());
+            let gap = pr.left() - nearest_left;
+            if dy > 14.0 {
+                findings.push(Issue::ux(
+                    "should",
+                    "ux-fitts",
+                    screen,
+                    format!("add button is not on the same row as the field (Δy={dy:.0}px)"),
+                    Some(pr),
+                ));
+            }
+            if gap > 48.0 {
+                findings.push(Issue::ux(
+                    "should",
+                    "ux-fitts",
+                    screen,
+                    format!("add button is {:.0}px from the field (Fitts: keep it next to the input)", gap),
+                    Some(pr),
+                ));
+            }
+        }
+    }
+
+    // Destructive delete sitting next to the EN/RU control on a program row.
+    if h.app.tab == Tab::Apps && h.app.apps_pane == AppsPane::Programs {
+        for t in h.texts() {
+            let name = t.text.trim();
+            if !name.to_lowercase().ends_with(".exe") && !name.contains('.') {
+                continue;
+            }
+            let y = t.rect.center().y;
+            let en = h.texts().into_iter().find(|e| {
+                (e.text == "EN" || e.text == "RU") && (e.rect.center().y - y).abs() < 14.0
+            });
+            let trash = h.clickables().into_iter().find(|c| {
+                let r = c.interact_rect;
+                (r.center().y - y).abs() < 16.0
+                    && (r.width() - st::HIT).abs() < 6.0
+                    && r.left() > t.rect.right()
+                    && r.right() > h.size.x - st::MARGIN - st::INSET - st::HIT - 8.0
+            });
+            if let (Some(en), Some(tr)) = (en, trash) {
+                let dist = (tr.interact_rect.left() - en.rect.right())
+                    .abs()
+                    .min((en.rect.left() - tr.interact_rect.right()).abs());
+                if dist < st::HIT + st::PAD * 2.0 {
+                    findings.push(Issue::ux(
+                        "should",
+                        "ux-fitts",
+                        screen,
+                        format!(
+                            "delete is adjacent to the EN/RU control on the «{}» row ({:.0}px apart)",
+                            trunc(name, 24),
+                            dist
+                        ),
+                        Some(tr.interact_rect),
+                    ));
+                    break; // one example is enough
+                }
+            }
+        }
+        // Fallback: rightmost HIT button and the EN/RU texts share a row.
+        if !findings.issues.iter().any(|i| i.kind == "ux-fitts" && i.detail.contains("delete is adjacent")) {
+            if let Some(row) = h.texts().into_iter().find(|t| t.text.to_lowercase().ends_with(".exe")) {
+                let y = row.rect.center().y;
+                let mut hits: Vec<_> = h
+                    .clickables()
+                    .into_iter()
+                    .filter(|c| (c.interact_rect.center().y - y).abs() < 16.0)
+                    .collect();
+                hits.sort_by(|a, b| {
+                    a.interact_rect
+                        .left()
+                        .partial_cmp(&b.interact_rect.left())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                if let Some(tr) = hits.last() {
+                    if (tr.interact_rect.width() - st::HIT).abs() < 6.0 {
+                        findings.push(Issue::ux(
+                            "should",
+                            "ux-fitts",
+                            screen,
+                            format!(
+                                "delete sits in the same action cluster as EN/RU on the «{}» row",
+                                trunc(&row.text, 24)
+                            ),
+                            Some(tr.interact_rect),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if h.app.tab == Tab::Apps && h.app.apps_pane == AppsPane::Exceptions {
+        if let Some(title) = h.texts().into_iter().find(|t| {
+            t.rect.center().y < st::HEADER && t.text.contains("Программы")
+        }) {
+            findings.push(Issue::ux(
+                "should",
+                "ux-label",
+                screen,
+                "header still says «Программы» while the Exceptions pane is open".into(),
+                Some(title.rect),
+            ));
+        }
+    }
+}
+
+fn ux_primary_targets(h: &Harness, screen: &str, findings: &mut Findings) {
+    // Header nav dots (the five section marks) and any other primary control under 32 px.
+    if !h.app.welcome_open && h.app.tab != Tab::Home {
+        for w in h.clickables() {
+            let r = w.interact_rect;
+            if r.center().y >= st::HEADER || r.left() < h.size.x * 0.55 {
+                continue;
+            }
+            let m = r.width().min(r.height());
+            if m + 0.05 < st::HIT {
+                findings.push(Issue::ux(
+                    "should",
+                    "ux-target",
+                    screen,
+                    format!("header nav target is {:.0}×{:.0}px; primary navigation should be ≥ 32 px", r.width(), r.height()),
+                    Some(r),
+                ));
+                break;
+            }
+        }
+    }
+    if let Some(plus) = find_plus(h) {
+        let r = plus.interact_rect;
+        let m = r.width().min(r.height());
+        if m + 0.05 < st::HIT {
+            findings.push(Issue::ux(
+                "must",
+                "ux-target",
+                screen,
+                format!("add button is only {:.0}×{:.0}px (primary, want ≥ 32)", r.width(), r.height()),
+                Some(r),
+            ));
+        }
+    }
+    if let Some(t) = h.find_text("Далее") {
+        let hit = h
+            .clickables()
+            .into_iter()
+            .find(|c| c.interact_rect.intersects(t.rect));
+        if let Some(w) = hit {
+            let m = w.interact_rect.width().min(w.interact_rect.height());
+            if m + 0.05 < st::HIT {
+                findings.push(Issue::ux(
+                    "must",
+                    "ux-target",
+                    screen,
+                    format!("«Далее» hit target is {:.0}px (primary, want ≥ 32)", m),
+                    Some(w.interact_rect),
+                ));
+            }
+        }
+    }
+}
+
+fn ux_label_clarity(h: &Harness, screen: &str, findings: &mut Findings) {
+    let win = h.screen_rect();
+    for t in h.texts() {
+        if t.rect.min.y >= win.max.y - OUT_TOL {
+            continue;
+        }
+        let vis = t.rect.intersect(t.clip).intersect(win);
+        let lost_x = (t.rect.intersect(win).width() - vis.width()).max(0.0);
+        if lost_x > 1.5 && t.font_size + 0.05 >= st::FONT_SM {
+            findings.push(Issue::ux(
+                "should",
+                "ux-label",
+                screen,
+                format!("label «{}» is truncated by {:.0}px", trunc(&t.text, 40), lost_x),
+                Some(t.rect),
+            ));
+        }
+    }
+
+    fn stem(s: &str) -> String {
+        s.split_whitespace()
+            .filter(|w| w.chars().any(|c| c.is_alphabetic()))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    }
+    let header: Vec<String> = h
+        .texts()
+        .into_iter()
+        .filter(|t| t.rect.center().y < st::HEADER && t.font_size + 0.05 >= st::FONT_MD)
+        .map(|t| stem(&t.text))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for t in h.texts() {
+        if t.rect.center().y <= st::HEADER + 4.0 {
+            continue;
+        }
+        let stn = stem(&t.text);
+        if stn.is_empty() || stn.chars().count() < 4 {
+            continue;
+        }
+        if header.iter().any(|h| *h == stn) && seen.insert(stn.clone()) {
+            findings.push(Issue::ux(
+                "nice",
+                "ux-label",
+                screen,
+                format!("title «{}» appears in the header and again in the body", trunc(&t.text, 40)),
+                Some(t.rect),
+            ));
+        }
+    }
+}
+
+fn ux_alignment(h: &Harness, screen: &str, findings: &mut Findings) {
+    if !matches!(h.app.tab, Tab::Settings | Tab::Donate | Tab::Vault | Tab::Words) {
+        return;
+    }
+    let mut rows: Vec<(f32, f32)> = h
+        .texts()
+        .into_iter()
+        .filter(|t| {
+            t.rect.top() > st::HEADER
+                && t.rect.left() < h.size.x * 0.42
+                && t.font_size + 0.05 >= st::FONT_SM
+                && t.text.chars().any(|c| c.is_alphabetic())
+        })
+        .map(|t| (t.rect.left(), t.rect.center().y))
+        .collect();
+    if rows.len() < 3 {
+        return;
+    }
+    rows.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Compare left edges of labels that sit in the same visual column (within 40 px of the leftmost).
+    let min_x = rows.iter().map(|r| r.0).fold(f32::MAX, f32::min);
+    let col: Vec<f32> = rows.iter().map(|r| r.0).filter(|x| (*x - min_x).abs() < 40.0).collect();
+    if col.len() < 3 {
+        return;
+    }
+    let max_x = col.iter().copied().fold(f32::MIN, f32::max);
+    let span = max_x - min_x;
+    if span > 3.0 {
+        findings.push(Issue::ux(
+            "nice",
+            "ux-spacing",
+            screen,
+            format!("left edges of labels in the main column differ by {span:.1}px"),
+            None,
+        ));
+    }
+}
+
+fn ux_consistency(h: &Harness, screen: &str, findings: &mut Findings) {
+    if h.app.welcome_open && h.find_text("Не показывать").is_some() {
+        findings.push(Issue::ux(
+            "nice",
+            "ux-consistency",
+            screen,
+            "«Не показывать» puts the switch on the left of the label; Settings rows put the switch on the right".into(),
+            h.find_text("Не показывать").map(|t| t.rect),
+        ));
+    }
+}
+
+#[allow(dead_code)]
+fn ux_icon_tooltips(h: &mut Harness, screen: &str, findings: &mut Findings) {
+    let icons: Vec<WidgetRect> = h
+        .clickables()
+        .into_iter()
+        .filter(|w| is_icon_only(h, w) && w.interact_rect.height() >= 8.0 && w.interact_rect.width() >= 8.0)
+        .collect();
+    let mut missing: Vec<WidgetRect> = Vec::new();
+    let mut shown = 0usize;
+    for w in icons.into_iter().take(16) {
+        let p = w.interact_rect.center();
+        if !h.screen_rect().contains(p) {
+            continue;
+        }
+        let before: std::collections::HashSet<String> =
+            h.texts().into_iter().map(|t| t.text).collect();
+        h.hover(p);
+        h.time += 0.6;
+        h.step(vec![Event::PointerMoved(p)]);
+        h.step(vec![Event::PointerMoved(p)]);
+        let added = h
+            .texts()
+            .iter()
+            .any(|t| !before.contains(&t.text) && !t.text.trim().is_empty());
+        if added {
+            shown += 1;
+        } else {
+            missing.push(w);
+        }
+    }
+    // If not a single tooltip appeared, the detector failed (egui tooltip
+    // timing) — do not flood the report with false positives.
+    if shown == 0 {
+        return;
+    }
+    for w in missing {
+        findings.push(Issue::ux(
+            "should",
+            "ux-label",
+            screen,
+            format!("icon-only control at {:?} has no tooltip", w.interact_rect),
+            Some(w.interact_rect),
+        ));
+    }
+}
+
+struct TaskDepth {
+    name: &'static str,
+    clicks: usize,
+    notes: String,
+}
+
+fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
+    let mut out = Vec::new();
+
+    // Add an exception: Home → Programs → Exceptions → field → plus.
+    let mut h = Harness::new(app_with(empty_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
+    let mut clicks = 0usize;
+    assert!(h.click_home_square("Программы"));
+    clicks += 1;
+    // section size after navigation; redraw at section size
+    h.size = SEC;
+    h.settle();
+    if h.click_text("Исключения  ") || h.click_text("Исключения") {
+        clicks += 1;
+    }
+    if h.find_text("программа или путь").is_some() && h.click_text("программа или путь") {
+        clicks += 1;
+    }
+    h.type_text("hint.exe");
+    if h.click_plus() {
+        clicks += 1;
+    }
+    let ok = exc_in(&h.app.cfg, "hint.exe");
+    if !ok {
+        findings.push(Issue::ux(
+            "must",
+            "ux-feedback",
+            "task-add-exception",
+            "could not add an exception from Home via the GUI".into(),
+            None,
+        ));
+    } else if h.app.status.is_empty() {
+        // presence of the chip is the feedback; ok
+    }
+    out.push(TaskDepth {
+        name: "Add an exception",
+        clicks,
+        notes: if ok {
+            "Home → Программы → Исключения → field → +".into()
+        } else {
+            "failed".into()
+        },
+    });
+    if clicks > 3 {
+        findings.push(Issue::ux(
+            "nice",
+            "ux-depth",
+            "task-add-exception",
+            format!("{clicks} clicks from Home to add an exception"),
+            None,
+        ));
+    }
+
+    // Change logo: Home → Settings → tile.
+    let mut h = Harness::new(app_with(sample_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
+    let mut clicks = 0usize;
+    assert!(h.click_home_square("Настройки"));
+    clicks += 1;
+    h.size = SEC;
+    h.settle();
+    let before = h.app.cfg.logo;
+    if h.click_logo_from_left(1) {
+        clicks += 1;
+    }
+    let ok = h.app.cfg.logo != before;
+    out.push(TaskDepth {
+        name: "Change logo",
+        clicks,
+        notes: "Home → Настройки → logo tile".into(),
+    });
+    if !ok {
+        findings.push(Issue::ux(
+            "must",
+            "ux-feedback",
+            "task-change-logo",
+            "logo tile click did not change config.logo".into(),
+            None,
+        ));
+    }
+
+    // Change undo key: Home → Settings → keycap → Назначить… → F2.
+    let mut h = Harness::new(app_with(sample_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
+    let mut clicks = 0usize;
+    assert!(h.click_home_square("Настройки"));
+    clicks += 1;
+    h.size = SEC;
+    h.settle();
+    let old = h.app.cfg.undo_key;
+    if h.click_right_of("Клавиша") {
+        clicks += 1;
+    }
+    if h.click_text("Назначить") || h.texts().iter().any(|t| t.text.contains("Назначить")) {
+        if h.app.capturing_hotkey.is_none() {
+            if let Some(t) = h.texts().into_iter().find(|t| t.text.contains("Назначить")) {
+                h.click(t.rect.center());
+            }
+        }
+        clicks += 1;
+    }
+    if h.app.capturing_hotkey.is_some() {
+        h.press_key(Key::F2, Modifiers::default());
+    }
+    let ok = h.app.cfg.undo_key != old;
+    out.push(TaskDepth {
+        name: "Change undo key",
+        clicks,
+        notes: "Home → Настройки → Клавиша → Назначить… → key".into(),
+    });
+    if !ok {
+        findings.push(Issue::ux(
+            "should",
+            "ux-depth",
+            "task-undo-key",
+            format!("undo-key capture failed after {clicks} clicks (popup + assign is a deep path)"),
+            None,
+        ));
+    } else if clicks >= 3 {
+        findings.push(Issue::ux(
+            "nice",
+            "ux-depth",
+            "task-undo-key",
+            format!("{clicks} clicks + a key press from Home to change the undo key (popup with «Назначить…»)"),
+            None,
+        ));
+    }
+
+    // Set layout for an existing app: Home → Programs → EN on a row.
+    let mut h = Harness::new(app_with(sample_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
+    let mut clicks = 0usize;
+    assert!(h.click_home_square("Программы"));
+    clicks += 1;
+    h.size = SEC;
+    h.settle();
+    let before = lang_of(&h.app.cfg, "chrome.exe");
+    if h.click_on_row("chrome.exe", "RU") || h.click_on_row("Chrome", "RU") {
+        clicks += 1;
+    }
+    let after = lang_of(&h.app.cfg, "chrome.exe");
+    let ok = after.is_some() && after != before;
+    out.push(TaskDepth {
+        name: "Set layout for an app",
+        clicks,
+        notes: "Home → Программы → EN/RU on the row".into(),
+    });
+    if !ok {
+        findings.push(Issue::ux(
+            "must",
+            "ux-feedback",
+            "task-set-layout",
+            "clicking RU on a program row did not change the saved layout".into(),
+            None,
+        ));
+    }
+
+    // Empty add: no feedback.
+    let mut h = default_sec(Tab::Apps, true, empty_cfg());
+    let _ = h.click_plus();
+    if h.app.cfg.apps.is_empty() && h.app.status.is_empty() {
+        findings.push(Issue::ux(
+            "should",
+            "ux-feedback",
+            "apps-empty",
+            "pressing + with an empty program field gives no visible error or status".into(),
+            find_plus(&h).map(|w| w.interact_rect),
+        ));
+    }
+
+    out
+}
+
+fn write_issues_report(
+    path: &Path,
+    findings: &Findings,
+    shots: &[(String, PathBuf)],
+    depths: &[TaskDepth],
+) {
     if let Some(d) = path.parent() {
         let _ = std::fs::create_dir_all(d);
     }
     let mut s = String::from("# UI/UX check report\n\n");
-    if findings.issues.is_empty() {
-        s.push_str("No issues found.\n");
+    let structural: Vec<&Issue> = findings
+        .issues
+        .iter()
+        .filter(|i| i.severity == "note")
+        .collect();
+    let usability: Vec<&Issue> = findings
+        .issues
+        .iter()
+        .filter(|i| i.severity != "note")
+        .collect();
+    s.push_str(&format!(
+        "Automated checks found **{}** structural and **{}** usability issue(s).\n\n",
+        structural.len(),
+        usability.len()
+    ));
+
+    s.push_str("## Usability\n\n");
+    if !depths.is_empty() {
+        s.push_str("### Action depth (from Home)\n\n");
+        s.push_str("| Task | Clicks | Path |\n|---|---:|---|\n");
+        for d in depths {
+            s.push_str(&format!("| {} | {} | {} |\n", d.name, d.clicks, d.notes));
+        }
+        s.push('\n');
+    }
+    let order = ["must", "should", "nice"];
+    let titles = [
+        ("must", "Must fix"),
+        ("should", "Should fix"),
+        ("nice", "Nice to have"),
+    ];
+    if usability.is_empty() {
+        s.push_str("No usability heuristic failures.\n\n");
     } else {
-        let mut kinds: Vec<&str> = findings.issues.iter().map(|i| i.kind).collect();
+        for (sev, title) in titles {
+            let items: Vec<_> = usability.iter().filter(|i| i.severity == sev).collect();
+            if items.is_empty() {
+                continue;
+            }
+            // Group identical findings across matrix cells, and attach a highlight shot.
+            let mut groups: Vec<(&Issue, Vec<&str>)> = Vec::new();
+            for i in items {
+                if let Some(g) = groups.iter_mut().find(|(e, _)| e.kind == i.kind && e.detail == i.detail) {
+                    g.1.push(i.screen.as_str());
+                } else {
+                    groups.push((i, vec![i.screen.as_str()]));
+                }
+            }
+            s.push_str(&format!("### {title} ({})\n\n", groups.len()));
+            for (i, screens) in groups {
+                let shot = screens.iter().find_map(|name| {
+                    shots.iter().find(|(n, _)| n.starts_with(*name)).map(|(_, p)| p)
+                });
+                let where_ = if screens.len() == 1 {
+                    format!("`{}`", screens[0])
+                } else {
+                    format!(
+                        "{} screens (`{}`{})",
+                        screens.len(),
+                        screens[0],
+                        if screens.len() > 1 { ", …" } else { "" }
+                    )
+                };
+                match shot {
+                    Some(p) => s.push_str(&format!(
+                        "- **{}** — {}: {}. Highlight: `{}`\n",
+                        i.kind, where_, i.detail, p.display()
+                    )),
+                    None => s.push_str(&format!(
+                        "- **{}** — {}: {}.\n",
+                        i.kind, where_, i.detail
+                    )),
+                }
+            }
+            s.push('\n');
+        }
+
+        let _ = order;
+    }
+
+    if !structural.is_empty() {
+        s.push_str("## Structural checks\n\n");
+        let mut kinds: Vec<&str> = structural.iter().map(|i| i.kind).collect();
         kinds.sort();
         kinds.dedup();
-        s.push_str(&format!(
-            "Found **{}** issue(s).\n\n",
-            findings.issues.len()
-        ));
         for k in kinds {
-            let n = findings.of(k).count();
-            s.push_str(&format!("## {k} ({n})\n\n"));
-            for i in findings.of(k) {
+            let group: Vec<_> = structural.iter().filter(|i| i.kind == k).collect();
+            s.push_str(&format!("### {k} ({})\n\n", group.len()));
+            for i in group {
                 s.push_str(&format!("- `{}`: {}\n", i.screen, i.detail));
             }
             s.push('\n');
         }
     }
+
     if !shots.is_empty() {
         s.push_str("## Example screenshots\n\n");
         for (name, p) in shots {
             s.push_str(&format!("- {name}: `{}`\n", p.display()));
         }
+        s.push('\n');
     }
+
+    s.push_str(include_str!("ux_review.md"));
     let _ = std::fs::write(path, s);
 }
 
@@ -1064,11 +1801,14 @@ fn annotate_and_save(
         let y0 = (r.min.y * ppp).floor().max(0.0) as usize;
         let x1 = (r.max.x * ppp).ceil().min(w as f32) as usize;
         let y1 = (r.max.y * ppp).ceil().min(h as f32) as usize;
-        let color = match i.kind {
-            "contrast" => [220.0, 40.0, 40.0, 255.0],
-            "hit" => [40.0, 80.0, 220.0, 255.0],
-            "overlap" => [220.0, 160.0, 20.0, 255.0],
-            "clip" => [180.0, 40.0, 180.0, 255.0],
+        let color = match (i.severity, i.kind) {
+            ("must", _) => [220.0, 40.0, 40.0, 255.0],
+            ("should", _) => [220.0, 140.0, 20.0, 255.0],
+            ("nice", _) => [40.0, 140.0, 200.0, 255.0],
+            (_, "contrast") => [220.0, 40.0, 40.0, 255.0],
+            (_, "hit") => [40.0, 80.0, 220.0, 255.0],
+            (_, "overlap") => [220.0, 160.0, 20.0, 255.0],
+            (_, "clip") => [180.0, 40.0, 180.0, 255.0],
             _ => [20.0, 180.0, 80.0, 255.0],
         };
         for y in y0..y1 {
@@ -1210,6 +1950,70 @@ fn ux_switch_programs_exceptions_tabs() {
         "segment Программы  N (not the header title)"
     );
     assert_eq!(h.app.apps_pane, AppsPane::Programs);
+}
+
+#[test]
+fn ux_exceptions_wrap_as_chips() {
+    let mut h = default_sec(Tab::Apps, true, many_exc_cfg(18));
+    assert!(h.click_text("Исключения  ") || h.click_text("Исключения"));
+    assert_eq!(h.app.apps_pane, AppsPane::Exceptions);
+    assert!(h.find_text("программа или путь").is_some(), "add field stays on top");
+    // Names are shown as chips, not a vertical list: several distinct Y rows.
+    let mut ys: Vec<i32> = h
+        .texts()
+        .into_iter()
+        .filter(|t| {
+            t.rect.top() > st::HEADER + st::ROW * 2.0
+                && (t.text.ends_with(".exe") || t.text.contains("setup") || t.text.contains("powershell") || t.text.contains("моба") || t.text.contains("Блокнот"))
+        })
+        .map(|t| (t.rect.center().y / 4.0).round() as i32)
+        .collect();
+    ys.sort();
+    ys.dedup();
+    assert!(
+        ys.len() >= 2,
+        "exception chips should wrap onto more than one line, got y-rows {ys:?}; texts={:?}",
+        h.texts().iter().map(|t| t.text.clone()).collect::<Vec<_>>()
+    );
+
+    // Long names are truncated (the chip is narrower than the unclipped name would be)
+    // and still offer a tooltip via chip_with_tip.
+    let long = h
+        .texts()
+        .into_iter()
+        .find(|t| t.text.contains("исключение") || t.text.contains("длинным"));
+    if let Some(t) = long {
+        assert!(
+            t.rect.width() < 400.0,
+            "long exception name should truncate inside the chip, width={}",
+            t.rect.width()
+        );
+    }
+
+    // Delete via the chip ×.
+    let before = h.app.cfg.exception_apps.len();
+    let sample = h
+        .texts()
+        .into_iter()
+        .find(|t| t.text.to_lowercase().contains("app-01") || t.text.contains("powershell"))
+        .map(|t| t.text);
+    if let Some(name) = sample {
+        assert!(h.click_delete_on_row(&name), "delete via chip × for {name}");
+        assert!(
+            h.app.cfg.exception_apps.len() < before,
+            "chip × should remove the exception"
+        );
+    }
+
+    // Empty pane: only the add field, no leftover list.
+    let mut h = default_sec(Tab::Apps, true, empty_cfg());
+    assert!(h.click_text("Исключения  ") || h.click_text("Исключения"));
+    assert!(h.find_text("программа или путь").is_some());
+    let leftover = h.texts().into_iter().any(|t| {
+        t.rect.top() > st::HEADER + st::ROW * 2.0
+            && (t.text.ends_with(".exe") || t.text == "Исключения" && t.rect.top() > st::HEADER + st::ROW)
+    });
+    assert!(!leftover, "empty exceptions pane should not show a chip list");
 }
 
 #[test]
@@ -1477,6 +2281,51 @@ fn ux_inspect_screens_report() {
             false,
             edge_cfg(),
         ),
+        (
+            "exceptions-dark",
+            Tab::Apps,
+            AppsPane::Exceptions,
+            false,
+            SEC,
+            false,
+            sample_cfg(),
+        ),
+        (
+            "exceptions-min",
+            Tab::Apps,
+            AppsPane::Exceptions,
+            true,
+            SEC_MIN,
+            false,
+            sample_cfg(),
+        ),
+        (
+            "exceptions-empty",
+            Tab::Apps,
+            AppsPane::Exceptions,
+            true,
+            SEC,
+            false,
+            empty_cfg(),
+        ),
+        (
+            "exceptions-many",
+            Tab::Apps,
+            AppsPane::Exceptions,
+            true,
+            SEC,
+            false,
+            many_exc_cfg(24),
+        ),
+        (
+            "exceptions-mac",
+            Tab::Apps,
+            AppsPane::Exceptions,
+            true,
+            SEC,
+            true,
+            sample_cfg(),
+        ),
     ];
 
     for (name, tab, pane, light, size, mac, cfg) in screens {
@@ -1488,16 +2337,15 @@ fn ux_inspect_screens_report() {
         let mut h = Harness::new(app, focus(), size, 1.0, mac);
         let before = findings.issues.len();
         let raster = inspect_all(&mut h, name, &mut findings, true, name != "apps-edge");
+        inspect_usability(&mut h, name, &mut findings);
         let new = &findings.issues[before..];
         if let Some((w, ht, buf)) = raster {
             let path = out_dir.join(format!("{name}.png"));
+            write_png(&path, w, ht, &buf);
             if new.iter().any(|i| i.rect.is_some()) {
                 let marked = out_dir.join(format!("{name}-issues.png"));
                 annotate_and_save(&marked, w, ht, &buf, h.ppp, new);
-                write_png(&path, w, ht, &buf);
                 shots.push((format!("{name} (annotated)"), marked));
-            } else {
-                write_png(&path, w, ht, &buf);
             }
         }
         // Cheap canary: the screen is not empty.
@@ -1512,15 +2360,19 @@ fn ux_inspect_screens_report() {
         );
     }
 
+    let depths = measure_action_depths(&mut findings);
     let report = PathBuf::from("/tmp/typed-ui-ux-report.md");
-    write_issues_report(&report, &findings, &shots);
+    write_issues_report(&report, &findings, &shots, &depths);
     println!(
         "UI/UX inspect: {} issue(s), report {}",
         findings.issues.len(),
         report.display()
     );
     for i in &findings.issues {
-        println!("  [{}] {}: {}", i.kind, i.screen, i.detail);
+        println!("  [{}:{}] {}: {}", i.severity, i.kind, i.screen, i.detail);
+    }
+    for d in &depths {
+        println!("  depth {} = {} clicks ({})", d.name, d.clicks, d.notes);
     }
 }
 
