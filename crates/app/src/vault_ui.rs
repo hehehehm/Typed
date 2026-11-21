@@ -198,7 +198,7 @@ impl VaultUi {
                             v.inactive.bg_stroke = egui::Stroke::new(1.0, t.line);
                             v.hovered.bg_stroke = egui::Stroke::new(1.0, t.muted);
                             cfg_changed |= ui
-                                .add_sized([48.0, 26.0], egui::DragValue::new(idle_minutes).range(1..=120))
+                                .add_sized([st::ROW, st::HIT], egui::DragValue::new(idle_minutes).range(1..=120))
                                 .on_hover_text("Автоблокировка, мин")
                                 .changed();
                         });
@@ -219,9 +219,9 @@ impl VaultUi {
         st::block(ui, |ui| {
             let w = ui.available_width();
             if exists {
-                let bw = st::text_w(ui, "Открыть", st::font(13.5)) + 20.0;
+                let bw = st::text_w(ui, "Открыть", st::font_md()) + st::PAD * 2.0;
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = st::GAP;
                     st::password_bg(ui, &mut self.pw1, "пароль", w - bw - 6.0, ACCENT);
                     go = st::primary(ui, "Открыть", ACCENT)
                         .on_hover_text(format!("Файл: {}", self.path.display()))
@@ -301,7 +301,7 @@ impl VaultUi {
             let l = &self.vault.as_ref().unwrap().data.logins[i];
             let revealed = self.reveal == Some(i);
             st::block(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.spacing_mut().item_spacing.y = st::GAP;
                 st::row(
                     ui,
                     egui::Color32::TRANSPARENT,
@@ -330,7 +330,7 @@ impl VaultUi {
                     },
                 );
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
                     if st::primary(ui, "Логин", ACCENT).on_hover_text("Подставить имя и пароль").clicked() {
                         action = Some((i, "both"));
                     }
@@ -377,7 +377,7 @@ impl VaultUi {
         for i in 0..n {
             let c = &self.vault.as_ref().unwrap().data.cards[i];
             st::block(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.spacing_mut().item_spacing.y = st::GAP;
                 st::row(
                     ui,
                     egui::Color32::TRANSPARENT,
@@ -395,7 +395,7 @@ impl VaultUi {
                     },
                 );
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
                     if st::primary(ui, "Номер", ACCENT).clicked() {
                         caction = Some((i, "num"));
                     }
@@ -481,7 +481,7 @@ impl VaultUi {
             }
         };
         st::block(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.spacing_mut().item_spacing.y = st::GAP;
             match &mut self.edit {
                 Edit::Login(_, l) => {
                     row(ui, "Название", "", &mut l.label, false);
@@ -501,7 +501,7 @@ impl VaultUi {
                 }
                 Edit::None => {}
             }
-            ui.add_space(4.0);
+            ui.add_space(st::GAP);
             ui.horizontal(|ui| {
                 if st::primary(ui, "Сохранить", ACCENT).clicked() {
                     done = Some(true);

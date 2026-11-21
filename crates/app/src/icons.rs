@@ -3,11 +3,11 @@ use std::collections::HashMap;
 
 pub use crate::app_id::basename;
 
-pub const ICON_SIZE: f32 = 16.0;
+pub const ICON_SIZE: f32 = crate::ui_style::HIT;
 
 /// Compact trash-can button used instead of the word «Удалить».
 pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
-    let size = egui::vec2(22.0, 22.0);
+    let size = egui::vec2(crate::ui_style::HIT, crate::ui_style::HIT);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let visuals = ui.style().interact(&response);
     let painter = ui.painter();
@@ -32,7 +32,7 @@ pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
 
 /// Compact painted pencil button used instead of the word «Изменить».
 pub fn edit_icon_button(ui: &mut egui::Ui) -> egui::Response {
-    let size = egui::vec2(22.0, 22.0);
+    let size = egui::vec2(crate::ui_style::HIT, crate::ui_style::HIT);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let visuals = ui.style().interact(&response);
     let painter = ui.painter();
@@ -43,14 +43,14 @@ pub fn edit_icon_button(ui: &mut egui::Ui) -> egui::Response {
     let c = rect.center();
     // Diagonal pencil + baseline
     painter.line_segment([egui::pos2(c.x - 4.5, c.y + 4.5), egui::pos2(c.x + 4.5, c.y + 4.5)], stroke);
-    painter.line_segment([egui::pos2(c.x - 3.5, c.y + 2.0), egui::pos2(c.x + 3.5, c.y - 5.0)], egui::Stroke::new(2.0, stroke.color));
+    painter.line_segment([egui::pos2(c.x - 3.5, c.y + 2.0), egui::pos2(c.x + 3.5, c.y - 5.0)], egui::Stroke::new(1.0, stroke.color));
     painter.line_segment([egui::pos2(c.x - 4.5, c.y + 3.0), egui::pos2(c.x - 2.5, c.y + 1.0)], stroke);
     response.on_hover_text("Изменить")
 }
 
 /// Compact painted eye button used to show/hide a password.
 pub fn eye_icon_button(ui: &mut egui::Ui, revealed: bool) -> egui::Response {
-    let size = egui::vec2(22.0, 22.0);
+    let size = egui::vec2(crate::ui_style::HIT, crate::ui_style::HIT);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let visuals = ui.style().interact(&response);
     let painter = ui.painter();
@@ -96,7 +96,7 @@ impl IconCache {
         let p = ui.painter();
         p.rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill);
         let letter = basename(id).chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
-        p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(11.0), ui.visuals().text_color());
+        p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(crate::ui_style::FONT_MD), ui.visuals().text_color());
     }
 }
 

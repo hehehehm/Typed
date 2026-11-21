@@ -197,37 +197,26 @@ impl App {
         let t = st::cur(ui);
         let mut changed = false;
 
-        // Add row: [ program / path ] [EN] [RU] [Выкл] [+]
+        // Add row: [ program / path ] [EN|RU|∅] [+] — all 32 px, gutters of 8.
         st::block(ui, |ui| {
-            let bw_en = 34.0;
-            let bw_ru = 34.0;
-            let bw_off = 46.0;
-            let bw_plus = 28.0;
-            let gaps = 4.0 * 4.0;
             let mut go = false;
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let fw = (ui.available_width() - bw_en - bw_ru - bw_off - bw_plus - gaps).max(60.0);
+                ui.spacing_mut().item_spacing.x = st::GAP;
+                let seg_w = st::HIT * 3.0;
+                let fw = (ui.available_width() - seg_w - st::HIT - st::GAP * 2.0).max(st::HIT * 2.0);
                 let r = st::field_bg(ui, &mut self.app_draft, "программа / путь", fw, accent);
                 go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if st::choice_tile(ui, self.app_mode == AppMode::En, "EN", bw_en, accent)
-                    .on_hover_text("Включать английскую раскладку")
-                    .clicked()
-                {
-                    self.app_mode = AppMode::En;
-                }
-                if st::choice_tile(ui, self.app_mode == AppMode::Ru, "RU", bw_ru, accent)
-                    .on_hover_text("Включать русскую раскладку")
-                    .clicked()
-                {
-                    self.app_mode = AppMode::Ru;
-                }
-                if st::choice_tile(ui, self.app_mode == AppMode::Off, "Выкл", bw_off, accent)
-                    .on_hover_text("Исключить из автоисправления")
-                    .clicked()
-                {
-                    self.app_mode = AppMode::Off;
-                }
+                go |= st::segment_strip(
+                    ui,
+                    &mut self.app_mode,
+                    &[
+                        (AppMode::En, "EN", "Английская раскладка"),
+                        (AppMode::Ru, "RU", "Русская раскладка"),
+                        (AppMode::Off, "∅", "Выкл — исключить из автоисправления"),
+                    ],
+                    seg_w,
+                    accent,
+                );
                 go |= st::plus_square(ui, accent, "Добавить").clicked();
             });
             if go {
@@ -258,9 +247,9 @@ impl App {
         }
 
         let mut act: Option<(String, Option<AppMode>)> = None;
-        ui.spacing_mut().item_spacing.y = 2.0;
         for (id, cur) in entries {
             let icons = &mut self.icons;
+            let mut mode = cur;
             st::row(
                 ui,
                 t.surface,
@@ -273,32 +262,22 @@ impl App {
                     if delete_icon_button(ui).clicked() {
                         act = Some((id.clone(), None));
                     }
-                    ui.add_space(2.0);
-                    if st::choice_tile(ui, cur == AppMode::Off, "Выкл", 44.0, accent)
-                        .on_hover_text("Автоисправление выключено")
-                        .clicked()
-                        && cur != AppMode::Off
-                    {
-                        act = Some((id.clone(), Some(AppMode::Off)));
-                    }
-                    if st::choice_tile(ui, cur == AppMode::Ru, "RU", 32.0, accent)
-                        .on_hover_text("Русская раскладка")
-                        .clicked()
-                        && cur != AppMode::Ru
-                    {
-                        act = Some((id.clone(), Some(AppMode::Ru)));
-                    }
-                    if st::choice_tile(ui, cur == AppMode::En, "EN", 32.0, accent)
-                        .on_hover_text("Английская раскладка")
-                        .clicked()
-                        && cur != AppMode::En
-                    {
-                        act = Some((id.clone(), Some(AppMode::En)));
+                    if st::segment_strip(
+                        ui,
+                        &mut mode,
+                        &[
+                            (AppMode::En, "EN", "Английская раскладка"),
+                            (AppMode::Ru, "RU", "Русская раскладка"),
+                            (AppMode::Off, "∅", "Выкл — автоисправление выключено"),
+                        ],
+                        st::HIT * 3.0,
+                        accent,
+                    ) {
+                        act = Some((id.clone(), Some(mode)));
                     }
                 },
             );
         }
-        ui.spacing_mut().item_spacing.y = st::GAP;
 
         if let Some((id, mode)) = act {
             match mode {
@@ -331,7 +310,7 @@ impl App {
             st::caption(ui, "Свои", "Приоритет выше встроенного словаря");
             let mut remove_at = None;
             ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
                 for (i, w) in words.iter().enumerate() {
                     let lang = match userdict::classify(w) {
                         Ok(l) => lang_name(l),
@@ -399,7 +378,7 @@ impl App {
         };
         let t = st::cur(ui);
         st::block(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 6.0;
+            ui.spacing_mut().item_spacing.y = st::GAP;
             ui.horizontal(|ui| {
                 let capturing = self.capturing_hotkey == Some(slot);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -416,7 +395,7 @@ impl App {
                 });
             });
             ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
                 for &(h, name) in presets {
                     if st::choice_tile(ui, current == h, name, 0.0, accent).clicked() {
                         match slot {
@@ -473,24 +452,17 @@ impl App {
     }
 
     /// Collapsible group of the settings section. Closed until opened.
-    fn group(&mut self, ui: &mut egui::Ui, key: &'static str, title: &str, summary: &str, body: impl FnOnce(&mut Self, &mut egui::Ui)) {
+    fn group(&mut self, ui: &mut egui::Ui, key: &'static str, title: &str, mark: st::Mark, body: impl FnOnce(&mut Self, &mut egui::Ui)) {
         let open = self.open_groups.contains(key);
-        if open {
-            ui.spacing_mut().item_spacing.y = 2.0;
-        }
-        if st::group_header(ui, open, title, summary, Tab::Settings.color()).clicked() {
+        if st::group_header(ui, open, title, &mark, Tab::Settings.color()).clicked() {
             if open {
                 self.open_groups.remove(key);
             } else {
                 self.open_groups.insert(key);
             }
         }
-        ui.spacing_mut().item_spacing.y = st::GAP;
         if self.open_groups.contains(key) {
-            ui.spacing_mut().item_spacing.y = 2.0;
             body(self, ui);
-            ui.spacing_mut().item_spacing.y = st::GAP;
-            ui.add_space(4.0);
         }
     }
 
@@ -507,7 +479,7 @@ impl App {
 
         let on = [self.cfg.convert_single_letters, self.cfg.fix_missing_spaces, self.cfg.auto_learn].iter().filter(|b| **b).count();
         let mut c = false;
-        self.group(ui, "fix", "Исправления", &format!("{on}/3"), |s, ui| {
+        self.group(ui, "fix", "Исправления", st::Mark::Count { on: on as u8, of: 3 }, |s, ui| {
             c |= st::toggle_row(
                 ui,
                 &mut s.cfg.convert_single_letters,
@@ -531,27 +503,23 @@ impl App {
             );
         });
 
-        let typo_summary = if self.cfg.fix_typos {
-            format!("{}{}", level_name(self.cfg.typo_level), if self.cfg.use_context { " · контекст" } else { "" })
+        let typo_mark = if self.cfg.fix_typos {
+            st::Mark::Count { on: typo_rank(self.cfg.typo_level), of: 3 }
         } else {
-            "выкл".to_string()
+            st::Mark::Toggle(false)
         };
-        self.group(ui, "typo", "Опечатки", &typo_summary, |s, ui| {
+        self.group(ui, "typo", "Опечатки", typo_mark, |s, ui| {
             c |= st::toggle_row(ui, &mut s.cfg.fix_typos, "Исправлять опечатки", "поечаток → опечаток", accent);
             ui.add_enabled_ui(s.cfg.fix_typos, |ui| {
                 st::block(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    ui.label("Смелость");
-                    c |= st::segmented(
-                        ui,
-                        &mut s.cfg.typo_level,
-                        &[
-                            (TypoLevel::Cautious, level_name(TypoLevel::Cautious), "1 ошибка от 4 букв, 2 от 8, только частые"),
-                            (TypoLevel::Normal, level_name(TypoLevel::Normal), "1 от 3, 2 от 5, 3 от 9; раскладка + опечатка"),
-                            (TypoLevel::Aggressive, level_name(TypoLevel::Aggressive), "Смелее при близких вариантах"),
-                        ],
-                        accent,
-                    );
+                    st::caption(ui, "Смелость", "Насколько смело исправлять опечатки");
+                    let typo_opts = [
+                        (TypoLevel::Cautious, level_name(TypoLevel::Cautious), "1 ошибка от 4 букв, 2 от 8, только частые"),
+                        (TypoLevel::Normal, level_name(TypoLevel::Normal), "1 от 3, 2 от 5, 3 от 9; раскладка + опечатка"),
+                        (TypoLevel::Aggressive, level_name(TypoLevel::Aggressive), "Смелее при близких вариантах"),
+                    ];
+                    let strip_w = ui.available_width();
+                    c |= st::segment_strip(ui, &mut s.cfg.typo_level, &typo_opts, strip_w, accent);
                 });
                 c |= st::toggle_row(
                     ui,
@@ -563,8 +531,12 @@ impl App {
             });
         });
 
-        let undo_summary = if self.cfg.undo_on_backspace { "Backspace" } else { "Клавиша" };
-        self.group(ui, "undo", "Отмена", undo_summary, |s, ui| {
+        let undo_mark = if self.cfg.undo_on_backspace {
+            st::Mark::Label("Backspace")
+        } else {
+            st::Mark::Value(self.cfg.undo_hotkey.to_string())
+        };
+        self.group(ui, "undo", "Отмена", undo_mark, |s, ui| {
             c |= st::toggle_row(
                 ui,
                 &mut s.cfg.undo_on_backspace,
@@ -574,8 +546,7 @@ impl App {
             );
         });
 
-        let hk_summary = self.cfg.hotkey.to_string();
-        self.group(ui, "keys", "Клавиши", &hk_summary, |s, ui| {
+        self.group(ui, "keys", "Клавиши", st::Mark::Value(self.cfg.hotkey.to_string()), |s, ui| {
             s.hotkey_picker(
                 ui,
                 HotkeySlot::Convert,
@@ -616,19 +587,17 @@ impl App {
 
         #[cfg(windows)]
         {
-            let admin_summary = if self.cfg.run_as_admin { "админ" } else { "обычный" };
-            self.group(ui, "admin", "Запуск", admin_summary, |s, ui| s.admin_section(ui));
+            self.group(ui, "admin", "Запуск", st::Mark::Toggle(self.cfg.run_as_admin), |s, ui| s.admin_section(ui));
         }
 
-        let look = if self.cfg.light_theme { "светлая" } else { "тёмная" };
-        self.group(ui, "look", "Вид", look, |s, ui| {
+        self.group(ui, "look", "Вид", st::Mark::Theme { light: self.cfg.light_theme }, |s, ui| {
             c |= st::toggle_row(ui, &mut s.cfg.light_theme, "Светлая тема", "", accent);
             st::block(ui, |ui| {
                 c |= s.logo_picker(ui);
             });
         });
 
-        self.group(ui, "about", "О программе", env!("CARGO_PKG_VERSION"), |s, ui| {
+        self.group(ui, "about", "О программе", st::Mark::Label(env!("CARGO_PKG_VERSION")), |s, ui| {
             st::block(ui, |ui| {
                 st::row(
                     ui,
@@ -802,31 +771,35 @@ impl App {
         }
     }
 
-    /// Home: five identical colour squares in one horizontal row.
+    /// Home: five identical colour squares in one horizontal row, snapped to `U`.
     fn home(&mut self, ui: &mut egui::Ui) {
         let full = ui.available_width();
-        let g = 10.0;
-        let s = ((full - 4.0 * g) / 5.0).max(52.0);
-        let top_pad = ((ui.available_height() - s) * 0.5).max(0.0);
-        let origin = ui.cursor().min + egui::vec2(0.0, top_pad);
+        let g = st::GAP;
+        let s = st::snap((full - 4.0 * g) / 5.0, st::HIT);
+        let row_w = 5.0 * s + 4.0 * g;
+        let x_pad = st::snap(((full - row_w) * 0.5).max(0.0), 0.0);
+        let top_pad = st::snap(((ui.available_height() - s) * 0.5).max(0.0), 0.0);
+        let origin = ui.cursor().min + egui::vec2(x_pad, top_pad);
         let mut clicked = None;
         for (i, &tab) in SECTIONS.iter().enumerate() {
             let x = origin.x + i as f32 * (s + g);
             let rect = egui::Rect::from_min_size(egui::pos2(x, origin.y), egui::vec2(s, s));
             let resp = ui.interact(rect, ui.id().with(("square", i)), egui::Sense::click());
-            let lift = if resp.hovered() { -2.0 } else { 0.0 };
-            let r = rect.translate(egui::vec2(0.0, lift));
             let color = tab.color();
             let p = ui.painter();
-            p.rect_filled(r, 0.0, if resp.is_pointer_button_down_on() { st::shade(color, -0.1) } else { color });
-            let u = (s * 0.16).clamp(8.0, 16.0);
-            st::paint_home_icon(p, egui::pos2(r.center().x, r.top() + s * 0.42), u, i);
-            let pad = if s < 80.0 { 4.0 } else { 8.0 };
-            let max_w = (s - pad * 2.0).max(20.0);
-            let natural = st::text_w(ui, tab.title(), st::font(13.0));
-            let size = if natural > max_w { (13.0 * (max_w / natural) * 0.96).max(8.5) } else { 13.0 };
-            let lg = st::line_galley(ui, tab.title(), st::font(size), st::INK_ON_COLOR, max_w);
-            p.galley(egui::pos2(r.center().x - lg.size().x / 2.0, r.bottom() - pad - lg.size().y), lg, st::INK_ON_COLOR);
+            p.rect_filled(rect, 0.0, if resp.is_pointer_button_down_on() { st::shade(color, -0.1) } else { color });
+            if resp.has_focus() {
+                p.rect_stroke(rect.shrink(0.5), 0.0, st::hair(st::INK_ON_COLOR));
+            }
+            let u = st::snap((s * 0.16).max(st::U), st::U).min(st::U * 2.0);
+            st::paint_home_icon(p, egui::pos2(rect.center().x, rect.top() + s * 0.42), u, i);
+            let pad = st::GAP;
+            let max_w = (s - pad * 2.0).max(st::U);
+            // One size for all five labels: the largest scale step that fits the longest word.
+            let longest = SECTIONS.iter().map(|tab| st::text_w(ui, tab.title(), st::font_md())).fold(0.0_f32, f32::max);
+            let font = if longest > max_w { st::font_sm() } else { st::font_md() };
+            let lg = st::line_galley(ui, tab.title(), font, st::INK_ON_COLOR, max_w);
+            p.galley(egui::pos2(rect.center().x - lg.size().x / 2.0, rect.bottom() - pad - lg.size().y), lg, st::INK_ON_COLOR);
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -837,7 +810,7 @@ impl App {
             }
         }
         ui.allocate_rect(
-            egui::Rect::from_min_max(origin - egui::vec2(0.0, top_pad), egui::pos2(origin.x + full, origin.y + s)),
+            egui::Rect::from_min_max(origin - egui::vec2(x_pad, top_pad), egui::pos2(origin.x - x_pad + full, origin.y + s)),
             egui::Sense::hover(),
         );
         if let Some(tab) = clicked {
@@ -850,26 +823,28 @@ impl App {
         let color = tab.color();
         let mut target = None;
         ui.horizontal(|ui| {
-            ui.set_min_height(34.0);
+            ui.set_min_height(st::ROW);
+            ui.spacing_mut().item_spacing.x = st::GAP;
             if st::back_square(ui, color).clicked() {
                 target = Some(Tab::Home);
             }
-            ui.add_space(4.0);
-            let nav_w = 5.0 * 14.0 + 4.0 * 5.0;
-            let title_w = (ui.available_width() - nav_w - 12.0).max(40.0);
+            let nav_w = 5.0 * st::HIT;
+            let title_w = (ui.available_width() - nav_w - st::GAP).max(st::HIT);
             ui.add_sized(
-                [title_w, 32.0],
-                egui::Label::new(egui::RichText::new(tab.title()).size(19.0).color(st::INK_ON_COLOR)).truncate(),
+                [title_w, st::HIT],
+                egui::Label::new(egui::RichText::new(tab.title()).size(st::FONT_LG).color(st::INK_ON_COLOR)).truncate(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.spacing_mut().item_spacing.x = 0.0;
                 for &other in SECTIONS.iter().rev() {
-                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
+                    // 32×32 hit target, 16×16 colour square centred in it.
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(st::HIT, st::HIT), egui::Sense::click());
+                    let vis = egui::Rect::from_center_size(rect.center(), egui::vec2(st::U * 2.0, st::U * 2.0));
                     let p = ui.painter();
                     let fill = if other == tab { st::INK_ON_COLOR } else { other.color() };
-                    p.rect_filled(rect, 0.0, fill);
-                    if other != tab {
-                        p.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, st::shade(color, -0.2)));
+                    p.rect_filled(vis, 0.0, fill);
+                    if resp.has_focus() {
+                        p.rect_stroke(rect.shrink(0.5), 0.0, st::hair(st::INK_ON_COLOR));
                     }
                     if resp.on_hover_text(other.title()).clicked() {
                         target = Some(other);
@@ -884,17 +859,17 @@ impl App {
 
     fn logo_picker(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        const TILE: f32 = 52.0;
-        let spacing = 12.0;
-        let col = |ui: &egui::Ui, style| TILE.max(st::text_w(ui, crate::logos::label(style), st::font(12.5)));
+        const TILE: f32 = st::ROW;
+        let spacing = st::GAP * 2.0;
+        let col = |ui: &egui::Ui, style| TILE.max(st::text_w(ui, crate::logos::label(style), st::font_sm()));
         let total: f32 = LogoStyle::ALL.iter().map(|&s| col(ui, s)).sum::<f32>() + spacing * (LogoStyle::ALL.len().saturating_sub(1) as f32);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = spacing;
             ui.add_space(((ui.available_width() - total) * 0.5).max(0.0));
             for style in LogoStyle::ALL {
                 let col_w = col(ui, style);
-                ui.allocate_ui_with_layout(egui::vec2(col_w, 78.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
+                ui.allocate_ui_with_layout(egui::vec2(col_w, st::ROW + st::GAP + st::FONT_SM + st::U), egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.y = st::GAP;
                     let tex = self.logo_texture(ui.ctx(), style);
                     let img = egui::Image::new(&tex)
                         .fit_to_exact_size(egui::vec2(TILE, TILE))
@@ -904,7 +879,7 @@ impl App {
                     let response = ui.add(img);
                     let selected = self.cfg.logo_style == style;
                     if selected {
-                        let bar = egui::Rect::from_min_size(egui::pos2(response.rect.left(), response.rect.bottom() + 2.0), egui::vec2(TILE, 3.0));
+                        let bar = egui::Rect::from_min_size(egui::pos2(response.rect.left(), response.rect.bottom()), egui::vec2(TILE, st::HAIR));
                         ui.painter().rect_filled(bar, 0.0, st::cur(ui).ink);
                     }
                     if response.clicked() && !selected {
@@ -912,8 +887,7 @@ impl App {
                         changed = true;
                         self.apply_logo(ui.ctx());
                     }
-                    ui.add_space(2.0);
-                    ui.label(egui::RichText::new(crate::logos::label(style)).size(12.5));
+                    ui.label(egui::RichText::new(crate::logos::label(style)).size(st::FONT_SM));
                 });
             }
         });
@@ -933,24 +907,25 @@ impl App {
                 let logo_h = logo_w * (size.y / size.x);
                 ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(logo_w, logo_h)).rounding(0.0));
             }
-            ui.add_space(4.0);
-            let (strip, _) = ui.allocate_exact_size(egui::vec2(5.0 * 14.0 + 4.0 * 6.0, 14.0), egui::Sense::hover());
+            ui.add_space(st::GAP);
+            let chip = st::U * 2.0;
+            let (strip, _) = ui.allocate_exact_size(egui::vec2(5.0 * chip + 4.0 * st::GAP, chip), egui::Sense::hover());
             for (i, tab) in SECTIONS.iter().enumerate() {
-                let x = strip.left() + i as f32 * 20.0;
-                ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(14.0, 14.0)), 0.0, tab.color());
+                let x = strip.left() + i as f32 * (chip + st::GAP);
+                ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(chip, chip)), 0.0, tab.color());
             }
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Typed").color(heading).size(26.0));
-            ui.label(egui::RichText::new(concat!("ver. ", env!("CARGO_PKG_VERSION"))).color(body).small());
-            ui.add_space(8.0);
+            ui.add_space(st::GAP);
+            ui.label(egui::RichText::new("Typed").color(heading).size(st::FONT_LG));
+            ui.label(egui::RichText::new(concat!("ver. ", env!("CARGO_PKG_VERSION"))).color(body).size(st::FONT_SM));
+            ui.add_space(st::GAP);
             if self.logo_picker(ui) {
                 self.save();
             }
-            ui.add_space(8.0);
+            ui.add_space(st::GAP);
         });
-        let next_w = st::text_w(ui, "Далее", st::font(13.5)) + 20.0;
-        let chk_w = 26.0 + st::text_w(ui, "Не показывать", st::font(13.5));
-        let footer_w = next_w + 16.0 + chk_w;
+        let next_w = st::text_w(ui, "Далее", st::font_md()) + st::PAD * 2.0;
+        let chk_w = st::HIT + st::text_w(ui, "Не показывать", st::font_md());
+        let footer_w = next_w + st::PAD * 2.0 + chk_w;
         ui.horizontal(|ui| {
             ui.add_space(((ui.available_width() - footer_w) * 0.5).max(0.0));
             if st::primary(ui, "Далее", st::CYAN).clicked() {
@@ -959,10 +934,10 @@ impl App {
                 self.cfg.hide_welcome = self.welcome_dont_show;
                 self.save();
             }
-            ui.add_space(8.0);
+            ui.add_space(st::PAD);
             st::check(ui, &mut self.welcome_dont_show, "Не показывать", st::CYAN);
         });
-        ui.add_space(6.0);
+        ui.add_space(st::GAP);
     }
 
     fn draw(&mut self, ctx: &egui::Context, focus: &Focus) {
@@ -982,13 +957,13 @@ impl App {
         if self.tab != Tab::Home {
             let color = self.tab.color();
             egui::TopBottomPanel::top("section")
-                .frame(egui::Frame::none().fill(color).inner_margin(egui::Margin::symmetric(12.0, 10.0)))
+                .frame(egui::Frame::none().fill(color).inner_margin(egui::Margin::symmetric(st::PAD, st::GAP)))
                 .show_separator_line(false)
                 .show(ctx, |ui| self.section_header(ui));
         }
         if !self.status.is_empty() {
             egui::TopBottomPanel::bottom("status")
-                .frame(egui::Frame::none().fill(t.surface).inner_margin(egui::Margin::symmetric(st::PAD, 6.0)))
+                .frame(egui::Frame::none().fill(t.surface).inner_margin(egui::Margin::symmetric(st::PAD, st::GAP)))
                 .show_separator_line(false)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -1021,7 +996,7 @@ impl App {
                                     },
                                 );
                             });
-                            ui.add_space(4.0);
+                            ui.add_space(st::GAP);
                         }
                         match self.tab {
                             Tab::Home => self.home(ui),
@@ -1076,10 +1051,18 @@ fn level_name(l: TypoLevel) -> &'static str {
     }
 }
 
+fn typo_rank(l: TypoLevel) -> u8 {
+    match l {
+        TypoLevel::Cautious => 1,
+        TypoLevel::Normal => 2,
+        TypoLevel::Aggressive => 3,
+    }
+}
+
 fn chips(ui: &mut egui::Ui, words: &[String]) -> Option<usize> {
     let mut hit = None;
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
         for (i, w) in words.iter().enumerate() {
             if st::chip(ui, w, None) {
                 hit = Some(i);
@@ -1349,8 +1332,8 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
     let viewport = {
         let mut vp = egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
-            .with_inner_size([560.0, 280.0])
-            .with_min_inner_size([400.0, 200.0])
+            .with_inner_size([544.0, 240.0])
+            .with_min_inner_size([504.0, 200.0])
             .with_resizable(true);
         if start_hidden {
             vp = vp.with_visible(false);

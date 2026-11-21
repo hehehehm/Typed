@@ -114,8 +114,8 @@ fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
 }
 
 fn shots(with_vault: bool) -> Vec<Shot> {
-    let home_sz = egui::vec2(560.0, 240.0);
-    let sec_sz = egui::vec2(560.0, 380.0);
+    let home_sz = egui::vec2(544.0, 240.0);
+    let sec_sz = egui::vec2(544.0, 384.0);
     let mut v = Vec::new();
     for light in [true, false] {
         let sfx = |s: &'static str| -> &'static str {
@@ -124,23 +124,23 @@ fn shots(with_vault: bool) -> Vec<Shot> {
         v.push(Shot { name: sfx("01-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: home_sz });
         v.push(Shot { name: sfx("02-apps-long-path"), app: app_with(sample_cfg(), Tab::Apps, light), focus: focus(), size: sec_sz });
         v.push(Shot { name: sfx("03-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz });
-        v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: egui::vec2(560.0, 240.0) });
+        v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: egui::vec2(544.0, 240.0) });
         if with_vault {
             let mut a = app_with(sample_cfg(), Tab::Vault, light);
             a.vault = unlocked_vault(&tmp_dir());
-            v.push(Shot { name: sfx("05-vault-open"), app: a, focus: focus(), size: egui::vec2(560.0, 480.0) });
+            v.push(Shot { name: sfx("05-vault-open"), app: a, focus: focus(), size: egui::vec2(544.0, 480.0) });
         }
-        v.push(Shot { name: sfx("06-settings-collapsed"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: egui::vec2(560.0, 420.0) });
+        v.push(Shot { name: sfx("06-settings-collapsed"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: egui::vec2(544.0, 512.0) });
         let mut s = app_with(sample_cfg(), Tab::Settings, light);
         all_groups(&mut s);
-        v.push(Shot { name: sfx("07-settings-expanded"), app: s, focus: focus(), size: egui::vec2(560.0, 1280.0) });
-        v.push(Shot { name: sfx("08-support"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: egui::vec2(560.0, 400.0) });
+        v.push(Shot { name: sfx("07-settings-expanded"), app: s, focus: focus(), size: egui::vec2(544.0, 1536.0) });
+        v.push(Shot { name: sfx("08-support"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: egui::vec2(544.0, 400.0) });
     }
-    v.push(Shot { name: "09-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(400.0, 200.0) });
-    v.push(Shot { name: "10-apps-min-width", app: app_with(sample_cfg(), Tab::Apps, true), focus: focus(), size: egui::vec2(400.0, 380.0) });
+    v.push(Shot { name: "09-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(504.0, 200.0) });
+    v.push(Shot { name: "10-apps-min-width", app: app_with(sample_cfg(), Tab::Apps, true), focus: focus(), size: egui::vec2(504.0, 384.0) });
     let mut a = app_with(sample_cfg(), Tab::Home, true);
     a.welcome_open = true;
-    v.push(Shot { name: "11-welcome", app: a, focus: focus(), size: egui::vec2(560.0, 480.0) });
+    v.push(Shot { name: "11-welcome", app: a, focus: focus(), size: egui::vec2(544.0, 480.0) });
     v
 }
 
@@ -285,7 +285,7 @@ fn write_png(path: &std::path::Path, w: usize, h: usize, buf: &[[f32; 4]]) {
 #[test]
 fn every_screen_fits_the_window() {
     for mut shot in shots(false) {
-        for width in [400.0, 560.0] {
+        for width in [504.0, 544.0] {
             shot.size.x = width;
             let _ = run(&mut shot, 1.0);
             assert!(shot.app.content_overflow < 0.5, "{} at {width}px: content {}px wider than the window", shot.name, shot.app.content_overflow);
