@@ -6,7 +6,7 @@
 //! [`Command`]s. Nothing here touches the OS, so it is unit-tested on any machine.
 
 use crate::app_id::is_hidden_app;
-use layout_keeper_core::{Config, Engine, Hotkey, Key, Lang, Replacement};
+use layout_keeper_core::{Config, Engine, Hotkey, HotkeyCode, Key, Lang, Replacement};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -82,6 +82,25 @@ impl Controller {
 
     pub fn undo_hotkey(&self) -> Hotkey {
         self.config.undo_hotkey
+    }
+
+    pub fn undo_key(&self) -> Hotkey {
+        self.config.undo_key
+    }
+
+    pub fn undo_enabled(&self) -> bool {
+        self.config.undo_on_backspace
+    }
+
+    /// The configured immediate-undo combo, or the legacy `undo_hotkey` when it is a
+    /// different one (old configs that saved Ctrl+Alt+Z). Bare Backspace is not a
+    /// swallowed hotkey: it goes through [`Key::Backspace`].
+    pub fn matches_undo_combo(&self, code: HotkeyCode, ctrl: bool, alt: bool, shift: bool, meta: bool) -> bool {
+        if !self.undo_enabled() {
+            return false;
+        }
+        let hit = |h: Hotkey| !h.is_plain_backspace() && h.matches(code, ctrl, alt, shift, meta);
+        hit(self.undo_key()) || (self.undo_hotkey() != self.undo_key() && hit(self.undo_hotkey()))
     }
 
     /// Save what the engine learned from undos (`never_correct`, `never_typo_fix`,
@@ -477,7 +496,8 @@ mod tests {
     fn backspace_undo_and_defaults() {
         let cfg = Config::from_json("{}").unwrap();
         assert!(cfg.undo_on_backspace);
-        assert_eq!(cfg.undo_hotkey, Hotkey::CTRL_ALT_Z);
+        assert_eq!(cfg.undo_key, Hotkey::BACKSPACE);
+        assert_eq!(cfg.undo_hotkey, Hotkey::BACKSPACE);
         assert!(cfg.never_correct.is_empty());
         let mut c = ctl();
         c.tick(Some("firefox"), Some(Lang::En));
@@ -499,6 +519,18 @@ mod tests {
         typ(&mut c, "hello ");
         assert_eq!(c.config.never_correct, vec!["ghbdtn".to_string()]);
         assert!(c.config.undone_once.is_empty());
+    }
+
+    #[test]
+    fn backspace_undo_respects_the_setting() {
+        let mut c = ctl();
+        c.config.undo_on_backspace = false;
+        c.engine.options = c.config.engine_options();
+        c.tick(Some("firefox"), Some(Lang::En));
+        typ(&mut c, "ghbdtn ");
+        c.replace_succeeded(Lang::Ru);
+        // The Backspace is a normal erase: no restore of the typed word.
+        assert!(c.on_input(Input::Key { key: Key::Backspace, modifiers: false }).is_empty());
     }
 
     #[test]

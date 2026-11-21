@@ -44,7 +44,7 @@ const IDLE_FRAME: Duration = Duration::from_millis(250);
 /// Home window: five squares in one short row.
 const HOME_INNER: [f32; 2] = [512.0, 192.0];
 /// Section window: settings (and other tabs) fit this height without scrolling.
-const SECTION_INNER: [f32; 2] = [512.0, if cfg!(windows) { 496.0 } else { 456.0 }];
+const SECTION_INNER: [f32; 2] = [512.0, if cfg!(windows) { 536.0 } else { 496.0 }];
 
 pub(crate) fn hide_window(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -382,7 +382,7 @@ impl App {
         let current = match slot {
             HotkeySlot::Convert => self.cfg.hotkey,
             HotkeySlot::Summon => self.cfg.summon_hotkey,
-            HotkeySlot::Undo => self.cfg.undo_hotkey,
+            HotkeySlot::Undo => self.cfg.undo_key,
         };
         let t = st::cur(ui);
         let capturing = self.capturing_hotkey == Some(slot);
@@ -430,7 +430,10 @@ impl App {
             match slot {
                 HotkeySlot::Convert => self.cfg.hotkey = h,
                 HotkeySlot::Summon => self.cfg.summon_hotkey = h,
-                HotkeySlot::Undo => self.cfg.undo_hotkey = h,
+                HotkeySlot::Undo => {
+                    self.cfg.undo_key = h;
+                    self.cfg.undo_hotkey = h;
+                }
             }
             self.save();
         }
@@ -544,18 +547,28 @@ impl App {
                 &[(Hotkey::CTRL_SHIFT_V, "Ctrl+Shift+V"), (Hotkey::CTRL_SHIFT_K, "Ctrl+Shift+K"), (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space")],
             );
             st::sep(ui);
+            changed |= st::toggle_row(
+                ui,
+                &mut self.cfg.undo_on_backspace,
+                "Отмена исправления",
+                "Сразу после исправления выбранная клавиша возвращает набранное слово",
+                accent,
+            );
+            st::sep(ui);
             self.hotkey_picker(
                 ui,
                 HotkeySlot::Undo,
-                "Отмена",
+                "Клавиша",
                 &[
+                    (Hotkey::BACKSPACE, if cfg!(target_os = "macos") { "Delete" } else { "Backspace" }),
                     (Hotkey::CTRL_ALT_Z, if cfg!(target_os = "macos") { "Ctrl+Option+Z" } else { "Ctrl+Alt+Z" }),
                     (Hotkey::CTRL_ALT_BACKSPACE, if cfg!(target_os = "macos") { "Ctrl+Option+Delete" } else { "Ctrl+Alt+Backspace" }),
                     (Hotkey::SHIFT_PAUSE, "Shift+Pause"),
                 ],
             );
         });
-        if self.cfg.hotkey == self.cfg.summon_hotkey || self.cfg.undo_hotkey == self.cfg.hotkey || self.cfg.undo_hotkey == self.cfg.summon_hotkey {
+        let undo = self.cfg.undo_key;
+        if self.cfg.hotkey == self.cfg.summon_hotkey || undo == self.cfg.hotkey || undo == self.cfg.summon_hotkey {
             ui.add_space(st::GAP);
             ui.horizontal(|ui| {
                 ui.add_space(st::INSET);
@@ -1270,7 +1283,10 @@ impl eframe::App for App {
                 match slot {
                     HotkeySlot::Convert => self.cfg.hotkey = hk,
                     HotkeySlot::Summon => self.cfg.summon_hotkey = hk,
-                    HotkeySlot::Undo => self.cfg.undo_hotkey = hk,
+                    HotkeySlot::Undo => {
+                        self.cfg.undo_key = hk;
+                        self.cfg.undo_hotkey = hk;
+                    }
                 }
                 self.capturing_hotkey = None;
                 self.save();

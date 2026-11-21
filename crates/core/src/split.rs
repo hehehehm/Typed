@@ -19,6 +19,11 @@
 //! `где же`, `знаешьли` → `знаешь ли`): see [`split_particle`]; tried only when no
 //! function word fits at the start.
 //!
+//! Two content words glued together (since 0.3.74: `отменаисправления` →
+//! `отмена исправления`): see [`split_compound`]; both parts must be known
+//! (morph-aware) and long-ish, with frequency evidence so short coincidences stay
+//! unsplit.
+//!
 //! Only the space is inserted, so the typed casing stays (`Вофисе` → `В офисе`).
 //! English is not handled: `a`/`I`/`to`/`in` glued to words collide with too many real
 //! words and names.
@@ -108,6 +113,14 @@ pub const MIN_PARTICLE_STEM: usize = 3;
 pub const SHORT_PARTICLE_STEM_RANK: u32 = 600;
 /// Prepositions that look like frequent words: `обоже` is `о боже`, not `обо же`.
 const PREPOSITION_STEMS: [&str; 6] = ["обо", "ото", "изо", "подо", "предо", "передо"];
+
+/// Shortest part of a two-content-word split (`офис`, `отмена`).
+const MIN_COMPOUND_PART: usize = 4;
+/// Shortest glued token that may split into two content words.
+const MIN_COMPOUND_TOKEN: usize = 10;
+/// A 4-letter part must be this frequent (`офис`); longer unlisted but known forms
+/// (`исправления`) are allowed when the other part has a rank.
+const COMPOUND_SHORT_RANK: u32 = 8_000;
 
 /// `надобы` → `надо бы`: a frequent word (not a name) + a glued particle. The caller has
 /// checked that the whole token is not a word (`чтобы`, `также`, `неужели`, `были` stay).
@@ -252,11 +265,85 @@ pub fn split_glued(d: &Dictionary, token: &str, lang: Lang) -> Option<String> {
         offer((ranked, rl));
     }
     let Some((_, pl)) = best else {
-        return split_particle(d, &chars, &lv, MIN_PARTICLE_STEM);
+        return split_particle(d, &chars, &lv, MIN_PARTICLE_STEM)
+            .or_else(|| split_compound(d, &chars, &lv));
     };
     let head: String = chars[..pl].iter().collect();
     let tail: String = chars[pl..].iter().collect();
     Some(format!("{head} {tail}"))
+}
+
+/// `отменаисправления` → `отмена исправления`: two known, long-ish content words
+/// glued together, with frequency evidence. Tried after function-word and particle
+/// splits, and only when the whole token is not itself a word.
+fn split_compound(d: &Dictionary, chars: &[char], lower: &[char]) -> Option<String> {
+    if lower.len() < MIN_COMPOUND_TOKEN {
+        return None;
+    }
+    // (score, split_at): lower score is better (best part ranks). `None` rank is
+    // treated as just beyond the 40 000 list: long known forms still count.
+    let mut hits: Vec<(u64, usize)> = Vec::new();
+    for i in MIN_COMPOUND_PART..=lower.len() - MIN_COMPOUND_PART {
+        let left: String = lower[..i].iter().collect();
+        let right: String = lower[i..].iter().collect();
+        if !compound_part_ok(d, &left) || !compound_part_ok(d, &right) {
+            continue;
+        }
+        // Closed compounds (`низкоуглеводные`, `восьмидесятипроцентная`), not two words.
+        if is_closed_compound_prefix(&left) {
+            continue;
+        }
+        let lr = compound_rank(d, &left);
+        let rr = compound_rank(d, &right);
+        // At least one part should be in the frequency list, so two unlisted
+        // fragments do not glue-split a long unknown token by coincidence.
+        if lr.is_none() && rr.is_none() {
+            continue;
+        }
+        let score = lr.unwrap_or(50_000) as u64 + rr.unwrap_or(50_000) as u64;
+        hits.push((score, i));
+    }
+    if hits.is_empty() {
+        return None;
+    }
+    hits.sort_unstable();
+    // Ambiguous: two similarly good cuts (`отмена|…` vs a close alternative).
+    if hits.len() >= 2 && hits[1].0 * 2 < hits[0].0 * 3 {
+        return None;
+    }
+    let i = hits[0].1;
+    let head: String = chars[..i].iter().collect();
+    let tail: String = chars[i..].iter().collect();
+    Some(format!("{head} {tail}"))
+}
+
+fn compound_rank(d: &Dictionary, part: &str) -> Option<u32> {
+    d.rank_exact(part).or_else(|| morph::candidate_rank(d, part)).or_else(|| d.rank(part))
+}
+
+/// Combining forms that glue onto the next word in writing (`низко-`, `восьми-`).
+const CLOSED_COMPOUND_PREFIXES: &[&str] = &[
+    "низко", "высоко", "средне", "мало", "много", "слабо", "сильно", "легко", "трудно", "быстро",
+    "медленно", "широко", "узко", "глубоко", "мелко", "добро", "ново", "старо", "ярко", "темно",
+    "светло", "само", "взаимо", "внутри", "сверх", "между", "меж", "противо", "после", "перед",
+    "двух", "трех", "трёх", "четырех", "четырёх", "пяти", "шести", "семи", "восьми", "девяти",
+    "десяти", "одиннадцати", "двенадцати", "двадцати", "тридцати", "сорока", "пятидесяти",
+    "шестидесяти", "семидесяти", "восьмидесяти", "девяноста", "полу", "одно", "сто",
+];
+
+fn is_closed_compound_prefix(left: &str) -> bool {
+    CLOSED_COMPOUND_PREFIXES.contains(&left)
+}
+
+fn compound_part_ok(d: &Dictionary, part: &str) -> bool {
+    let n = part.chars().count();
+    if n < MIN_COMPOUND_PART || tag(part) == Some('n') {
+        return false;
+    }
+    if n == 4 {
+        return compound_rank(d, part).is_some_and(|r| r < COMPOUND_SHORT_RANK);
+    }
+    d.is_word(part) || morph::is_known_form(d, part)
 }
 
 /// Convenience over the process-wide dictionary.
@@ -349,5 +436,29 @@ mod tests {
             assert_eq!(suggest(w, Lang::Ru), None, "{w}");
             assert_eq!(suggest(w, Lang::En), None, "{w}");
         }
+        // Real words must not be cut into two shorter ones.
+        for w in [
+            "благополучие", "столица", "сухофрукты", "времяпрепровождение",
+            "пользователь", "самолет", "видеокарта", "вебсайт", "отмена", "исправления",
+            "низкоуглеводные", "восьмидесятипроцентная",
+        ] {
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+        }
+    }
+
+    #[test]
+    fn splits_glued_content_words() {
+        for (typed, want) in [
+            ("отменаисправления", "отмена исправления"),
+            ("Отменаисправления", "Отмена исправления"),
+            ("домашнийофис", "домашний офис"),
+            ("времяработы", "время работы"),
+            ("интернетмагазин", "интернет магазин"),
+            ("сервернаякомната", "серверная комната"),
+        ] {
+            assert_eq!(suggest(typed, Lang::Ru).as_deref(), Some(want), "{typed}");
+        }
+        // English is not handled.
+        assert_eq!(suggest("missingspace", Lang::En), None);
     }
 }

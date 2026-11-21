@@ -162,7 +162,13 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
     if (strict.is_some() && !vetoed) || level == Level::Cautious {
         return strict.filter(|_| !vetoed);
     }
-    crate::typo_wide::suggest_wide(d, word, lang, assume_unknown, level, ctx)
+    let wide = crate::typo_wide::suggest_wide(d, word, lang, assume_unknown, level, ctx);
+    if wide.is_some() {
+        return wide;
+    }
+    // After the first-letter-keeping search: an extra neighbour key at the start of a
+    // short unknown word (`лдва` → `два`). Cautious stays on the strict rules only.
+    leading_neighbour_insert(d, word, lang, assume_unknown).filter(|f| !ngram::veto(ctx, word, f, lang))
 }
 
 /// `-ить` / `-еть` written for `-ит` / `-ет` (`услышить` → `услышит`): the typed form is in
@@ -551,6 +557,42 @@ pub(crate) fn en_end_letter_only(typed: &str, cand: &str) -> bool {
 /// The fix starts with the typed first letter, or swaps the first two: slips at the
 /// very start are rare, while `упускать` / `пускать`, `входной` / `выходной`,
 /// `ренди` / `бренди` are different words.
+/// Extra neighbour key at the very start of a short unknown word (`лдва` → `два`:
+/// л sits next to д on ЙЦУКЕН). The rest must be a high-frequency word; the typed
+/// token must not itself be a word. First-letter-keeping fixes (above) win first,
+/// so `лдень` stays `лень`, not `день`.
+fn leading_neighbour_insert(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
+    let lower = Dictionary::normalize(word);
+    let chars: Vec<char> = lower.chars().collect();
+    let n = chars.len();
+    // Only 4-letter tokens (`лдва`): a 5-letter typo like `ждети` (for `ждете`) must
+    // not lose its first neighbour letter to a frequent 4-letter word (`дети`).
+    if n != 4 || !word.chars().all(char::is_alphabetic) {
+        return None;
+    }
+    if !assume_unknown {
+        if d.is_word(&lower) {
+            return None;
+        }
+        if lang == Lang::Ru && morph::is_known_form(d, &lower) {
+            return None;
+        }
+        if lang == Lang::En && en_known_form(d, &lower) {
+            return None;
+        }
+    }
+    if !adjacent_keys(chars[0], chars[1], lang) {
+        return None;
+    }
+    let rest: String = chars[1..].iter().collect();
+    let rank = match lang {
+        Lang::Ru => morph::candidate_rank(d, &rest).or_else(|| d.rank(&rest)),
+        Lang::En => d.rank(&rest),
+    }?;
+    // The 3-letter rest must be among the most frequent words (`два`, `для`, `the`).
+    (rank < FIRST_SLIP_RANK_SHORT).then(|| match_case(word, &rest))
+}
+
 pub(crate) fn first_letter_kept(typed: &[char], cand: &str) -> bool {
     let cv: Vec<char> = cand.chars().collect();
     match (cv.first(), typed.first()) {
@@ -890,6 +932,18 @@ mod tests {
         // 3 letters since 0.3.72 (Level::Normal), when one fix clearly wins.
         assert_eq!(suggest("teh", Lang::En).as_deref(), Some("the"));
         assert_eq!(suggest_level("teh", Lang::En, Level::Cautious), None); // too short for the strict rules
+        // Neighbour-key insertion at the start of a short unknown word.
+        assert_eq!(suggest("лдва", Lang::Ru).as_deref(), Some("два"));
+        assert_eq!(suggest("Лдва", Lang::Ru).as_deref(), Some("Два"));
+        assert_eq!(suggest_level("лдва", Lang::Ru, Level::Cautious), None);
+        // Siblings: other neighbour insertions at the start, into a frequent word.
+        assert_eq!(suggest("лдля", Lang::Ru).as_deref(), Some("для"));
+        // A first-letter-keeping typo still wins (`лдень` → `лень`, not `день`).
+        assert_eq!(suggest("лдень", Lang::Ru).as_deref(), Some("лень"));
+        // Real words and non-adjacent extras stay.
+        for w in ["два", "слова", "лето", "льва", "дана", "лдван"] {
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+        }
         assert_eq!(suggest("qzxvbn", Lang::En), None);
         // к→й is not a neighbour-key slip, so only the doubled letter is dropped.
         assert_eq!(suggest("опечаткок", Lang::Ru).as_deref(), Some("опечаток"));

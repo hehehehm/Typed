@@ -132,7 +132,7 @@ fn real_main() -> Result<(), String> {
             println!("auto-learn:   always on");
             println!("hotkey:       {}", cfg.hotkey);
             println!("summon:       {}", cfg.summon_hotkey);
-            println!("undo:         {} (backspace undo: always on), never-correct words: {}, never-typo-fix words: {}", cfg.undo_hotkey, cfg.never_correct.len(), cfg.never_typo_fix.len());
+            println!("undo:         {} (enabled: {}, key: {}), never-correct words: {}, never-typo-fix words: {}", cfg.undo_hotkey, if cfg.undo_on_backspace { "on" } else { "off" }, cfg.undo_key, cfg.never_correct.len(), cfg.never_typo_fix.len());
             println!("typos:        always on (level {:?}, context always on)", cfg.typo_level);
             println!("apps:         {} remembered, {} exceptions", cfg.apps.len(), cfg.exception_apps.len());
             let (app, lang) = platform::probe();
@@ -185,6 +185,7 @@ fn real_main() -> Result<(), String> {
                 "hotkey" => cfg.hotkey = val.parse::<Hotkey>()?,
                 "summon-hotkey" | "summon_hotkey" => cfg.summon_hotkey = val.parse::<Hotkey>()?,
                 "undo-hotkey" | "undo_hotkey" => cfg.undo_hotkey = val.parse::<Hotkey>()?,
+                "undo-key" | "undo_key" => cfg.undo_key = val.parse::<Hotkey>()?,
                 "undo-on-backspace" | "undo_on_backspace" => cfg.undo_on_backspace = on_off(val)?,
                 "fix-missing-spaces" | "fix_missing_spaces" => cfg.fix_missing_spaces = on_off(val)?,
                 "typo-context" | "use_context" => cfg.use_context = on_off(val)?,

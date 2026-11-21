@@ -60,6 +60,12 @@ impl Hotkey {
     pub const CTRL_ALT_Z: Self = Self::new(true, true, false, false, HotkeyCode::Letter('Z'));
     pub const CTRL_ALT_BACKSPACE: Self = Self::new(true, true, false, false, HotkeyCode::Backspace);
     pub const SHIFT_PAUSE: Self = Self::new(false, false, true, false, HotkeyCode::Pause);
+    /// Default "undo the last correction immediately after it": a bare Backspace.
+    pub const BACKSPACE: Self = Self::new(false, false, false, false, HotkeyCode::Backspace);
+
+    pub fn is_plain_backspace(self) -> bool {
+        self == Self::BACKSPACE
+    }
 
     pub fn is_both_shifts(self) -> bool {
         matches!(self.key, HotkeyCode::BothShifts)
@@ -82,9 +88,10 @@ impl Hotkey {
     }
 
     /// Letters, digits and ordinary keys need Ctrl, Alt or Win/Cmd so they are
-    /// not stolen from normal typing. Pause, function keys and Shift+Shift are fine alone.
+    /// not stolen from normal typing. Pause, function keys, Backspace and
+    /// Shift+Shift are fine alone.
     pub fn is_safe(self) -> bool {
-        if self.is_both_shifts() || matches!(self.key, HotkeyCode::Pause | HotkeyCode::F(_)) {
+        if self.is_both_shifts() || matches!(self.key, HotkeyCode::Pause | HotkeyCode::F(_) | HotkeyCode::Backspace) {
             return true;
         }
         self.ctrl || self.alt || self.meta
@@ -331,10 +338,14 @@ pub struct Config {
     /// Undo the last autocorrection: the typed word comes back and joins `never_correct`.
     #[serde(default = "default_undo_hotkey")]
     pub undo_hotkey: Hotkey,
-    /// Backspace right after an autocorrection (before any other key) undoes it.
-    /// Always on at runtime; the field is kept for config compatibility.
+    /// Undo the last correction with the key in [`Self::undo_key`] when it is pressed
+    /// immediately after that correction (before any other key). Shown in Settings.
     #[serde(default = "default_true")]
     pub undo_on_backspace: bool,
+    /// Key that undoes the last correction immediately after it. Default Backspace
+    /// keeps the historical behaviour. Missing in old `config.json` files (`serde` default).
+    #[serde(default = "default_undo_key")]
+    pub undo_key: Hotkey,
     /// Words the user undid: never autocorrected again (normalised, lowercase).
     #[serde(default)]
     pub never_correct: Vec<String>,
@@ -388,6 +399,7 @@ impl Default for Config {
             hidden_apps: Vec::new(),
             undo_hotkey: default_undo_hotkey(),
             undo_on_backspace: true,
+            undo_key: default_undo_key(),
             never_correct: Vec::new(),
             typo_level: crate::typo::Level::default(),
             never_typo_fix: Vec::new(),
@@ -404,7 +416,13 @@ fn default_convert_single_letters() -> bool {
 }
 
 fn default_undo_hotkey() -> Hotkey {
-    Hotkey::CTRL_ALT_Z
+    // New configs store the same default as `undo_key` (Backspace). Older files that
+    // already saved Ctrl+Alt+Z keep that combo as a second, anytime undo.
+    Hotkey::BACKSPACE
+}
+
+fn default_undo_key() -> Hotkey {
+    Hotkey::BACKSPACE
 }
 
 fn default_true() -> bool {
@@ -555,7 +573,7 @@ impl Config {
             user_words: crate::userdict::UserWords::from_words(&self.custom_words),
             fix_typos: true,
             never_correct: self.never_correct.iter().map(|w| crate::engine::never_key(w)).filter(|w| !w.is_empty()).collect(),
-            undo_on_backspace: true,
+            undo_on_backspace: self.undo_on_backspace,
             fix_missing_spaces: true,
             typo_level: self.typo_level,
             never_typo: self.never_typo_fix.iter().map(|w| crate::engine::never_key(w)).filter(|w| !w.is_empty()).collect(),
@@ -832,8 +850,31 @@ mod tests {
         assert!(!saved.fix_typos && !saved.auto_learn && !saved.use_context);
         assert!(!saved.convert_single_letters && !saved.fix_missing_spaces && !saved.undo_on_backspace);
         let o = saved.engine_options();
-        assert!(o.fix_typos && o.use_context && o.convert_single_letters && o.fix_missing_spaces && o.undo_on_backspace);
+        assert!(o.fix_typos && o.use_context && o.convert_single_letters && o.fix_missing_spaces);
+        // Undo-on-key is the one always-on flag that became a real setting.
+        assert!(!o.undo_on_backspace);
         assert!(saved.learns_layouts());
         assert_eq!(Config::from_json(&saved.to_json()).unwrap(), saved);
+    }
+
+    #[test]
+    fn undo_key_defaults_to_backspace_and_old_json_loads() {
+        let fresh = Config::from_json("{}").unwrap();
+        assert!(fresh.undo_on_backspace);
+        assert_eq!(fresh.undo_key, Hotkey::BACKSPACE);
+        assert_eq!(fresh.undo_hotkey, Hotkey::BACKSPACE);
+        assert_eq!(fresh.engine_options().undo_on_backspace, true);
+        // An older file that already saved the previous default combo still loads;
+        // the new field falls back to Backspace, so immediate Backspace undo stays.
+        let old = Config::from_json(r#"{"undo_hotkey":"Ctrl+Alt+Z"}"#).unwrap();
+        assert_eq!(old.undo_hotkey, Hotkey::CTRL_ALT_Z);
+        assert_eq!(old.undo_key, Hotkey::BACKSPACE);
+        assert!(old.undo_on_backspace);
+        let off = Config::from_json(r#"{"undo_on_backspace":false,"undo_key":"Ctrl+Alt+Z"}"#).unwrap();
+        assert!(!off.undo_on_backspace && !off.engine_options().undo_on_backspace);
+        assert_eq!(off.undo_key, Hotkey::CTRL_ALT_Z);
+        assert_eq!("Backspace".parse::<Hotkey>().unwrap(), Hotkey::BACKSPACE);
+        assert!(Hotkey::BACKSPACE.is_safe() && Hotkey::BACKSPACE.is_plain_backspace());
+        assert_eq!(Config::from_json(&off.to_json()).unwrap(), off);
     }
 }

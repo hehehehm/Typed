@@ -115,7 +115,7 @@ fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
 
 fn shots(with_vault: bool) -> Vec<Shot> {
     let home_sz = egui::vec2(512.0, 192.0);
-    let sec_sz = egui::vec2(512.0, 456.0);
+    let sec_sz = egui::vec2(512.0, 496.0);
     let mut v = Vec::new();
     for light in [true, false] {
         let sfx = |s: &'static str| -> &'static str {

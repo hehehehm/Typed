@@ -506,8 +506,9 @@ fn combo_mods() -> (bool, bool, bool, bool) {
 fn match_hotkey(st: &State, vk: u32) -> Option<Input> {
     let code = vk_to_hotkey_code(vk)?;
     let (c, a, s, m) = combo_mods();
-    // Undo first: its default Ctrl+Alt+Z must not fall into a relaxed conversion match.
-    if st.ctl.undo_hotkey().matches(code, c, a, s, m) {
+    // Undo first: a custom combo must not fall into a relaxed conversion match.
+    // Bare Backspace is not a hotkey; it is handled as Key::Backspace below.
+    if st.ctl.matches_undo_combo(code, c, a, s, m) {
         Some(Input::Undo)
     } else if st.ctl.hotkey().matches_relaxed_shift(code, c, a, s, m) {
         Some(Input::Hotkey)

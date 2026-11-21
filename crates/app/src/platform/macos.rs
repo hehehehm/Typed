@@ -634,7 +634,7 @@ fn handle_key(st: &mut State, kc: u16, flags: u64) -> bool {
         let alt = flags & FLAG_ALT != 0;
         let shift = flags & FLAG_SHIFT != 0;
         let meta = flags & FLAG_CMD != 0;
-        if st.ctl.undo_hotkey().matches(code, ctrl, alt, shift, meta) {
+        if st.ctl.matches_undo_combo(code, ctrl, alt, shift, meta) {
             st.pending.extend(st.ctl.on_input(Input::Undo));
             return true;
         }

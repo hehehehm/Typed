@@ -2006,6 +2006,26 @@ mod tests {
     }
 
     #[test]
+    fn glued_content_words_and_leading_neighbour_insert() {
+        let e = typo_engine();
+        let out = |w: &str| match e.decide(w) {
+            Decision::Convert { text, reason, .. } => Some((text, reason)),
+            d => panic!("{w}: {d:?}"),
+        };
+        assert_eq!(out("отменаисправления").as_ref().map(|(t, r)| (t.as_str(), *r)), Some(("отмена исправления", SPACE_REASON)));
+        assert_eq!(out("лдва").as_ref().map(|(t, r)| (t.as_str(), *r)), Some(("два", TYPO_REASON)));
+        // Cautious typo level still splits (spaces are not typo-level), but not `лдва`.
+        let mut c = typo_engine();
+        c.options.typo_level = typo::Level::Cautious;
+        assert!(matches!(c.decide("отменаисправления"), Decision::Convert { .. }));
+        assert!(matches!(c.decide("лдва"), Decision::Keep(_)));
+        // Real words stay.
+        for w in ["два", "отмена", "исправления", "чтобы", "также", "благополучие"] {
+            assert!(matches!(e.decide(w), Decision::Keep(_)), "{w}");
+        }
+    }
+
+    #[test]
     fn partial_undo_keeps_the_layout() {
         let mut e = typo_engine();
         assert_eq!(type_str(&mut e, "xnjj ")[0].insert, "что ");

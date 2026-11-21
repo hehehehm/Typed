@@ -497,7 +497,7 @@ impl Daemon {
         let base = self.x.keysym(keycode, g, 0);
         if let Some(code) = keysym_to_hotkey_code(base) {
             let (c, a, s, m) = (self.mods.ctrl, self.mods.alt, self.mods.shift(), self.mods.sup);
-            if self.ctl.undo_hotkey().matches(code, c, a, s, m) {
+            if self.ctl.matches_undo_combo(code, c, a, s, m) {
                 return Some(Input::Undo);
             }
             if self.ctl.hotkey().matches_relaxed_shift(code, c, a, s, m) {
