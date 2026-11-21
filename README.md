@@ -594,6 +594,26 @@ cargo build --release
 Автозапуск: Windows — ярлык в `shell:startup`; macOS — LaunchAgent (`~/Library/LaunchAgents`);
 Linux — `~/.config/autostart/typed.desktop` или systemd user unit. Трея пока нет.
 
+
+### Typist testers (симуляция наборщиков)
+
+Движковый прогон без GUI и хуков: два профиля (`torpyga` — быстрый, много путаницы
+раскладки и соседних клавиш; `gramotey` — аккуратный, много кода, ников и смеси языков)
+печатают фразы по клавишам в тот же `Engine::feed`, что и `context_eval`. Ошибки
+детерминированные (seed), уровни «Осторожно» / «Обычно» / «Смело». Не меняет поведение
+движка; считает ложные исправления, верные, неверные и пропуски.
+
+```bash
+EVAL_SEED=76 EVAL_N=5000 EVAL_OUT=/tmp/typist.md \
+  cargo test --release -p layout_keeper_core --test typist_eval -- --ignored --nocapture
+```
+
+По умолчанию: 5000 фраз на профиль на «Обычно» и 1000 на других уровнях (`EVAL_N_OTHER`).
+`EVAL_LEVEL=normal` / `cautious` / `aggressive` / `all`, `EVAL_PERSONA=torpyga` / `gramotey` / `all`.
+Отчёт пишется в `.md` и рядом `.json`. Тексты: `tests/data/heldout_{ru,en}.txt` и
+`tests/data/typist_chat.txt`. Короткий дымовой прогон (`typist_eval_smoke`) входит в обычный
+`cargo test` и не падает из-за ложных срабатываний.
+
 ## Графические настройки (`typed gui`)
 
 Окно настроек — отдельный процесс: он только редактирует тот же `config.json`, а работающий демон
@@ -1358,6 +1378,11 @@ settings does not stop the daemon.
 
 Build: `cargo test && cargo build --release`. Run: `typed` (`status`, `set-app <id> <en|ru>`,
 `list-apps`, `convert`, `check`, `set …`).
+
+
+Typist testers (engine-level, no GUI): two seeded personas type through `Engine::feed`.
+Run `EVAL_SEED=76 EVAL_N=5000 EVAL_OUT=/tmp/typist.md cargo test --release -p layout_keeper_core --test typist_eval -- --ignored --nocapture`.
+See the Russian «Typist testers» section for env vars (`EVAL_LEVEL`, `EVAL_PERSONA`, `EVAL_N_OTHER`).
 
 Platforms: Linux X11 implemented and tested under Xvfb; Windows and macOS implemented against the
 native APIs and type-checked for their targets, not yet run on real hardware; Wayland and mobile are

@@ -1,0 +1,400 @@
+# Typist chat-style phrases (original, for typist_eval). One phrase per line.
+# Sections: ru / en / mixed-tech. No copyrighted material.
+
+# --- ru ---
+привет, ты тут?
+ну ок, давай завтра
+я уже дома, напишу вечером
+слушаю, рассказывай
+короче, я опоздаю минут на пятнадцать
+можно ссылку ещё раз?
+сегодня никак, давай в четверг
+у меня сел телефон, пишу с компьютера
+не, я не против, просто времени мало
+давай в чат скину файлы
+супер, спасибо большое
+я в метро, связь плохая
+он сказал, что уже вышел
+подожди секунду, я проверю
+мне кажется, это плохая идея
+ладно, как скажешь
+я куплю хлеб и молоко по дороге
+ты видел это сообщение?
+давай созвонимся после шести
+я просто не понял, о чём речь
+у нас на кухне опять протекает кран
+завтра без меня, я к врачу
+ок, тогда оставляем как есть
+напиши, когда будешь рядом
+я забыл ключи на работе
+это не срочно, можно утром
+сейчас посмотрю и отвечу
+мне нужно ещё пару дней
+встречаемся у входа в парк
+я уже отправил перевод
+на улице дождь, лучше такси
+он не берёт трубку с утра
+мы можем перенести на пятницу?
+я сделаю список и пришлю
+это было неожиданно, честно
+давай без лишних людей
+я почти дочитал эту главу
+у меня температура, сижу дома
+можно я возьму твою зарядку?
+мы уже десять лет так делаем
+я не уверен, что это закончится хорошо
+скажи маме, что я задержусь
+сегодня наконец-то встретились
+ещё утром на вокзале была очередь
+говорят, он очень занят на этой неделе
+я так долго ждал этого дня
+давай лучше пешком, близко
+мне нравится этот район вечером
+ты когда обычно встаёшь?
+я оставлю записку на столе
+не забудь выключить свет
+у нас завтра гости, надо прибраться
+я купил билеты на субботу
+это слишком дорого для такой поездки
+давай разделим счёт пополам
+я уже заказал стол на восемь
+она работает до позднего вечера
+мне надо подумать до завтра
+короче, я за
+если что, я на связи
+пойдём сразу после работы
+я оставил сумку в машине
+напомни мне про аптеку
+это старая история, забудь
+у меня закончился сахар
+ты ешь ещё или уже всё?
+я бы выбрал другой цвет
+давай не сегодня, я устал
+мне надо рано вставать
+он приезжает в понедельник
+я не люблю такие сюрпризы
+можно без музыки, я работаю
+я уже всё протёр и убрал
+это занимает больше времени, чем думал
+налей мне ещё чай, пожалуйста
+я перезвоню через час
+у них там ремонт до конца месяца
+я нашёл тот синий свитер
+давай встретимся у метро
+я не могу открыть эту дверь
+она сказала, что будет позже
+мне хватит и половины
+это рядом с той остановкой
+я закрою окно, дует
+ты взял зонт? на улице моросит
+я уже положил письмо в ящик
+завтра утром созвон с родителями
+я чуть не забыл про день рождения
+давай купим цветы по дороге
+это была хорошая прогулка
+я сяду у окна, если можно
+он всегда опаздывает на пять минут
+мне нужно заправить машину
+ты помнишь, куда мы это положили?
+я не буду спорить, ты лучше знаешь
+давай просто помолчим немного
+я отправлю фото, как приеду
+у меня кончились наличные, есть карта?
+это не то место, мы проехали
+я оставлю тебе ключ под ковриком
+
+# --- en ---
+hey, are you around?
+ok, let's do it tomorrow
+i'm home already, I'll write later
+tell me more, i'm listening
+i'll be about fifteen minutes late
+can you send the link again?
+not today, thursday works better
+my phone died, typing from the laptop
+i'm not against it, just short on time
+i'll drop the files in the chat
+thanks a lot, that's perfect
+i'm on the train, signal is weak
+he said he already left
+give me a second, I'll check
+i don't think that's a good idea
+alright, if you say so
+i'll grab bread and milk on the way
+did you see that message?
+let's call after six
+i just didn't get what you meant
+the kitchen tap is leaking again
+count me out tomorrow, doctor's appointment
+ok, leave it as is then
+text me when you're nearby
+i left my keys at the office
+it's not urgent, morning is fine
+i'll look now and get back to you
+i need a couple more days
+let's meet at the park entrance
+i already sent the transfer
+it's raining, better take a cab
+he's not picking up this morning
+can we move it to friday?
+i'll make a list and send it over
+that was unexpected, honestly
+let's keep it small, no extra people
+i almost finished the chapter
+i've got a fever, staying in
+can I borrow your charger?
+we've been doing it this way for years
+i'm not sure this ends well
+tell mom I'll be late
+we finally met up today
+there was a line at the station this morning
+they say he's busy all week
+i waited a long time for this day
+let's walk, it's close
+i like this neighbourhood in the evening
+what time do you usually get up?
+i'll leave a note on the table
+don't forget to switch the light off
+we have guests tomorrow, need to tidy up
+i bought tickets for saturday
+that's too expensive for this trip
+let's split the bill
+i already booked a table for eight
+she works late most evenings
+i need to think about it until tomorrow
+short answer: i'm in
+i'll be around if you need me
+let's go right after work
+i left the bag in the car
+remind me about the pharmacy
+that's an old story, forget it
+we're out of sugar
+are you still eating or should I clear up?
+i'd pick a different colour
+not today, i'm tired
+i have to get up early
+he arrives on monday
+i don't like surprises like that
+no music please, i'm working
+i already wiped everything down
+this is taking longer than I thought
+pour me some more tea, please
+i'll call back in an hour
+they're renovating until the end of the month
+i found that blue sweater
+let's meet by the metro
+i can't get this door open
+she said she'll be later
+half of it is enough for me
+it's next to that bus stop
+i'll close the window, it's drafty
+did you take an umbrella? it's drizzling
+i already put the letter in the box
+morning call with my parents tomorrow
+i almost forgot the birthday
+let's buy flowers on the way
+that was a nice walk
+i'll sit by the window if that's ok
+he's always five minutes late
+i need to fill up the car
+do you remember where we put it?
+i won't argue, you know better
+let's just be quiet for a bit
+i'll send a photo when I get there
+i'm out of cash, do you have a card?
+this is the wrong place, we passed it
+i'll leave you a key under the mat
+
+# --- mixed ---
+задеплоил на staging, rustc ругается на lifetime
+cargo test --release проходит за две минуты
+скинь PR, я посмотрю diff вечером
+у нас nginx снова отдал 502 на /api/v2/users
+я поправил typo в README и запушил в main
+clippy орёт на unwrap в parser.rs, потом гляну
+логин через JWT, refresh лежит в httpOnly cookie
+postgres медленный на этом запросе, нужен index
+не коммить node_modules, это уже в .gitignore
+ssh в bastion не пускает, ключ наверное старый
+сейчас открою issue и повешу label bug
+сборка в CI упала на typo_audit, ложный не новый
+typed gui не стартует, в логе eframe panic
+layout-keeper.exe в исключениях, иначе он сам себя правит
+я добавил endpoint /healthz, без авторизации
+grep по коду на TODO, их там слишком много
+ветка feature/undo-key, ребейз на origin/main
+у nextcloud после апдейта отвалился WebDAV
+секрет в vault.bin, не клади его в git
+serde_json не парсит этот UTF-8 BOM
+мышление вслух: может, HashMap тут лишний
+npm ci && npm run build, как обычно
+kubectl get pods -n staging, CrashLoopBackOff
+dns для app.layoutkeeper ещё не разъехался
+в конфиге typo_level = "normal", не трогай
+отправь лог в Slack, без токенов пожалуйста
+я переименовал LogoStyle, старый alias остаётся
+merge conflict в Cargo.lock, давай я разрулю
+https://github.com/hehehehm/Typed/issues/12
+смотри пример в https://example.com/docs/api
+мой ник qwerty_dev, не путать с qwerty123
+напиши @ivan в треде, он копался в hook
+файл config.json лежит рядом с vault.bin
+wsl путь /mnt/c/Users/me/projects/typed
+ошибка: expected `;`, found `}`
+let mut ev = ev.into_iter(); это не то
+eframe 0.29, патч в third_party/eframe
+я выставил CFBundleIdentifier app.layoutkeeper
+Innо Setup берёт версию из MyAppVersion
+у нас AppId не меняем, это уже в проде
+запусти EVAL_OUT=/tmp/c.md и скинь таблицу
+gh run watch, там macos ещё в очереди
+dmg собрался: Typed-0.3.76.dmg, 21 мегабайт
+я не буду force-push в main, только в свою ветку
+черновик коммита: fix typo in leading_neighbour_insert
+JSON такой: {"logo":"beach","typo_level":"normal"}
+регулярка ^[a-z0-9_-]+$, без пробелов
+UTF-8, без CRLF, пожалуйста, в этом файле
+путь C:\Users\me\AppData\Roaming\typed
+makefile target `make eval`, я его ещё не добавил
+rx rustc --version, у меня 1.85.1
+токен я положил в $HOME/.config/gh/hosts.yml
+не логируй пароли, даже на debug
+websocket отваливается раз в пять минут
+grafana показывает p99 80ms на /search
+кэш Redis после рестарта пустой, это ок
+я добавил rate limit 30 rps на login
+cors для localhost:5173, только dev
+в docker-compose уже postgres и redis
+схема: users(id, email, created_at)
+миграция 0017_add_logo, проверь на копии
+я создал feature flag typist_eval, по умолчанию off
+страница 404 на /settings/logos, роут не тот
+css сломал rounded square на ретине
+figma файл я не прикладываю, только png 1024
+берём oxipng, pngquant в образе нет
+хеш коммита 0829d09, не тот что на проде
+я тегнул v0.3.76, не пушь тег повторно
+пароль от smtp не тот, смотри vault
+MX записи для typed.app ещё не прописаны
+canary 5% на eu-central, остальное stable
+я отключил telemetry, её и не было
+тест every_screen_fits_the_window зелёный
+скриншоты лежат в /workspace/ui-shots/
+не коммить target/, он уже в gitignore
+формула: ngrams backoff, если биграмм нет
+я не трогал controller::tick, как просили
+trial.rs не меняем в этом PR
+bundle id оставь app.layoutkeeper
+я добавил allow(dead_code) на from_index
+winres не нашёл windres, это только warning
+иконка 256 в ico, png payload
+на маке Dock ставится через setApplicationIconImage
+трей берёт выбранный logo png
+юзер выбрал porthole, а ico всё ещё beach
+это ок: дефолтные установленные — пляж
+скинь sha256 от Typed-Setup-0.3.76.exe
+я проверил подпись, её пока нет, не обещай
+на осторожном уровне такие длинные опечатки могут остаться
+это ожидаемо, только Обычно и Смело
+подожди, я ещё не дети, просто устал
+нам нужно два примера, не один
+rustup и clippy у меня уже стоят
+cargo clippy -D warnings падает на unused
+я вынес Profile в отдельный struct, смотри typist_eval
+seed 76, n=5000, не меняй без нужды
+EVAL_PERSONA=gramotey EVAL_LEVEL=normal
+false positive важнее, чем лишний miss
+напиши отзыв в issue, без лишнего шума
+JSON отчёт рядом, тот же stem
+я закоммичу только локально, без push
+не бампай версию, это не релиз
+ветка ui-redesign сейчас на одном уровне с main
+heldout_ru.txt, 3000 фраз, не копируй в чат
+Tatoeba только как источник для eval, не публикуем куски
+я написал свои фразы, без чужих текстов
+ник Bizon в списке FP, помнишь?
+actix и struct тоже, не ломай ради recall
+URL https://example.org/a?q=1&lang=ru
+email test@example.com не конвертируем
+я залогинился как root, зря, откатил
+sudo systemctl restart typist — такого юнита нет
+cron 0 5 * * * /usr/local/bin/backup.sh
+путь ~/projects/typed-ui/crates/core/tests/data
+модуль layout.rs, пары QWERTY/ЙЦУКЕН
+клавиша ё на backtick, не забудь в соседях
+shift застрял, получилось ПРИВЕТ вместо Привет
+Caps Lock на пароле, engine должен Keep
+я вставил пробел вместо b, вышло hellobworld
+склеил приветмир, ждём расклейку
+я переключил раскладку только в середине слова
+я забыл переключить раскладку на всём слове
+первая буква рядом, такое бывает на ЙЦУКЕН
+иногда лишняя соседняя клавиша в начале
+this already occurred yesterday, twice
+это сумасшедший план, но давай рискнём
+у дворца красивая колоннада и фонтан
+программа не собирается, смотри лог
+send it to this address, not the office one
+which one do you want, the left or the right?
+their keys are still on the table
+the length of the list is fine for now
+the short words are the hardest to judge
+i'll open main.rs and look at feed()
+the hook sends Key::Char then the boundary
+undo on backspace should restore what I typed
+don't fight the user mid-backspace
+preferred_lang comes from the controller
+skip tokens with digits: utf8_1
+skip urls: http://localhost:8080/health
+mixed: я запушил fix в origin/main уже
+команда git log -1 --oneline
+rebase --autosquash, если нужно
+cherry-pick 52cd958, только typo
+не трогай Inno AppId, повторю ещё раз
+я выставил RUST_LOG=debug, слов в логе нет
+p99 decide был около двадцати миллисекунд на длинном слове
+для тестера это много, фразы короткие
+gramotey мало ошибается, много жаргона
+torpyga быстрый, путает раскладку
+профили легко добавить, это просто struct
+я не использую LLM в этом прогоне, только seed
+детерминированный LCG, как в context_eval
+соседи считаются по физической сетке
+пробел рядом с v b n m
+stuck Shift после заглавной, на три клавиши
+self-fix: backspace и правильная буква
+после пробела иногда сразу undo
+я хочу увидеть таблицу по уровням
+Cautious меньше чинит, меньше FP?
+Aggressive больше recall, больше wrong
+Normal — дефолт, как в Config
+engine_options форсирует typo и spaces
+custom_words пустой, как у нового пользователя
+never_correct не тащим между фразами
+каждый прогон — новый Engine
+отчёт пишем в EVAL_OUT
+если путь .json — ещё и .md, и наоборот
+top FP сгруппированы и посчитаны
+печатаем feedback: строки в stdout
+прогон на 5000 должен уложиться в минуту
+smoke на 40 фразах в обычном cargo test
+он не падает из-за FP, только если panic
+readme briefly explains how to run this
+локальный коммит, без тега
+ок, я на этом заканчиваю список фраз
+last one: see you in the typist report
+ещё раз: не меняй поведение движка
+this is a harness, not a fixer
+если FP выглядят как баги — опиши в отчёте
+simulator artifacts тоже помечай
+например space→m маловероятен у аккуратного
+но у torpyga пусть будет
+я добавил чат про деплой, этого хватит
+конец корпуса, дальше код
+wait, one more: Kubernetes и serde пусть живут
+eprintln! макрос, не слово
+токен typist_eval_seed_76 только для тестов
+не используй его в проде
+ok done, merging the lists now
+последняя русская: завтра без созвона, я в поезде
+last english: ship it, but only locally
