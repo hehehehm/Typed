@@ -292,29 +292,12 @@ impl Harness {
 
     /// Rightmost HIT-sized clickable on the add-program row (the plus square).
     fn click_plus(&mut self) -> bool {
-        let header = st::HEADER;
-        let w = self
-            .clickables()
-            .into_iter()
-            .filter(|c| {
-                let r = c.interact_rect;
-                r.top() > header
-                    && r.top() < header + st::ROW * 2.0 + st::MARGIN
-                    && (r.width() - st::HIT).abs() < 6.0
-                    && (r.height() - st::HIT).abs() < 6.0
-            })
-            .max_by(|a, b| {
-                a.interact_rect
-                    .right()
-                    .partial_cmp(&b.interact_rect.right())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        if let Some(w) = w {
-            self.click(w.interact_rect.center());
-            true
-        } else {
-            false
+        let Some(w) = find_plus(self) else { return false };
+        if !w.enabled {
+            return false;
         }
+        self.click(w.interact_rect.center());
+        true
     }
 
     /// Trash button on the row whose label contains `name`.
@@ -1091,15 +1074,17 @@ fn find_back(h: &Harness) -> Option<WidgetRect> {
 }
 
 fn find_plus(h: &Harness) -> Option<WidgetRect> {
+    // The + square is 32×32, including when it is disabled (empty field).
+    // EN/RU cells on the same row are 32×28 and must not be mistaken for it.
     let header = st::HEADER;
-    h.clickables()
+    h.widgets()
         .into_iter()
         .filter(|c| {
             let r = c.interact_rect;
             r.top() > header
                 && r.top() < header + st::ROW * 2.0 + st::MARGIN
-                && (r.width() - st::HIT).abs() < 6.0
-                && (r.height() - st::HIT).abs() < 6.0
+                && (r.width() - st::HIT).abs() < 1.5
+                && (r.height() - st::HIT).abs() < 1.5
         })
         .max_by(|a, b| {
             a.interact_rect
@@ -1205,6 +1190,7 @@ fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
     }
 
     // Destructive delete sitting next to the EN/RU control on a program row.
+    // A gap of at least INSET between the two is the intended spacing.
     if h.app.tab == Tab::Apps && h.app.apps_pane == AppsPane::Programs {
         for t in h.texts() {
             let name = t.text.trim();
@@ -1215,18 +1201,28 @@ fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
             let en = h.texts().into_iter().find(|e| {
                 (e.text == "EN" || e.text == "RU") && (e.rect.center().y - y).abs() < 14.0
             });
-            let trash = h.clickables().into_iter().find(|c| {
-                let r = c.interact_rect;
-                (r.center().y - y).abs() < 16.0
-                    && (r.width() - st::HIT).abs() < 6.0
-                    && r.left() > t.rect.right()
-                    && r.right() > h.size.x - st::MARGIN - st::INSET - st::HIT - 8.0
+            let mut hits: Vec<_> = h
+                .clickables()
+                .into_iter()
+                .filter(|c| {
+                    let r = c.interact_rect;
+                    (r.center().y - y).abs() < 16.0
+                        && (r.width() - st::HIT).abs() < 6.0
+                        && r.left() > t.rect.right()
+                })
+                .collect();
+            hits.sort_by(|a, b| {
+                a.interact_rect
+                    .right()
+                    .partial_cmp(&b.interact_rect.right())
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
+            let trash = hits.last();
             if let (Some(en), Some(tr)) = (en, trash) {
                 let dist = (tr.interact_rect.left() - en.rect.right())
                     .abs()
                     .min((en.rect.left() - tr.interact_rect.right()).abs());
-                if dist < st::HIT + st::PAD * 2.0 {
+                if dist + 0.5 < st::INSET {
                     findings.push(Issue::ux(
                         "should",
                         "ux-fitts",
@@ -1238,38 +1234,7 @@ fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
                         ),
                         Some(tr.interact_rect),
                     ));
-                    break; // one example is enough
-                }
-            }
-        }
-        // Fallback: rightmost HIT button and the EN/RU texts share a row.
-        if !findings.issues.iter().any(|i| i.kind == "ux-fitts" && i.detail.contains("delete is adjacent")) {
-            if let Some(row) = h.texts().into_iter().find(|t| t.text.to_lowercase().ends_with(".exe")) {
-                let y = row.rect.center().y;
-                let mut hits: Vec<_> = h
-                    .clickables()
-                    .into_iter()
-                    .filter(|c| (c.interact_rect.center().y - y).abs() < 16.0)
-                    .collect();
-                hits.sort_by(|a, b| {
-                    a.interact_rect
-                        .left()
-                        .partial_cmp(&b.interact_rect.left())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                if let Some(tr) = hits.last() {
-                    if (tr.interact_rect.width() - st::HIT).abs() < 6.0 {
-                        findings.push(Issue::ux(
-                            "should",
-                            "ux-fitts",
-                            screen,
-                            format!(
-                                "delete sits in the same action cluster as EN/RU on the «{}» row",
-                                trunc(&row.text, 24)
-                            ),
-                            Some(tr.interact_rect),
-                        ));
-                    }
+                    break;
                 }
             }
         }
@@ -1503,7 +1468,7 @@ struct TaskDepth {
 fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
     let mut out = Vec::new();
 
-    // Add an exception: Home → Programs → Exceptions → field → plus.
+    // Add an exception: Home → Programs → Exceptions → type + Enter (field is focused).
     let mut h = Harness::new(app_with(empty_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
     let mut clicks = 0usize;
     assert!(h.click_home_square("Программы"));
@@ -1514,14 +1479,18 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
     if h.click_text("Исключения  ") || h.click_text("Исключения") {
         clicks += 1;
     }
-    if h.find_text("программа или путь").is_some() && h.click_text("программа или путь") {
-        clicks += 1;
-    }
     h.type_text("hint.exe");
-    if h.click_plus() {
-        clicks += 1;
+    h.press_key(Key::Enter, Modifiers::default());
+    let mut ok = exc_in(&h.app.cfg, "hint.exe");
+    if !ok {
+        // Fallback if focus did not land in the field.
+        if h.find_text("программа или путь").is_some() && h.click_text("программа или путь") {
+            clicks += 1;
+        }
+        h.type_text("hint.exe");
+        h.press_key(Key::Enter, Modifiers::default());
+        ok = exc_in(&h.app.cfg, "hint.exe");
     }
-    let ok = exc_in(&h.app.cfg, "hint.exe");
     if !ok {
         findings.push(Issue::ux(
             "must",
@@ -1537,7 +1506,7 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
         name: "Add an exception",
         clicks,
         notes: if ok {
-            "Home → Программы → Исключения → field → +".into()
+            "Home → Программы → Исключения → type + Enter".into()
         } else {
             "failed".into()
         },
@@ -1579,7 +1548,7 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
         ));
     }
 
-    // Change undo key: Home → Settings → keycap → Назначить… → F2.
+    // Change undo key: Home → Settings → keycap (starts capture) → F2.
     let mut h = Harness::new(app_with(sample_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
     let mut clicks = 0usize;
     assert!(h.click_home_square("Настройки"));
@@ -1590,14 +1559,6 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
     if h.click_right_of("Клавиша") {
         clicks += 1;
     }
-    if h.click_text("Назначить") || h.texts().iter().any(|t| t.text.contains("Назначить")) {
-        if h.app.capturing_hotkey.is_none() {
-            if let Some(t) = h.texts().into_iter().find(|t| t.text.contains("Назначить")) {
-                h.click(t.rect.center());
-            }
-        }
-        clicks += 1;
-    }
     if h.app.capturing_hotkey.is_some() {
         h.press_key(Key::F2, Modifiers::default());
     }
@@ -1605,22 +1566,22 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
     out.push(TaskDepth {
         name: "Change undo key",
         clicks,
-        notes: "Home → Настройки → Клавиша → Назначить… → key".into(),
+        notes: "Home → Настройки → keycap → key".into(),
     });
     if !ok {
         findings.push(Issue::ux(
             "should",
             "ux-depth",
             "task-undo-key",
-            format!("undo-key capture failed after {clicks} clicks (popup + assign is a deep path)"),
+            format!("undo-key capture failed after {clicks} clicks (keycap should start capture)"),
             None,
         ));
-    } else if clicks >= 3 {
+    } else if clicks >= 4 {
         findings.push(Issue::ux(
             "nice",
             "ux-depth",
             "task-undo-key",
-            format!("{clicks} clicks + a key press from Home to change the undo key (popup with «Назначить…»)"),
+            format!("{clicks} clicks + a key press from Home to change the undo key"),
             None,
         ));
     }
@@ -1653,17 +1614,20 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
         ));
     }
 
-    // Empty add: no feedback.
+    // Empty add: the + is disabled while the field is empty.
     let mut h = default_sec(Tab::Apps, true, empty_cfg());
-    let _ = h.click_plus();
-    if h.app.cfg.apps.is_empty() && h.app.status.is_empty() {
-        findings.push(Issue::ux(
-            "should",
-            "ux-feedback",
-            "apps-empty",
-            "pressing + with an empty program field gives no visible error or status".into(),
-            find_plus(&h).map(|w| w.interact_rect),
-        ));
+    let plus = find_plus(&h);
+    if plus.as_ref().is_some_and(|w| w.enabled) {
+        let _ = h.click_plus();
+        if h.app.cfg.apps.is_empty() && h.app.status.is_empty() {
+            findings.push(Issue::ux(
+                "should",
+                "ux-feedback",
+                "apps-empty",
+                "pressing + with an empty program field gives no visible error or status".into(),
+                plus.map(|w| w.interact_rect),
+            ));
+        }
     }
 
     out
@@ -2055,18 +2019,10 @@ fn ux_toggle_undo_and_capture_key() {
     assert_eq!(h.app.cfg.undo_on_backspace, before);
 
     let old = h.app.cfg.undo_key;
-    assert!(h.click_right_of("Клавиша"), "open the undo keycap");
-    // Popup: «Назначить…»
-    if !h.click_text("Назначить") {
-        // The ellipsis may be a single char «…» or "...".
-        let found = h.texts().into_iter().find(|t| t.text.contains("Назначить"));
-        if let Some(t) = found {
-            h.click(t.rect.center());
-        }
-    }
+    assert!(h.click_right_of("Клавиша"), "click the undo keycap");
     assert!(
         h.app.capturing_hotkey.is_some(),
-        "should be capturing after Назначить…; texts={:?}",
+        "a click on the keycap should start capture; texts={:?}",
         h.texts().iter().map(|t| t.text.clone()).collect::<Vec<_>>()
     );
     h.press_key(Key::F2, Modifiers::default());

@@ -101,7 +101,7 @@ impl IconCache {
         p.rect_filled(rect, st::RADIUS_SM + 1.0, if t.dark { t.surface_hover } else { t.bg });
         p.rect_stroke(rect.shrink(0.5), st::RADIUS_SM + 1.0, st::hair(t.line));
         let letter = basename(id).chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
-        p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, st::font_sm(), t.muted);
+        p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, st::font_sm(), t.ink);
     }
 }
 

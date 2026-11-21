@@ -17,6 +17,8 @@ use crate::dict::{self, Dictionary};
 use crate::layout::Lang;
 use crate::morph;
 use crate::ngram::{self, Context};
+use std::collections::HashSet;
+use std::sync::OnceLock;
 
 /// How hard the typo fixer tries (settings: «Осторожно / Обычно / Смело»).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -47,6 +49,102 @@ pub const DOMINANCE: u32 = 20;
 
 const EN_ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
 const RU_ALPHABET: &str = "абвгдежзийклмнопрстуфхцчшщъыьэюя";
+
+static RU_TECH_STEMS: &str = include_str!("../data/ru_tech_stems.txt");
+
+/// `Titlecase`: first letter upper, the rest lower, at least two letters.
+pub(crate) fn is_title_case(word: &str) -> bool {
+    let mut it = word.chars().filter(|c| c.is_alphabetic());
+    match (it.next(), it.next()) {
+        (Some(a), Some(b)) => a.is_uppercase() && b.is_lowercase() && it.all(|c| !c.is_uppercase()),
+        _ => false,
+    }
+}
+
+fn is_mid_sentence(ctx: &Context) -> bool {
+    ctx.prev.as_deref().is_some_and(|p| p != ngram::START)
+}
+
+/// Identifier shape: snake_case, digits in the token, or internal caps (`winRes`).
+/// Plain `Titlecase` or `ALLCAPS` is not this.
+pub(crate) fn looks_like_identifier(word: &str) -> bool {
+    if word.contains('_') {
+        return true;
+    }
+    let has_letter = word.chars().any(|c| c.is_alphabetic());
+    let has_digit = word.chars().any(|c| c.is_ascii_digit());
+    if has_letter && has_digit {
+        return true;
+    }
+    let mut chars = word.chars().filter(|c| c.is_alphabetic());
+    let Some(first) = chars.next() else { return false };
+    let rest: Vec<char> = chars.collect();
+    if rest.is_empty() {
+        return false;
+    }
+    let any_upper = rest.iter().any(|c| c.is_uppercase());
+    let any_lower = first.is_lowercase() || rest.iter().any(|c| c.is_lowercase());
+    any_upper && any_lower && !is_title_case(word)
+}
+
+/// A Russian token that is a known IT-slang stem plus a regular verb/noun ending
+/// (`парсит`, `логируй`, `пушь`, `токенов`, `разрулю`).
+pub(crate) fn is_ruslish_form(word: &str) -> bool {
+    let lower = Dictionary::normalize(word);
+    if lower.chars().count() < 3 || !lower.chars().all(|c| ('а'..='я').contains(&c)) {
+        return false;
+    }
+    stems().iter().any(|stem| {
+        lower.strip_prefix(stem.as_str()).is_some_and(is_ru_ending)
+    })
+}
+
+fn stems() -> &'static [String] {
+    static STEMS: OnceLock<Vec<String>> = OnceLock::new();
+    STEMS.get_or_init(|| {
+        let mut v: Vec<String> = RU_TECH_STEMS
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(Dictionary::normalize)
+            .filter(|s| s.chars().count() >= 3)
+            .collect();
+        v.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
+        v.dedup();
+        v
+    })
+}
+
+fn is_ru_ending(rest: &str) -> bool {
+    static ENDINGS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    ENDINGS
+        .get_or_init(|| {
+            [
+                "", "ь", "й",
+                "а", "я", "ы", "и", "у", "ю", "е", "о",
+                "ой", "ою", "ею", "ей", "ом", "ем", "ём",
+                "ам", "ям", "ами", "ями", "ах", "ях",
+                "ов", "ев", "ёв",
+                "ка", "ки", "ке", "ку", "кой", "кою", "ок", "кам", "ками", "ках",
+                "ит", "ет", "ют", "ят", "ут", "ат",
+                "ишь", "ешь", "им", "ем", "ите", "ете",
+                "ил", "ила", "или", "ило",
+                "ал", "ала", "али", "ало",
+                "ул", "ула", "ули", "уло",
+                "нул", "нула", "нули", "нуло", "ни", "ну",
+                "уй", "юй", "ай", "яй", "ий",
+                "ить", "ать", "ять", "еть", "нуть",
+                "ан", "ана", "ано", "аны",
+                "ен", "ена", "ено", "ены",
+                "ирует", "ируют", "ируй", "ировать", "ирую", "ируешь", "ируем", "ируете", "ируешь",
+                "ировал", "ировала", "ировали", "ирует",
+            ]
+            .into_iter()
+            .collect()
+        })
+        .contains(rest)
+}
+
 
 /// All strings one edit away from `w` (lowercase).
 fn edits1(w: &[char], alphabet: &[char]) -> Vec<String> {
@@ -153,6 +251,15 @@ fn suggest_impl_ctx(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
 }
 
 fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level, ctx: &Context) -> Option<String> {
+    if looks_like_identifier(word) {
+        return None;
+    }
+    if lang == Lang::Ru && is_ruslish_form(word) {
+        return None;
+    }
+    if is_title_case(word) && is_mid_sentence(ctx) {
+        return None;
+    }
     let strict = suggest_one(d, word, lang, assume_unknown)
         .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
         .or_else(|| verb_soft_sign(d, word, lang, assume_unknown));
@@ -1168,5 +1275,36 @@ mod tests {
         for ok in ["чтобы", "что-то", "чтоб"] {
             assert_eq!(suggest(ok, Lang::Ru), None, "{ok}");
         }
+    }
+
+    #[test]
+    fn tech_identifiers_and_ruslish_are_kept() {
+        for w in ["struct", "rustc", "actix", "stdout", "winres", "ngrams", "Inno", "serde"] {
+            assert_eq!(suggest(w, Lang::En), None, "{w}");
+        }
+        for w in ["парсит", "логируй", "пушь", "токенов", "разрулю", "мерж"] {
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+        }
+        for w in ["загран", "универ", "препод", "инфа", "проц", "видос"] {
+            assert!(dict::get(Lang::Ru).is_word(w), "{w}");
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+        }
+        assert!(is_ruslish_form("парсит"));
+        assert!(is_ruslish_form("логируй"));
+        assert!(looks_like_identifier("winRes") || looks_like_identifier("some_var"));
+        assert!(looks_like_identifier("user_id"));
+        assert!(!looks_like_identifier("struct"));
+        assert!(!looks_like_identifier("Bizon"));
+    }
+
+
+    #[test]
+    fn titlecase_names_are_not_fixed_mid_sentence() {
+        let mid = Context::of(&["сказал"]);
+        assert_eq!(suggest_ctx("Bizon", Lang::En, Level::Normal, &mid), None);
+        assert_eq!(suggest_ctx("Fadil", Lang::En, Level::Normal, &mid), None);
+        assert_eq!(suggest_ctx("Стардаста", Lang::Ru, Level::Normal, &mid), None);
+        // Isolated / sentence-start typo of a frequent word is unchanged (not tested here).
+        // Mid-sentence is the conservative path for names.
     }
 }

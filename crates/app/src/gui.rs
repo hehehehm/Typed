@@ -40,6 +40,14 @@ pub(crate) fn is_self(app: &str) -> bool {
 
 /// Shortest gap between frames while the window is hidden or minimized.
 const IDLE_FRAME: Duration = Duration::from_millis(250);
+/// How long the inline «Удалено · Вернуть» toast stays after a delete.
+const UNDO_DELETE_FOR: Duration = Duration::from_secs(4);
+
+/// A just-deleted program or exception, restorable from the toast.
+enum PendingDelete {
+    Program { id: String, lang: Lang },
+    Exception { id: String },
+}
 
 /// Home window: five squares in one short row.
 const HOME_INNER: [f32; 2] = [512.0, 192.0];
@@ -90,6 +98,10 @@ struct App {
     idle_frames: u64,
     welcome_open: bool,
     welcome_dont_show: bool,
+    /// Last deleted program/exception, shown as «Удалено · Вернуть» for a few seconds.
+    pending_delete: Option<(PendingDelete, Instant)>,
+    /// Focus the add-app field once after opening the Apps tab or switching pane.
+    app_draft_focus: bool,
     logo_textures: [Option<egui::TextureHandle>; 5],
     logo_fade_textures: [Option<egui::TextureHandle>; 3],
     sea_textures: [Option<egui::TextureHandle>; 2],
@@ -185,6 +197,41 @@ impl App {
         self.cfg.remove_exception(id);
     }
 
+    fn remember_deleted_program(&mut self, id: &str) {
+        if let Some(&lang) = self.cfg.apps.get(id) {
+            self.pending_delete = Some((PendingDelete::Program { id: id.to_string(), lang }, Instant::now()));
+        }
+    }
+
+    fn remember_deleted_exception(&mut self, id: &str) {
+        self.pending_delete = Some((PendingDelete::Exception { id: id.to_string() }, Instant::now()));
+    }
+
+    fn expire_pending_delete(&mut self, ctx: &egui::Context) {
+        if let Some((_, at)) = &self.pending_delete {
+            let left = UNDO_DELETE_FOR.saturating_sub(at.elapsed());
+            if left.is_zero() {
+                self.pending_delete = None;
+            } else {
+                ctx.request_repaint_after(left);
+            }
+        }
+    }
+
+    fn restore_deleted(&mut self) {
+        let Some((entry, _)) = self.pending_delete.take() else { return };
+        match entry {
+            PendingDelete::Program { id, lang } => {
+                self.cfg.remove_exception(&id);
+                self.cfg.set_layout(&id, lang);
+            }
+            PendingDelete::Exception { id } => {
+                self.cfg.add_exception(&id);
+            }
+        }
+        self.save();
+    }
+
     fn add_custom_word(&mut self) -> bool {
         let w = self.word_draft.trim().to_string();
         if let Err(e) = userdict::classify(&w) {
@@ -214,7 +261,7 @@ impl App {
         st::group(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(st::ROW);
-                st::segment_strip(
+                if st::segment_strip(
                     ui,
                     &mut self.apps_pane,
                     &[
@@ -223,7 +270,9 @@ impl App {
                     ],
                     ui.available_width(),
                     accent,
-                );
+                ) {
+                    self.app_draft_focus = true;
+                }
             });
         });
         ui.add_space(st::PAD);
@@ -231,14 +280,21 @@ impl App {
         match self.apps_pane {
             AppsPane::Programs => {
                 let mut go = false;
+                let can_add = !self.app_draft.trim().is_empty();
+                let focus = self.app_draft_focus;
                 st::group(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.set_min_height(st::ROW);
                         ui.spacing_mut().item_spacing.x = st::PAD;
                         let fw = (ui.available_width() - st::HIT * 3.0 - st::PAD * 2.0).max(st::HIT * 2.0);
                         let r = st::field_bg(ui, &mut self.app_draft, "программа или путь", fw, accent);
-                        go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        go |= st::segment_strip(
+                        if focus {
+                            r.request_focus();
+                        }
+                        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        go |= can_add && enter && (r.has_focus() || r.lost_focus());
+                        // EN/RU here only picks the layout for the next add; it must not submit.
+                        let _ = st::segment_strip(
                             ui,
                             &mut self.app_mode,
                             &[
@@ -248,9 +304,14 @@ impl App {
                             st::HIT * 2.0,
                             accent,
                         );
-                        go |= st::plus_square(ui, accent, "Добавить").clicked();
+                        ui.add_enabled_ui(can_add, |ui| {
+                            go |= st::plus_square(ui, accent, "Добавить").clicked();
+                        });
                     });
                 });
+                if focus {
+                    self.app_draft_focus = false;
+                }
                 if go {
                     changed |= self.add_app_entry();
                 }
@@ -291,6 +352,7 @@ impl App {
                                     if delete_icon_button(ui).clicked() {
                                         act = Some((id.clone(), None));
                                     }
+                                    ui.add_space(st::INSET);
                                     if st::segment_strip(
                                         ui,
                                         &mut mode,
@@ -311,19 +373,26 @@ impl App {
                 if let Some((id, mode)) = act {
                     match mode {
                         Some(m) => self.set_app_mode(&id, m),
-                        None => self.remove_app_entry(&id),
+                        None => {
+                            self.remember_deleted_program(&id);
+                            self.remove_app_entry(&id);
+                        }
                     }
                     changed = true;
                 }
             }
             AppsPane::Exceptions => {
+                let focus = self.app_draft_focus;
                 st::group(ui, |ui| {
                     egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::GAP)).show(ui, |ui| {
-                        if st::add_line_plus(ui, &mut self.app_draft, "программа или путь", "Добавить исключение", accent) {
+                        if st::add_line_plus_focus(ui, &mut self.app_draft, "программа или путь", "Добавить исключение", accent, focus) {
                             changed |= self.add_app_entry();
                         }
                     });
                 });
+                if focus {
+                    self.app_draft_focus = false;
+                }
 
                 let mut entries: Vec<String> = self.cfg.exception_apps.clone();
                 entries.sort_by(|a, b| basename(a).to_lowercase().cmp(&basename(b).to_lowercase()).then_with(|| a.cmp(b)));
@@ -347,6 +416,7 @@ impl App {
                     });
                 }
                 if let Some(id) = remove {
+                    self.remember_deleted_exception(&id);
                     self.cfg.remove_exception(&id);
                     changed = true;
                 }
@@ -461,6 +531,15 @@ impl App {
                     return;
                 }
                 let shown = presets.iter().find(|p| p.0 == current).map(|p| p.1.to_string()).unwrap_or_else(|| current.to_string());
+                if slot == HotkeySlot::Undo {
+                    // A click on the keycap starts capture immediately; Esc cancels.
+                    let r = st::keycaps(ui, &shown, max, false, accent)
+                        .on_hover_text("Нажмите, затем новую клавишу. Esc — отмена");
+                    if r.clicked() {
+                        start_capture = true;
+                    }
+                    return;
+                }
                 let r = st::keycaps(ui, &shown, max, false, accent).on_hover_text("Выбрать или назначить");
                 let popup_id = ui.make_persistent_id(("hotkey", slot as u8));
                 if r.clicked() {
@@ -812,6 +891,17 @@ impl App {
             if tab != Tab::Home {
                 self.grow_for_section = true;
             }
+            if tab == Tab::Apps {
+                self.app_draft_focus = true;
+            }
+        }
+    }
+
+    fn header_title_and_count(&self) -> (&'static str, Option<usize>) {
+        if self.tab == Tab::Apps && self.apps_pane == AppsPane::Exceptions {
+            ("Исключения", Some(self.cfg.exception_apps.len()))
+        } else {
+            (self.tab.title(), self.section_count(self.tab))
         }
     }
 
@@ -877,8 +967,8 @@ impl App {
             let c = r.center();
             st::paint_mark(p, c, if down { d - 2.0 } else { d }, color, i);
             if let Some(n) = self.section_count(tab) {
-                let ng = st::line_galley(ui, &n.to_string(), caption_font.clone(), t.muted, s / 2.0);
-                p.galley(egui::pos2(r.right() - st::PAD - ng.size().x, r.top() + st::PAD - 2.0), ng, t.muted);
+                let ng = st::line_galley(ui, &n.to_string(), caption_font.clone(), t.muted_strong, s / 2.0);
+                p.galley(egui::pos2(r.right() - st::PAD - ng.size().x, r.top() + st::PAD), ng, t.muted_strong);
             } else if tab == Tab::Settings && !self.cfg.autocorrect {
                 // Micro-state: a hollow dot = Автоисправление off.
                 p.circle_stroke(egui::pos2(r.right() - st::PAD - 3.0, r.top() + st::PAD + 3.0), 3.0, st::hair(t.muted));
@@ -917,8 +1007,8 @@ impl App {
         let mut target = None;
         let cy = rect.center().y;
 
-        // Navigation, right: 5 × 24 px targets with 10 px dots.
-        let cell = st::U * 6.0;
+        // Navigation, right: 5 × 32 px hit targets; visual dots stay small.
+        let cell = st::HIT;
         let nav_w = cell * SECTIONS.len() as f32;
         let nav_left = rect.right() - st::MARGIN - nav_w + st::GAP;
         let nav_plate = egui::Rect::from_x_y_ranges(
@@ -929,15 +1019,6 @@ impl App {
 
         let back = egui::Rect::from_center_size(egui::pos2(rect.left() + st::PAD + st::HIT / 2.0, cy), egui::Vec2::splat(st::HIT));
         st::frost_plate(ui, back.shrink(1.0));
-        let r = ui.interact(back, ui.id().with("back"), egui::Sense::click());
-        if r.hovered() {
-            p.rect_filled(back.shrink(2.0), st::RADIUS_SM, t.surface_hover);
-        }
-        st::paint_chevron(&p, back.center(), if r.hovered() { t.ink } else { t.muted });
-        st::focus_ring(ui, back.shrink(2.0), st::RADIUS_SM, r.has_focus());
-        if r.on_hover_text("Назад (Esc)").clicked() {
-            target = Some(Tab::Home);
-        }
 
         for (i, &other) in SECTIONS.iter().enumerate() {
             let c = egui::Rect::from_center_size(egui::pos2(nav_left + cell * (i as f32 + 0.5), cy), egui::vec2(cell, st::HIT));
@@ -956,16 +1037,20 @@ impl App {
         }
 
         // Title block: dot · title · count, truncated before the navigation.
-        let dot_c = egui::pos2(back.right() + st::GAP + 6.0, cy);
+        // On the exceptions pane the title and count follow that list; the home
+        // square still uses `section_count` (programs only).
+        let (title, title_count) = self.header_title_and_count();
+        let plate_left = back.right() + st::GAP;
+        let dot_c = egui::pos2(plate_left + 6.0 + 4.0, cy);
         let tx = dot_c.x + 6.0 + st::PAD;
         let max_w = (nav_left - st::PAD - tx).max(st::HIT);
         let title_font = egui::FontId::proportional(st::FONT_LG);
-        let g = st::line_galley(ui, tab.title(), title_font, t.ink, max_w);
+        let g = st::line_galley(ui, title, title_font, t.ink, max_w);
         let tw = g.size().x;
         let th = g.size().y;
         let mut title_right = tx + tw;
-        let count_galley = self.section_count(tab).and_then(|n| {
-            let ng = st::line_galley(ui, &n.to_string(), st::font_md(), t.muted, (max_w - tw - st::PAD).max(0.0));
+        let count_galley = title_count.and_then(|n| {
+            let ng = st::line_galley(ui, &n.to_string(), st::font_md(), t.muted_strong, (max_w - tw - st::PAD).max(0.0));
             if tw + st::PAD + ng.size().x <= max_w {
                 title_right = tx + tw + st::PAD + ng.size().x;
                 Some(ng)
@@ -974,7 +1059,7 @@ impl App {
             }
         });
         let title_plate = egui::Rect::from_min_max(
-            egui::pos2(dot_c.x - 10.0, cy - st::HIT / 2.0),
+            egui::pos2(plate_left, cy - st::HIT / 2.0),
             egui::pos2(title_right + st::PAD, cy + st::HIT / 2.0),
         );
         st::frost_plate(ui, title_plate);
@@ -982,10 +1067,24 @@ impl App {
         p.circle_stroke(dot_c, 5.75, st::hair(st::shade(tab.color(), -0.15)));
         p.galley(egui::pos2(tx, cy - th / 2.0), g, t.ink);
         if let Some(ng) = count_galley {
-            p.galley(egui::pos2(tx + tw + st::PAD, cy - ng.size().y / 2.0 + 1.0), ng, t.muted);
+            p.galley(egui::pos2(tx + tw + st::PAD, cy - ng.size().y / 2.0 + 1.0), ng, t.muted_strong);
         }
-        let title_rect = egui::Rect::from_min_max(egui::pos2(dot_c.x - 6.0, rect.top()), egui::pos2(title_right, rect.bottom()));
+        let title_rect = egui::Rect::from_min_max(
+            egui::pos2(title_plate.left().max(back.right() + 1.0), rect.top()),
+            egui::pos2(title_right, rect.bottom()),
+        );
         ui.interact(title_rect, ui.id().with("title"), egui::Sense::hover()).on_hover_text(self.section_tooltip(tab));
+
+        // Back is registered last so its 32×32 hit wins over the title plate at min width.
+        let r = ui.interact(back, ui.id().with("back"), egui::Sense::click());
+        if r.hovered() {
+            p.rect_filled(back.shrink(2.0), st::RADIUS_SM, t.surface_hover);
+        }
+        st::paint_chevron(&p, back.center(), if r.hovered() { t.ink } else { t.muted });
+        st::focus_ring(ui, back.shrink(2.0), st::RADIUS_SM, r.has_focus());
+        if r.on_hover_text("Назад (Esc)").clicked() {
+            target = Some(Tab::Home);
+        }
 
         // Bottom hairline.
         p.rect_filled(egui::Rect::from_min_size(egui::pos2(rect.left(), rect.bottom() - st::HAIR), egui::vec2(rect.width(), st::HAIR)), 0.0, t.line);
@@ -1128,6 +1227,7 @@ impl App {
 
     fn draw(&mut self, ctx: &egui::Context, focus: &Focus) {
         self.handle_shortcuts(ctx);
+        self.expire_pending_delete(ctx);
         self.apply_theme(ctx);
         if self.grow_for_section {
             let rect = ctx.input(|i| i.screen_rect());
@@ -1161,7 +1261,8 @@ impl App {
                 .frame(egui::Frame::none().fill(t.bg))
                 .show(ctx, |ui| self.header(ui));
         }
-        if !self.status.is_empty() {
+        let undo_toast = self.pending_delete.is_some();
+        if undo_toast || !self.status.is_empty() {
             egui::TopBottomPanel::bottom("status")
                 .frame(egui::Frame::none().fill(t.bg).inner_margin(egui::Margin::symmetric(st::MARGIN, st::PAD)))
                 .show_separator_line(false)
@@ -1172,7 +1273,23 @@ impl App {
                         ui.spacing_mut().item_spacing.x = st::PAD;
                         let (sq, _) = ui.allocate_exact_size(egui::vec2(st::PAD, st::PAD), egui::Sense::hover());
                         ui.painter().circle_filled(sq.center(), st::GAP, self.tab.color());
-                        ui.add(egui::Label::new(egui::RichText::new(&self.status).small().color(t.ink)).truncate());
+                        if undo_toast {
+                            ui.add(egui::Label::new(egui::RichText::new("Удалено").small().color(t.ink)));
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            ui.add(egui::Label::new(egui::RichText::new(" · ").small().color(t.muted)));
+                            let undo = ui.add(
+                                egui::Label::new(egui::RichText::new("Вернуть").small().color(self.tab.color()).underline())
+                                    .sense(egui::Sense::click()),
+                            );
+                            if undo.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if undo.clicked() {
+                                self.restore_deleted();
+                            }
+                        } else {
+                            ui.add(egui::Label::new(egui::RichText::new(&self.status).small().color(t.ink)).truncate());
+                        }
                     });
                 });
         }
@@ -1493,6 +1610,8 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         content_overflow: 0.0,
         welcome_open,
         welcome_dont_show: false,
+        pending_delete: None,
+        app_draft_focus: false,
         logo_textures: [None, None, None, None, None],
         logo_fade_textures: [None, None, None],
         sea_textures: [None, None],

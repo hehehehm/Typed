@@ -289,6 +289,7 @@ HTTP HTTPS JSON YAML TOML SQL CSS HTML API REST CLI GUI CPU GPU RAM SSD USB VPN 
 ООО ИП ЗАО США РФ МГУ МФТИ СПб ЖКХ ГИБДД МВД ФСБ НДС ИНН СНИЛС
 лол кек хз ща чё чо ничо норм пасиб спс плз пжлст имхо кринж краш рофл хайп изи
 сабж оффтоп лайк репост апдейт фикс баг фича коммит пуш пулл мерж деплой
+загран универ препод инфа проц видос клава инет конфа собес курсач училка телега общага велик лаба ноут комп
 ок окей ага угу неа мда хм эх ох ах ой ай ну
 lol omg wtf brb idk imo tbh afaik btw thx pls plz ty np gg wp ez
 hElLo WoRlD tEsT PaSsWoRd QwErTy

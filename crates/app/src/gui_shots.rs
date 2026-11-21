@@ -87,6 +87,8 @@ pub(super) fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
         idle_frames: 0,
         welcome_open: false,
         welcome_dont_show: false,
+        pending_delete: None,
+        app_draft_focus: false,
         logo_textures: [None, None, None, None, None],
         logo_fade_textures: [None, None, None],
         sea_textures: [None, None],
@@ -147,6 +149,12 @@ fn shots(with_vault: bool) -> Vec<Shot> {
         let mut a = app_with(sample_cfg(), Tab::Apps, light);
         a.apps_pane = AppsPane::Exceptions;
         v.push(Shot { name: sfx("02-exceptions"), app: a, focus: focus(), size: sec_sz, mac: false });
+        let mut a = app_with(sample_cfg(), Tab::Apps, light);
+        a.apps_pane = AppsPane::Exceptions;
+        let gone = "windowsterminal".to_string();
+        a.cfg.remove_exception(&gone);
+        a.pending_delete = Some((PendingDelete::Exception { id: gone }, Instant::now()));
+        v.push(Shot { name: sfx("02-exceptions-undo"), app: a, focus: focus(), size: sec_sz, mac: false });
         v.push(Shot { name: sfx("03-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz, mac: false });
         v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: sec_sz, mac: false });
         if with_vault {

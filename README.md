@@ -97,6 +97,13 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.77
+
+- **Удаление без подтверждения.** Запись в списках программ и исключений сразу пропадает; внизу на ~4 секунды появляется «Удалено · Вернуть».
+- **Читаемость.** Счётчики на тёмных карточках домашнего экрана, буквы-знаки приложений и группа «Свои» — контраст не ниже 4,5. Заголовок следует за открытой вкладкой («Исключения» и их число). Точки навигации можно нажать (область 32 px). Кнопка «назад» корректно подсвечивается у узкого окна.
+- **Меньше лишних шагов.** Кнопка «+» неактивна, пока поле пустое; Enter в поле добавляет запись; клавиша отмены записывается с одного нажатия (Esc — выход).
+- **Меньше ложных исправлений.** Флаги командной строки (`-f`, `--help`) не правятся и не переключаются раскладкой. Имена в середине предложения не режутся на служебное слово и слово (`Додома`, `Изаура`) и осторожнее правятся как опечатки. Технические идентификаторы (struct, rustc, stdout, actix…) и руслиш (парсит, логируй, пушь, токенов) остаются как есть. Разговорные сокращения (загран, универ, препод, инфа, проц, видос) не разворачиваются в другие слова: `загран` больше не становится «заранее».
+
 ## Что нового в 0.3.76
 
 - **Отдельный список «Исключения».** Во вкладке «Программы» сверху сегмент «Программы | Исключения»: в программах запоминается раскладка EN/RU, в исключениях Typed полностью выключен. Одинаковые записи (путь и имя файла, разный регистр) больше не дублируются; если программа есть в обоих списках, действует исключение.
@@ -934,6 +941,13 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.77
+
+- Deleting a program or an exception no longer asks for confirmation: the entry disappears at once, and a «Удалено · Вернуть» toast stays at the bottom for about four seconds.
+- Contrast: muted counts on the dark home tiles, first-letter app marks, and the «Свои» group count all meet 4.5:1. The header title and count follow the open pane («Исключения N»). Nav dots have a 32 px hit target. The back button highlights correctly at the minimum window width.
+- Fewer steps: «+» is disabled while the field is empty; Enter in the field adds the entry; a single click on the undo keycap starts capture (Esc cancels).
+- Fewer false typo fixes. CLI flags (`-f`, `--help`) are left alone (no typo fix, no layout convert). Mid-sentence names are not split after a function-word prefix (`Додома`, `Изаура`) and are corrected more conservatively. Programming identifiers (struct, rustc, stdout, actix…) and informal Ruslish verbs (парсит, логируй, пушь, токенов) stay. Colloquial clippings (загран, универ, препод, инфа, проц, видос) are known words and are not expanded into something else: `загран` is no longer “fixed” to «заранее».
 
 ### New in 0.3.76
 

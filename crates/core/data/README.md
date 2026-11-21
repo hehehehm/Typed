@@ -9,6 +9,8 @@ for letter-bigram statistics.)
 Processing: lowercased, `ё` → `е`, only tokens made purely of `a-z` / `а-я` kept, single-letter tokens
 kept only for real one-letter words (`a`, `i`; `я в к с о и у а`), duplicates removed.
 
+`en_tech.txt` (programming identifiers: rustc, stdout, struct, actix, …) is curated by LayoutKeeper (MIT) and attached like brands: the tokens are known words, but never typo-fix targets. `ru_tech_stems.txt` lists Latin-derived IT slang stems that, with a regular Russian ending, are also left alone (`парсит`, `логируй`, `токенов`). `ru_clipped.txt` is colloquial clipped Russian (`загран`, `универ`, `препод`, `видос`): known words, never typo-fix targets.
+
 `en_extra.txt` and `ru_extra.txt` are curated by LayoutKeeper (MIT): clean chat slang and abbreviations
 (lol, brb, imho, имхо, кек, спс…), tech/file terms typed as words (exe, dll, api, json…) and some
 rare/old words. `#` lines are comments. They are merged into the dictionary with rank

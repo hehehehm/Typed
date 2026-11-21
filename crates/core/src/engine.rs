@@ -647,6 +647,9 @@ impl Engine {
         if let Some(d) = self.user_word_decision(token) {
             return d;
         }
+        if is_cli_flag(token) {
+            return Decision::Keep("cli flag");
+        }
         if o.skip_urls_emails && looks_like_url_or_email(token) {
             return Decision::Keep("url/email/path");
         }
@@ -733,7 +736,7 @@ impl Engine {
             if let Some(d) = ranked_convert() {
                 return d;
             }
-            if let Some(d) = Self::split_decision(token, core, src) {
+            if let Some(d) = self.split_decision(token, core, src) {
                 return d;
             }
         }
@@ -827,7 +830,7 @@ impl Engine {
         // Missing space after a function word (`вофисе` → `в офисе`): the token is in its
         // own layout (no conversion fired above) and unknown in every list.
         if o.fix_missing_spaces {
-            if let Some(d) = Self::split_decision(token, core, src) {
+            if let Some(d) = self.split_decision(token, core, src) {
                 // A typo fix that puts back a missing letter, swaps letters back or fixes
                 // one vowel beats the split (`отсуда` → `отсюда`, not `от суда`;
                 // `котрое` → `которое`); other fixes lose (`отебе` is `о тебе`, not `отеле`).
@@ -1174,11 +1177,27 @@ impl Engine {
         None
     }
 
-    fn split_decision(token: &str, core: &str, src: Lang) -> Option<Decision> {
+    fn split_decision(&self, token: &str, core: &str, src: Lang) -> Option<Decision> {
         if !core.chars().all(char::is_alphabetic) {
             return None;
         }
         let fixed = split::split_glued(dict::get(src), core, src)?;
+        // Capitalised mid-sentence tokens with a 2+ letter prefix are names
+        // (`Додома`, `Изаура`), not `До дома`. A one-letter prefix still splits
+        // (`Вофисе` → `В офисе`), including after another word.
+        if typo::is_title_case(core) {
+            let mid = self
+                .left_context(src)
+                .prev
+                .as_deref()
+                .is_some_and(|p| p != crate::ngram::START);
+            if mid {
+                let prefix = fixed.split_whitespace().next().unwrap_or("");
+                if prefix.chars().count() >= 2 {
+                    return None;
+                }
+            }
+        }
         Some(Decision::Convert { text: token.replacen(core, &fixed, 1), target: src, reason: SPACE_REASON })
     }
 
@@ -1240,6 +1259,11 @@ impl Engine {
         }
         None
     }
+}
+
+/// A command-line flag (`-D`, `--oneline`): do not typo-fix or convert the layout.
+fn is_cli_flag(token: &str) -> bool {
+    token.starts_with('-')
 }
 
 /// Key for the never-correct list: the token's letters core, lowercase, `ё` → `е`.
@@ -1980,6 +2004,47 @@ mod tests {
         assert_eq!(conv("vfry").as_deref(), Some("макн"));
         assert_eq!(type_str(&mut ctx_engine(true), "so vfry "), vec![]);
         assert!(!type_str(&mut ctx_engine(false), "so vfry ").is_empty());
+    }
+
+    #[test]
+    fn cli_flags_are_not_corrected() {
+        let e = typo_engine();
+        assert!(
+            matches!(e.decide("--oneline"), Decision::Keep("cli flag")),
+            "{:?}",
+            e.decide("--oneline")
+        );
+        assert!(
+            matches!(e.decide("-D"), Decision::Keep("cli flag")),
+            "{:?}",
+            e.decide("-D")
+        );
+        // A hyphen inside a word is not a flag.
+        assert!(!matches!(e.decide("все-таки"), Decision::Keep("cli flag")));
+    }
+
+    #[test]
+    fn capitalised_mid_sentence_is_not_split() {
+        let mut e = typo_engine();
+        let _ = type_str(&mut e, "сказал ");
+        assert!(
+            matches!(e.decide("Додома"), Decision::Keep(_)),
+            "Додома mid-sentence: {:?}",
+            e.decide("Додома")
+        );
+        assert!(
+            matches!(e.decide("Изаура"), Decision::Keep(_)),
+            "Изаура mid-sentence: {:?}",
+            e.decide("Изаура")
+        );
+        let e = typo_engine();
+        match e.decide("Вофисе") {
+            Decision::Convert { text, reason, .. } => {
+                assert_eq!(text, "В офисе");
+                assert_eq!(reason, SPACE_REASON);
+            }
+            other => panic!("Вофисе at sentence start should split, got {other:?}"),
+        }
     }
 
     fn typo_engine() -> Engine {

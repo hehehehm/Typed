@@ -39,6 +39,8 @@ static RU_KNOWN: &[u8] = include_bytes!("../data/ru_known.fst");
 /// spelling-error fix (`азриэлю` is not "fixed" into the name form `азриелю`).
 static RU_NAMES: &[u8] = include_bytes!("../data/ru_names.fst");
 static EN_BRANDS: &str = include_str!("../data/en_brands.txt");
+static EN_TECH: &str = include_str!("../data/en_tech.txt");
+static RU_CLIPPED: &str = include_str!("../data/ru_clipped.txt");
 static RU_BRANDS: &str = include_str!("../data/ru_brands.txt");
 
 /// Rank given to curated extras that are not in the frequency list: frequent enough to
@@ -148,6 +150,19 @@ impl Dictionary {
             .filter(|w| !w.is_empty() && !w.starts_with('#'))
             .map(Self::normalize)
             .collect();
+        self
+    }
+
+    /// Extra known tokens (tech identifiers) that behave like brands: they are
+    /// real words, but never typo-fix targets.
+    pub fn with_more_known(mut self, list: &str) -> Self {
+        self.brands.extend(
+            list
+                .lines()
+                .map(str::trim)
+                .filter(|w| !w.is_empty() && !w.starts_with('#'))
+                .map(Self::normalize),
+        );
         self
     }
 
@@ -295,8 +310,8 @@ pub fn get(lang: Lang) -> &'static Dictionary {
     static EN: OnceLock<Dictionary> = OnceLock::new();
     static RU: OnceLock<Dictionary> = OnceLock::new();
     match lang {
-        Lang::En => EN.get_or_init(|| Dictionary::with_extras(Lang::En, EN_WORDS, EN_EXTRA).with_known_set(EN_KNOWN).with_brands(EN_BRANDS)),
-        Lang::Ru => RU.get_or_init(|| Dictionary::with_extras(Lang::Ru, RU_WORDS, RU_EXTRA).with_known_set(RU_KNOWN).with_brands(RU_BRANDS).with_name_set(RU_NAMES)),
+        Lang::En => EN.get_or_init(|| Dictionary::with_extras(Lang::En, EN_WORDS, EN_EXTRA).with_known_set(EN_KNOWN).with_brands(EN_BRANDS).with_more_known(EN_TECH)),
+        Lang::Ru => RU.get_or_init(|| Dictionary::with_extras(Lang::Ru, RU_WORDS, RU_EXTRA).with_known_set(RU_KNOWN).with_brands(RU_BRANDS).with_name_set(RU_NAMES).with_more_known(RU_CLIPPED)),
     }
 }
 
@@ -326,6 +341,10 @@ mod tests {
         assert!(get(Lang::En).contains("exe"));
         assert!(get(Lang::En).contains("cicd"));
         for w in ["graphql", "oauth", "unesco", "covid", "lidar"] { assert!(get(Lang::En).contains(w), "{w}"); }
+        for w in ["rustc", "struct", "actix", "stdout", "winres", "ngrams", "inno", "serde"] {
+            assert!(get(Lang::En).is_word(w), "{w}");
+            assert!(!get(Lang::En).contains(w) || get(Lang::En).is_brand(w), "{w} must not become a typo target unless already ranked");
+        }
         for w in ["мчс", "снилс", "ковид", "мкс", "егэ", "гост"] { assert!(get(Lang::Ru).contains(w), "{w}"); }
         assert!(get(Lang::Ru).contains("имхо"));
         assert!(get(Lang::En).rank("brb").unwrap() <= EXTRA_RANK);

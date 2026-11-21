@@ -77,7 +77,8 @@ fn short_rank_limit(n: usize) -> u32 {
 
 const TRANSPOSE: u32 = 8;
 /// Letters only left out (`прграма` → `программа`) count without an unusual letter pair
-/// when the target is this frequent.
+/// when the target is this frequent. The typed word must be a subsequence of the
+/// candidate: `загран` is not `заранее` (an extra `г`, not letters left out).
 pub const DROPPED_RANK: u32 = 10_000;
 
 /// One word is the other plus letters at the end (`yandx` / `yan`, `cоn` / `const`):
@@ -88,6 +89,44 @@ fn extra_or_cut_end(typed: &[char], cand: &[char]) -> bool {
         return false;
     }
     !long[short.len()..].iter().all(|&c| Some(&c) == short.last())
+}
+
+/// `short` is `long` with some letters left out, in order (`прграма` in `программа`).
+fn is_subsequence(short: &[char], long: &[char]) -> bool {
+    let mut it = long.iter();
+    short.iter().all(|c| it.any(|d| d == c))
+}
+
+/// Unit-cost Damerau (OSA) distance, or `max + 1` if greater. Used so the
+/// "letters left out" path cannot accept a 3-edit expansion like `загран` →
+/// `заранее` while still allowing a 2-slip typo such as `превт` → `привет`.
+fn unit_dist(a: &[char], b: &[char], max: usize) -> usize {
+    let (n, m) = (a.len(), b.len());
+    if n.abs_diff(m) > max {
+        return max + 1;
+    }
+    let mut prev2 = vec![0; m + 1];
+    let mut prev: Vec<usize> = (0..=m).collect();
+    let mut cur = vec![0; m + 1];
+    for i in 1..=n {
+        cur[0] = i;
+        let mut row_min = cur[0];
+        for j in 1..=m {
+            let sub = usize::from(a[i - 1] != b[j - 1]);
+            let mut v = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + sub);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] && a[i - 1] != a[i - 2] {
+                v = v.min(prev2[j - 2] + 1);
+            }
+            cur[j] = v;
+            row_min = row_min.min(v);
+        }
+        if row_min > max {
+            return max + 1;
+        }
+        std::mem::swap(&mut prev2, &mut prev);
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[m]
 }
 
 /// Cost of at most one slip (tenths).
@@ -443,7 +482,7 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
             && (r < TAIL_RANK || tail_ok(&lower, cand))
             && !(lang == Lang::Ru && morph::only_ending_differs(&lower_s, cand))
             && !(lang == Lang::En && (en_affix_only(&lower_s, cand) || en_end_letter_only(&lower_s, cand)))
-            && (odd || (cost <= ONE_SLIP && lowercase) || (lowercase && m > n && r < DROPPED_RANK) || (lowercase && level == Level::Aggressive))
+            && (odd || (cost <= ONE_SLIP && lowercase) || (lowercase && m > n && r < DROPPED_RANK && (is_subsequence(&lower, &cv) || unit_dist(&lower, &cv, 2) <= 2)) || (lowercase && level == Level::Aggressive))
             && !extra_or_cut_end(&lower, &cv)
             // Past the default budget (Aggressive only) the word keeps its shape: at most
             // one letter more or less (`зранилка` is not `заняла`, 2.9 slips and 2 letters).
@@ -679,6 +718,18 @@ mod tests {
         }
         // Letters added at the end make another word or a name, not a slip.
         assert_eq!(suggest("Yandx", Lang::En), None);
+    }
+
+    #[test]
+    fn clipped_colloquial_words_stay() {
+        // `загран` used to become `заранее` (weighted cost 1.9, three unweighted
+        // edits: not letters left out of a frequent word).
+        for w in ["загран", "универ", "препод", "инфа", "проц", "видос", "клава", "инет", "конфа", "собес", "курсач", "училка"] {
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+            assert_eq!(crate::typo::suggest_level(w, Lang::Ru, Level::Aggressive), None, "{w} aggressive");
+        }
+        // True missing letters still fix.
+        assert_eq!(suggest("програма", Lang::Ru).as_deref(), Some("программа"));
     }
 
     #[test]

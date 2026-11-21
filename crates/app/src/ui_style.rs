@@ -78,6 +78,9 @@ pub struct Theme {
     pub line: Color32,
     pub ink: Color32,
     pub muted: Color32,
+    /// Stronger than `muted` for counts and short marks that must stay AA
+    /// even on a slightly mixed plate (card corner, group caption).
+    pub muted_strong: Color32,
     pub warn: Color32,
 }
 
@@ -93,6 +96,7 @@ pub fn theme(dark: bool) -> Theme {
             line: Color32::from_rgb(0x33, 0x40, 0x45),
             ink: Color32::from_rgb(0xF2, 0xF0, 0xE8),
             muted: Color32::from_rgb(0xA3, 0xAD, 0xAD),
+            muted_strong: Color32::from_rgb(0xC8, 0xD0, 0xCF),
             warn: Color32::from_rgb(0xE8, 0xC4, 0x48),
         }
     } else {
@@ -106,6 +110,7 @@ pub fn theme(dark: bool) -> Theme {
             line: Color32::from_rgb(0xE4, 0xDC, 0xD0),
             ink: Color32::from_rgb(0x1D, 0x1D, 0x1F),
             muted: Color32::from_rgb(0x5F, 0x5A, 0x54),
+            muted_strong: Color32::from_rgb(0x45, 0x41, 0x3C),
             warn: Color32::from_rgb(0x8F, 0x56, 0x00),
         }
     }
@@ -341,7 +346,7 @@ pub fn group_title(ui: &mut Ui, text: &str, count: Option<usize>, tip: &str) {
             r.on_hover_text(tip);
         }
         if let Some(n) = count {
-            ui.label(egui::RichText::new(n.to_string()).size(FONT_SM).color(t.muted));
+            ui.label(egui::RichText::new(n.to_string()).size(FONT_SM).color(t.muted_strong));
         }
     });
 }
@@ -436,10 +441,15 @@ pub fn secondary(ui: &mut Ui, text: &str) -> egui::Response {
 
 /// Rounded `+` button in the accent colour.
 pub fn plus_square(ui: &mut Ui, accent: Color32, tip: &str) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(HIT), Sense::click());
+    let t = cur(ui);
+    let enabled = ui.is_enabled();
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(HIT), sense);
     if ui.is_rect_visible(rect) {
         let r = Rect::from_center_size(rect.center(), Vec2::splat(CTRL_H));
-        let bg = if resp.is_pointer_button_down_on() {
+        let bg = if !enabled {
+            mix(t.muted, t.surface, 0.55)
+        } else if resp.is_pointer_button_down_on() {
             shade(accent, -0.14)
         } else if resp.hovered() {
             shade(accent, -0.06)
@@ -450,12 +460,14 @@ pub fn plus_square(ui: &mut Ui, accent: Color32, tip: &str) -> egui::Response {
         p.rect_filled(r, RADIUS_SM, bg);
         let c = r.center();
         let arm = 6.0;
-        let s = Stroke::new(1.5, INK_ON_COLOR);
+        let s = Stroke::new(1.5, if enabled { INK_ON_COLOR } else { t.muted });
         p.line_segment([egui::pos2(c.x - arm, c.y), egui::pos2(c.x + arm, c.y)], s);
         p.line_segment([egui::pos2(c.x, c.y - arm), egui::pos2(c.x, c.y + arm)], s);
-        focus_ring(ui, r, RADIUS_SM, resp.has_focus());
+        if enabled {
+            focus_ring(ui, r, RADIUS_SM, resp.has_focus());
+        }
     }
-    if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
+    if tip.is_empty() || !enabled { resp } else { resp.on_hover_text(tip) }
 }
 
 /// The toggle: 36 × 20 pill, round 14 px knob, animated.
@@ -620,13 +632,33 @@ pub fn field(ui: &mut Ui, text: &mut String, hint_text: &str, width: f32, passwo
 }
 
 pub fn add_line_plus(ui: &mut Ui, text: &mut String, hint_text: &str, tip: &str, accent: Color32) -> bool {
+    add_line_plus_focus(ui, text, hint_text, tip, accent, false)
+}
+
+/// Like [`add_line_plus`]; when `request_focus` is set the field takes focus this frame.
+/// `+` is disabled and Enter is ignored while the field is empty.
+pub fn add_line_plus_focus(
+    ui: &mut Ui,
+    text: &mut String,
+    hint_text: &str,
+    tip: &str,
+    accent: Color32,
+    request_focus: bool,
+) -> bool {
     let mut go = false;
+    let can = !text.trim().is_empty();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = PAD;
         let fw = (ui.available_width() - HIT - PAD).max(HIT * 2.0);
         let r = field(ui, text, hint_text, fw, false, accent);
-        go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        go |= plus_square(ui, accent, tip).clicked();
+        if request_focus {
+            r.request_focus();
+        }
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        go |= can && enter && (r.has_focus() || r.lost_focus());
+        ui.add_enabled_ui(can, |ui| {
+            go |= plus_square(ui, accent, tip).clicked();
+        });
     });
     go
 }
@@ -941,7 +973,19 @@ mod contrast_tests {
             assert_aa(&format!("{tag} warn on bg"), t.warn, t.bg);
             assert_aa(&format!("{tag} warn on surface"), t.warn, t.surface);
             assert_aa(&format!("{tag} muted on surface_hover"), t.muted, t.surface_hover);
+            assert_aa(&format!("{tag} muted_strong on bg"), t.muted_strong, t.bg);
+            assert_aa(&format!("{tag} muted_strong on surface"), t.muted_strong, t.surface);
+            assert_aa(&format!("{tag} muted_strong on surface_hover"), t.muted_strong, t.surface_hover);
+            assert_aa(&format!("{tag} muted_strong on field"), t.muted_strong, t.field);
         }
+        // Sampled plates from the UX tester: counts sit near a rounded card
+        // corner or on a slightly mixed group caption.
+        let dark = theme(true);
+        assert_aa("dark count on mixed card #404A4D", dark.muted_strong, Color32::from_rgb(0x40, 0x4A, 0x4D));
+        let light = theme(false);
+        assert_aa("light group count on mixed #D5D0C8", light.muted_strong, Color32::from_rgb(0xD5, 0xD0, 0xC8));
+        assert_aa("light letter ink on mixed plate #BCB7AF", light.ink, Color32::from_rgb(0xBC, 0xB7, 0xAF));
+        assert_aa("dark letter ink on surface_hover", dark.ink, dark.surface_hover);
     }
 
     #[test]
