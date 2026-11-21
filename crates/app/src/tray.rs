@@ -178,7 +178,7 @@ mod win {
         }
         *seen = mtime;
         let cfg = std::fs::read_to_string(&path).ok().and_then(|s| layout_keeper_core::Config::from_json(&s).ok())?;
-        Some(crate::logos::index(cfg.logo_style))
+        Some(crate::logos::index(cfg.logo))
     }
 
     /// Remove the icon and free the state; safe to call twice.

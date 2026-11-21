@@ -755,14 +755,34 @@ pub fn sea_jpeg(dark: bool) -> &'static [u8] {
 }
 
 pub fn load_sea_texture(ctx: &egui::Context, dark: bool) -> egui::TextureHandle {
-    let bytes = sea_jpeg(dark);
-    let img = image::load_from_memory(bytes).expect("sea backdrop jpeg").to_rgba8();
-    let (w, h) = (img.width(), img.height());
+    let (w, h, rgb) = sea_srgb(dark);
     ctx.load_texture(
         if dark { "sea-dusk" } else { "sea-day" },
-        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img),
+        egui::ColorImage::from_rgb([w, h], &rgb),
         egui::TextureOptions::LINEAR,
     )
+}
+
+/// Decode a backdrop JPEG to packed sRGB bytes (no gamma conversion, no premultiply).
+pub fn sea_srgb(dark: bool) -> (usize, usize, Vec<u8>) {
+    let img = image::load_from_memory(sea_jpeg(dark)).expect("sea backdrop jpeg").to_rgb8();
+    (img.width() as usize, img.height() as usize, img.into_raw())
+}
+
+/// Tight frosted plate behind header controls so they stay readable on the photo
+/// without washing the rest of the strip.
+pub fn frost_plate(ui: &Ui, rect: Rect) {
+    if rect.width() <= 1.0 || rect.height() <= 1.0 {
+        return;
+    }
+    let t = cur(ui);
+    let a = if t.dark { 200 } else { 215 };
+    ui.painter().rect_filled(
+        rect,
+        RADIUS_SM,
+        Color32::from_rgba_unmultiplied(t.surface.r(), t.surface.g(), t.surface.b(), a),
+    );
+    ui.painter().rect_stroke(rect.shrink(0.5), RADIUS_SM, hair(t.line));
 }
 
 /// Draw `tex` to cover `rect` (crop overflow, never letterbox). `align_y` 0 = keep
@@ -976,6 +996,21 @@ mod contrast_tests {
         assert!((FONT_LG / FONT_MD - FONT_MD / FONT_SM).abs() < 1e-6, "type scale is not a single ratio");
         for (a, b) in [(FONT_SM, FONT_MD), (FONT_MD, FONT_LG), (FONT_LG, FONT_XL), (FONT_XL, FONT_XXL)] {
             assert!((b / a - 1.2).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn sea_jpeg_is_loaded_as_srgb() {
+        for dark in [false, true] {
+            let (w, h, rgb) = sea_srgb(dark);
+            assert!(w > 0 && h > 0 && rgb.len() == w * h * 3, "dark={dark}");
+            let img = egui::ColorImage::from_rgb([w, h], &rgb);
+            // from_rgb must keep the JPEG's 8-bit sRGB bytes (no extra gamma, no premultiply).
+            for (i, px) in img.pixels.iter().enumerate().step_by((w * h / 64).max(1)) {
+                let o = i * 3;
+                assert_eq!([px.r(), px.g(), px.b()], [rgb[o], rgb[o + 1], rgb[o + 2]], "px {i} dark={dark}");
+                assert_eq!(px.a(), 255);
+            }
         }
     }
 }

@@ -67,6 +67,7 @@ struct App {
     qr: std::collections::HashMap<&'static str, egui::TextureHandle>,
     app_draft: String,
     app_mode: AppMode,
+    apps_pane: AppsPane,
     tab: Tab,
     vault: crate::vault_ui::VaultUi,
     capturing_hotkey: Option<HotkeySlot>,
@@ -89,7 +90,7 @@ struct App {
     idle_frames: u64,
     welcome_open: bool,
     welcome_dont_show: bool,
-    logo_textures: [Option<egui::TextureHandle>; 3],
+    logo_textures: [Option<egui::TextureHandle>; 5],
     logo_fade_textures: [Option<egui::TextureHandle>; 3],
     sea_textures: [Option<egui::TextureHandle>; 2],
     /// «Запуск администратором» being switched: (wanted value, helper result when done).
@@ -114,7 +115,12 @@ enum HotkeySlot {
 enum AppMode {
     En,
     Ru,
-    Off,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum AppsPane {
+    Programs,
+    Exceptions,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -152,35 +158,31 @@ impl App {
         if entry.is_empty() {
             return false;
         }
-        self.set_app_mode(&entry, self.app_mode);
+        match self.apps_pane {
+            AppsPane::Programs => self.set_app_mode(&entry, self.app_mode),
+            AppsPane::Exceptions => {
+                self.cfg.add_exception(&entry);
+            }
+        }
         self.app_draft.clear();
         true
     }
 
     fn set_app_mode(&mut self, id: &str, mode: AppMode) {
-        let key_lower = id.to_lowercase();
+        self.cfg.remove_exception(id);
         match mode {
             AppMode::En => {
-                self.cfg.exception_apps.retain(|e| e.to_lowercase() != key_lower);
                 self.cfg.set_layout(id, Lang::En);
             }
             AppMode::Ru => {
-                self.cfg.exception_apps.retain(|e| e.to_lowercase() != key_lower);
                 self.cfg.set_layout(id, Lang::Ru);
-            }
-            AppMode::Off => {
-                self.cfg.remove_app(id);
-                if !self.cfg.exception_apps.iter().any(|e| e.to_lowercase() == key_lower) {
-                    self.cfg.exception_apps.push(id.to_string());
-                }
             }
         }
     }
 
     fn remove_app_entry(&mut self, id: &str) {
-        let key_lower = id.to_lowercase();
         self.cfg.remove_app(id);
-        self.cfg.exception_apps.retain(|e| e.to_lowercase() != key_lower);
+        self.cfg.remove_exception(id);
     }
 
     fn add_custom_word(&mut self) -> bool {
@@ -202,97 +204,163 @@ impl App {
         let accent = Tab::Apps.color();
         let t = st::cur(ui);
         let mut changed = false;
-        let flag = |mode: &mut AppMode, ui: &mut egui::Ui, off_tip: &str| {
-            st::segment_strip(
-                ui,
-                mode,
-                &[
-                    (AppMode::En, "EN", "Английская раскладка"),
-                    (AppMode::Ru, "RU", "Русская раскладка"),
-                    (AppMode::Off, "∅", off_tip),
-                ],
-                st::HIT * 3.0,
-                accent,
-            )
-        };
 
-        // Add line: [ program / path ________ ] [EN|RU|∅] [+]
-        let mut go = false;
+        // Программы | Исключения at the top of the section; each pane has its own
+        // add button and the header count follows the open pane.
+        let n_prog = self.cfg.apps.len();
+        let n_exc = self.cfg.exception_apps.len();
+        let prog = format!("Программы  {n_prog}");
+        let exc = format!("Исключения  {n_exc}");
         st::group(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(st::ROW);
-                ui.spacing_mut().item_spacing.x = st::PAD;
-                let fw = (ui.available_width() - st::HIT * 4.0 - st::PAD * 2.0).max(st::HIT * 2.0);
-                let r = st::field_bg(ui, &mut self.app_draft, "программа или путь", fw, accent);
-                go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                go |= flag(&mut self.app_mode, ui, "Выкл — исключить из автоисправления");
-                go |= st::plus_square(ui, accent, "Добавить").clicked();
+                st::segment_strip(
+                    ui,
+                    &mut self.apps_pane,
+                    &[
+                        (AppsPane::Programs, prog.as_str(), "Раскладка EN / RU при переходе в программу"),
+                        (AppsPane::Exceptions, exc.as_str(), "Typed здесь полностью выключен"),
+                    ],
+                    ui.available_width(),
+                    accent,
+                );
             });
         });
-        if go {
-            changed |= self.add_app_entry();
-        }
+        ui.add_space(st::PAD);
 
-        // Merged per-app list: apps (EN / RU) first, then exception_apps (Выкл).
-        let mut entries: Vec<(String, AppMode)> = self
-            .cfg
-            .apps
-            .iter()
-            .map(|(k, l)| {
-                let m = match l {
-                    Lang::En => AppMode::En,
-                    Lang::Ru => AppMode::Ru,
-                };
-                (k.clone(), m)
-            })
-            .collect();
-        entries.sort_by(|a, b| basename(&a.0).to_lowercase().cmp(&basename(&b.0).to_lowercase()).then_with(|| a.0.cmp(&b.0)));
-        for item in &self.cfg.exception_apps {
-            let lower = item.to_lowercase();
-            if !entries.iter().any(|(k, _)| k.to_lowercase() == lower) {
-                entries.push((item.clone(), AppMode::Off));
-            }
-        }
-
-        let mut act: Option<(String, Option<AppMode>)> = None;
-        if !entries.is_empty() {
-            ui.add_space(st::PAD);
-            st::group_title(ui, "Раскладка по программам", None, "EN / RU — раскладка при переключении в программу; ∅ — без автоисправления");
-            let icons = &mut self.icons;
-            st::group(ui, |ui| {
-                for (k, (id, cur)) in entries.into_iter().enumerate() {
-                    if k > 0 {
-                        st::sep(ui);
-                    }
-                    let mut mode = cur;
-                    st::line_row(
-                        ui,
-                        |ui| {
-                            icons.show(ui, &id);
-                            let name = basename(&id);
-                            let shown = if name.is_empty() { id.as_str() } else { name };
-                            ui.add(egui::Label::new(egui::RichText::new(shown).color(t.ink)).truncate()).on_hover_text(&id);
-                        },
-                        |ui| {
-                            if delete_icon_button(ui).clicked() {
-                                act = Some((id.clone(), None));
-                            }
-                            if flag(&mut mode, ui, "Выкл — автоисправление выключено") {
-                                act = Some((id.clone(), Some(mode)));
-                            }
-                        },
-                    );
+        match self.apps_pane {
+            AppsPane::Programs => {
+                let mut go = false;
+                st::group(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.set_min_height(st::ROW);
+                        ui.spacing_mut().item_spacing.x = st::PAD;
+                        let fw = (ui.available_width() - st::HIT * 3.0 - st::PAD * 2.0).max(st::HIT * 2.0);
+                        let r = st::field_bg(ui, &mut self.app_draft, "программа или путь", fw, accent);
+                        go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        go |= st::segment_strip(
+                            ui,
+                            &mut self.app_mode,
+                            &[
+                                (AppMode::En, "EN", "Английская раскладка"),
+                                (AppMode::Ru, "RU", "Русская раскладка"),
+                            ],
+                            st::HIT * 2.0,
+                            accent,
+                        );
+                        go |= st::plus_square(ui, accent, "Добавить").clicked();
+                    });
+                });
+                if go {
+                    changed |= self.add_app_entry();
                 }
-            });
+
+                let mut entries: Vec<(String, AppMode)> = self
+                    .cfg
+                    .apps
+                    .iter()
+                    .map(|(k, l)| {
+                        (k.clone(), match l {
+                            Lang::En => AppMode::En,
+                            Lang::Ru => AppMode::Ru,
+                        })
+                    })
+                    .collect();
+                entries.sort_by(|a, b| basename(&a.0).to_lowercase().cmp(&basename(&b.0).to_lowercase()).then_with(|| a.0.cmp(&b.0)));
+
+                let mut act: Option<(String, Option<AppMode>)> = None;
+                if !entries.is_empty() {
+                    ui.add_space(st::PAD);
+                    st::group_title(ui, "Раскладка", Some(entries.len()), "EN / RU — раскладка при переключении в программу");
+                    let icons = &mut self.icons;
+                    st::group(ui, |ui| {
+                        for (k, (id, cur)) in entries.into_iter().enumerate() {
+                            if k > 0 {
+                                st::sep(ui);
+                            }
+                            let mut mode = cur;
+                            st::line_row(
+                                ui,
+                                |ui| {
+                                    icons.show(ui, &id);
+                                    let name = basename(&id);
+                                    let shown = if name.is_empty() { id.as_str() } else { name };
+                                    ui.add(egui::Label::new(egui::RichText::new(shown).color(t.ink)).truncate()).on_hover_text(&id);
+                                },
+                                |ui| {
+                                    if delete_icon_button(ui).clicked() {
+                                        act = Some((id.clone(), None));
+                                    }
+                                    if st::segment_strip(
+                                        ui,
+                                        &mut mode,
+                                        &[
+                                            (AppMode::En, "EN", "Английская раскладка"),
+                                            (AppMode::Ru, "RU", "Русская раскладка"),
+                                        ],
+                                        st::HIT * 2.0,
+                                        accent,
+                                    ) {
+                                        act = Some((id.clone(), Some(mode)));
+                                    }
+                                },
+                            );
+                        }
+                    });
+                }
+                if let Some((id, mode)) = act {
+                    match mode {
+                        Some(m) => self.set_app_mode(&id, m),
+                        None => self.remove_app_entry(&id),
+                    }
+                    changed = true;
+                }
+            }
+            AppsPane::Exceptions => {
+                st::group(ui, |ui| {
+                    egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::GAP)).show(ui, |ui| {
+                        if st::add_line_plus(ui, &mut self.app_draft, "программа или путь", "Добавить исключение", accent) {
+                            changed |= self.add_app_entry();
+                        }
+                    });
+                });
+
+                let mut entries: Vec<String> = self.cfg.exception_apps.clone();
+                entries.sort_by(|a, b| basename(a).to_lowercase().cmp(&basename(b).to_lowercase()).then_with(|| a.cmp(b)));
+                let mut remove = None;
+                if !entries.is_empty() {
+                    ui.add_space(st::PAD);
+                    st::group_title(ui, "Исключения", Some(entries.len()), "Typed полностью выключен");
+                    let icons = &mut self.icons;
+                    st::group(ui, |ui| {
+                        for (k, id) in entries.into_iter().enumerate() {
+                            if k > 0 {
+                                st::sep(ui);
+                            }
+                            st::line_row(
+                                ui,
+                                |ui| {
+                                    icons.show(ui, &id);
+                                    let name = basename(&id);
+                                    let shown = if name.is_empty() { id.as_str() } else { name };
+                                    ui.add(egui::Label::new(egui::RichText::new(shown).color(t.ink)).truncate()).on_hover_text(&id);
+                                },
+                                |ui| {
+                                    if delete_icon_button(ui).clicked() {
+                                        remove = Some(id.clone());
+                                    }
+                                },
+                            );
+                        }
+                    });
+                }
+                if let Some(id) = remove {
+                    self.cfg.remove_exception(&id);
+                    changed = true;
+                }
+            }
         }
 
-        if let Some((id, mode)) = act {
-            match mode {
-                Some(m) => self.set_app_mode(&id, m),
-                None => self.remove_app_entry(&id),
-            }
-            changed = true;
-        }
         if changed {
             self.save();
         }
@@ -712,14 +780,14 @@ impl App {
 
     fn apply_logo(&mut self, ctx: &egui::Context) {
         #[cfg(not(target_os = "macos"))]
-        if let Ok(icon) = eframe::icon_data::from_png_bytes(crate::logos::icon_png(self.cfg.logo_style)) {
+        if let Ok(icon) = eframe::icon_data::from_png_bytes(crate::logos::icon_png(self.cfg.logo)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))));
         }
-        crate::platform::set_dock_icon(crate::logos::icon_png(self.cfg.logo_style));
+        crate::platform::set_dock_icon(crate::logos::icon_png(self.cfg.logo));
         #[cfg(target_os = "macos")]
         let _ = ctx;
         if let Some(tray) = &self.tray {
-            tray.set_logo(crate::logos::index(self.cfg.logo_style));
+            tray.set_logo(crate::logos::index(self.cfg.logo));
         }
     }
 
@@ -775,15 +843,7 @@ impl App {
     /// The live number a section stands for (none = draw its glyph).
     fn section_count(&self, tab: Tab) -> Option<usize> {
         match tab {
-            Tab::Apps => {
-                let extra = self
-                    .cfg
-                    .exception_apps
-                    .iter()
-                    .filter(|e| !self.cfg.apps.keys().any(|k| k.eq_ignore_ascii_case(e)))
-                    .count();
-                Some(self.cfg.apps.len() + extra)
-            }
+            Tab::Apps => Some(self.cfg.apps.len()),
             Tab::Words => Some(self.cfg.custom_words.len()),
             Tab::Vault => self.vault.entry_count(),
             _ => None,
@@ -861,13 +921,22 @@ impl App {
         // A thin crop of the same photograph (the water, aligned to the top).
         let sea = self.sea_texture(ui.ctx());
         st::paint_photo(ui, rect, &sea, 0.0, egui::Color32::WHITE);
-        let scrim = egui::Color32::from_rgba_unmultiplied(t.bg.r(), t.bg.g(), t.bg.b(), if t.dark { 150 } else { 165 });
-        ui.painter().rect_filled(rect, 0.0, scrim);
         let p = ui.painter().clone();
         let mut target = None;
         let cy = rect.center().y;
 
+        // Navigation, right: 5 × 24 px targets with 10 px dots.
+        let cell = st::U * 6.0;
+        let nav_w = cell * SECTIONS.len() as f32;
+        let nav_left = rect.right() - st::MARGIN - nav_w + st::GAP;
+        let nav_plate = egui::Rect::from_x_y_ranges(
+            (nav_left - st::GAP)..=(rect.right() - st::PAD),
+            (cy - st::HIT / 2.0)..=(cy + st::HIT / 2.0),
+        );
+        st::frost_plate(ui, nav_plate);
+
         let back = egui::Rect::from_center_size(egui::pos2(rect.left() + st::PAD + st::HIT / 2.0, cy), egui::Vec2::splat(st::HIT));
+        st::frost_plate(ui, back.shrink(1.0));
         let r = ui.interact(back, ui.id().with("back"), egui::Sense::click());
         if r.hovered() {
             p.rect_filled(back.shrink(2.0), st::RADIUS_SM, t.surface_hover);
@@ -878,10 +947,6 @@ impl App {
             target = Some(Tab::Home);
         }
 
-        // Navigation, right: 5 × 24 px targets with 10 px dots.
-        let cell = st::U * 6.0;
-        let nav_w = cell * SECTIONS.len() as f32;
-        let nav_left = rect.right() - st::MARGIN - nav_w + st::GAP;
         for (i, &other) in SECTIONS.iter().enumerate() {
             let c = egui::Rect::from_center_size(egui::pos2(nav_left + cell * (i as f32 + 0.5), cy), egui::vec2(cell, st::HIT));
             let resp = ui.interact(c, ui.id().with(("nav", i)), egui::Sense::click());
@@ -900,22 +965,34 @@ impl App {
 
         // Title block: dot · title · count, truncated before the navigation.
         let dot_c = egui::pos2(back.right() + st::GAP + 6.0, cy);
-        p.circle_filled(dot_c, 6.0, tab.color());
-        p.circle_stroke(dot_c, 5.75, st::hair(st::shade(tab.color(), -0.15)));
         let tx = dot_c.x + 6.0 + st::PAD;
         let max_w = (nav_left - st::PAD - tx).max(st::HIT);
         let title_font = egui::FontId::proportional(st::FONT_LG);
         let g = st::line_galley(ui, tab.title(), title_font, t.ink, max_w);
         let tw = g.size().x;
         let th = g.size().y;
-        p.galley(egui::pos2(tx, cy - th / 2.0), g, t.ink);
-        if let Some(n) = self.section_count(tab) {
+        let mut title_right = tx + tw;
+        let count_galley = self.section_count(tab).and_then(|n| {
             let ng = st::line_galley(ui, &n.to_string(), st::font_md(), t.muted, (max_w - tw - st::PAD).max(0.0));
             if tw + st::PAD + ng.size().x <= max_w {
-                p.galley(egui::pos2(tx + tw + st::PAD, cy - ng.size().y / 2.0 + 1.0), ng, t.muted);
+                title_right = tx + tw + st::PAD + ng.size().x;
+                Some(ng)
+            } else {
+                None
             }
+        });
+        let title_plate = egui::Rect::from_min_max(
+            egui::pos2(dot_c.x - 10.0, cy - st::HIT / 2.0),
+            egui::pos2(title_right + st::PAD, cy + st::HIT / 2.0),
+        );
+        st::frost_plate(ui, title_plate);
+        p.circle_filled(dot_c, 6.0, tab.color());
+        p.circle_stroke(dot_c, 5.75, st::hair(st::shade(tab.color(), -0.15)));
+        p.galley(egui::pos2(tx, cy - th / 2.0), g, t.ink);
+        if let Some(ng) = count_galley {
+            p.galley(egui::pos2(tx + tw + st::PAD, cy - ng.size().y / 2.0 + 1.0), ng, t.muted);
         }
-        let title_rect = egui::Rect::from_min_max(egui::pos2(dot_c.x - 6.0, rect.top()), egui::pos2(tx + tw, rect.bottom()));
+        let title_rect = egui::Rect::from_min_max(egui::pos2(dot_c.x - 6.0, rect.top()), egui::pos2(title_right, rect.bottom()));
         ui.interact(title_rect, ui.id().with("title"), egui::Sense::hover()).on_hover_text(self.section_tooltip(tab));
 
         // Bottom hairline.
@@ -925,17 +1002,19 @@ impl App {
         }
     }
 
-    /// «Обои»: three wallpaper thumbnails on the right of the row.
+    /// «Логотип»: five marks to pick for the window, tray and welcome picture.
     fn wallpaper_row(&mut self, ui: &mut egui::Ui) -> bool {
         let t = st::cur(ui);
         let mut changed = false;
         st::line_row(
             ui,
             |ui| {
-                ui.label(egui::RichText::new("Обои").color(t.ink));
+                ui.label(egui::RichText::new("Логотип").color(t.ink));
             },
             |ui| {
                 ui.spacing_mut().item_spacing.x = st::PAD;
+                // Actions sit in a right-to-left row, so walk ALL backwards
+                // and the default (beach) lands on the left.
                 for &style in LogoStyle::ALL.iter().rev() {
                     if self.wallpaper_tile(ui, style, st::U * 7.0) {
                         changed = true;
@@ -951,7 +1030,7 @@ impl App {
         let tex = self.logo_texture(ui.ctx(), style);
         let (cell, resp) = ui.allocate_exact_size(egui::vec2(side.max(st::HIT), side.max(st::HIT)), egui::Sense::click());
         let rect = egui::Rect::from_center_size(cell.center(), egui::Vec2::splat(side));
-        let selected = self.cfg.logo_style == style;
+        let selected = self.cfg.logo == style;
         egui::Image::new(&tex).maintain_aspect_ratio(false).rounding(st::RADIUS_SM).paint_at(ui, rect);
         ui.painter().rect_stroke(rect.shrink(0.5), st::RADIUS_SM, st::hair(t.line));
         if selected {
@@ -962,15 +1041,15 @@ impl App {
         st::focus_ring(ui, rect.expand(3.0), st::RADIUS_SM + 3.0, resp.has_focus());
         let resp = resp.on_hover_text(crate::logos::label(style));
         if resp.clicked() && !selected {
-            self.cfg.logo_style = style;
+            self.cfg.logo = style;
             self.apply_logo(ui.ctx());
             return true;
         }
         false
     }
 
-    /// Welcome: the name, the chosen wallpaper as a large rounded picture, the
-    /// three wallpapers to pick in a group, and a footer.
+    /// Welcome: the name, the chosen logo as a large rounded picture, the
+    /// five marks to pick in a group, and a footer.
     fn welcome_panel(&mut self, ui: &mut egui::Ui) {
         let t = st::cur(ui);
         let full = ui.max_rect();
@@ -978,7 +1057,7 @@ impl App {
         let footer = m + st::ROW + st::HAIR * 2.0 + m + st::HIT + m;
         let art = st::snap((full.width() * 0.5).min(full.height() - m - footer), st::HIT * 3.0);
         let art_rect = egui::Rect::from_min_size(egui::pos2(full.right() - m - art, full.top() + m), egui::Vec2::splat(art));
-        let tex = self.logo_texture(ui.ctx(), self.cfg.logo_style);
+        let tex = self.logo_texture(ui.ctx(), self.cfg.logo);
         egui::Image::new(&tex).maintain_aspect_ratio(false).rounding(st::RADIUS).paint_at(ui, art_rect);
         ui.painter().rect_stroke(art_rect.shrink(0.5), st::RADIUS, st::hair(t.line));
 
@@ -1396,7 +1475,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         });
     }
     let welcome_open = !cfg.hide_welcome || cfg.welcome_gen < layout_keeper_core::config::CURRENT_WELCOME_GEN;
-    let logo_index = crate::logos::index(cfg.logo_style);
+    let logo_index = crate::logos::index(cfg.logo);
     let app = App {
         mtime: mtime(&path),
         path,
@@ -1407,6 +1486,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         qr: Default::default(),
         app_draft: String::new(),
         app_mode: AppMode::Ru,
+        apps_pane: AppsPane::Programs,
         tab: if open_vault { Tab::Vault } else { Tab::Home },
         vault: crate::vault_ui::VaultUi::new(),
         capturing_hotkey: None,
@@ -1416,7 +1496,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         content_overflow: 0.0,
         welcome_open,
         welcome_dont_show: false,
-        logo_textures: [None, None, None],
+        logo_textures: [None, None, None, None, None],
         logo_fade_textures: [None, None, None],
         sea_textures: [None, None],
         admin_job: None,
@@ -1440,7 +1520,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            if let Ok(icon) = eframe::icon_data::from_png_bytes(crate::logos::icon_png(app.cfg.logo_style)) {
+            if let Ok(icon) = eframe::icon_data::from_png_bytes(crate::logos::icon_png(app.cfg.logo)) {
                 vp.with_icon(std::sync::Arc::new(icon))
             } else {
                 vp

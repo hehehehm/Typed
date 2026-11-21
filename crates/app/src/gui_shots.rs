@@ -51,6 +51,7 @@ fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
         qr: Default::default(),
         app_draft: String::new(),
         app_mode: AppMode::Ru,
+        apps_pane: AppsPane::Programs,
         tab,
         vault: crate::vault_ui::VaultUi::for_test(dir.join("no-vault.bin"), None),
         capturing_hotkey: None,
@@ -66,7 +67,7 @@ fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
         idle_frames: 0,
         welcome_open: false,
         welcome_dont_show: false,
-        logo_textures: [None, None, None],
+        logo_textures: [None, None, None, None, None],
         logo_fade_textures: [None, None, None],
         sea_textures: [None, None],
         admin_job: None,
@@ -123,6 +124,9 @@ fn shots(with_vault: bool) -> Vec<Shot> {
         };
         v.push(Shot { name: sfx("01-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: home_sz, mac: false });
         v.push(Shot { name: sfx("02-apps-long-path"), app: app_with(sample_cfg(), Tab::Apps, light), focus: focus(), size: sec_sz, mac: false });
+        let mut a = app_with(sample_cfg(), Tab::Apps, light);
+        a.apps_pane = AppsPane::Exceptions;
+        v.push(Shot { name: sfx("02-exceptions"), app: a, focus: focus(), size: sec_sz, mac: false });
         v.push(Shot { name: sfx("03-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz, mac: false });
         v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: sec_sz, mac: false });
         if with_vault {
@@ -135,6 +139,9 @@ fn shots(with_vault: bool) -> Vec<Shot> {
     }
     v.push(Shot { name: "09-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(432.0, 160.0), mac: false });
     v.push(Shot { name: "10-apps-min-width", app: app_with(sample_cfg(), Tab::Apps, true), focus: focus(), size: egui::vec2(432.0, 416.0), mac: false });
+    let mut a = app_with(sample_cfg(), Tab::Apps, true);
+    a.apps_pane = AppsPane::Exceptions;
+    v.push(Shot { name: "10-exceptions-min-width", app: a, focus: focus(), size: egui::vec2(432.0, 416.0), mac: false });
     let mut a = app_with(sample_cfg(), Tab::Home, true);
     a.welcome_open = true;
     v.push(Shot { name: "11-welcome", app: a, focus: focus(), size: egui::vec2(512.0, 448.0), mac: false });

@@ -256,22 +256,46 @@ pub fn default_exceptions() -> Vec<String> {
 
 
 /// User-facing app mark shown in the window, tray and shortcuts picker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogoStyle {
-    Water,
-    Suprematism,
-    Geometry,
+    /// Clean photo of a beach. The default, and the installed .ico / .icns.
+    Beach,
+    Artdeco,
+    Ukiyoe,
+    Poster,
+    Porthole,
 }
 
 impl Default for LogoStyle {
     fn default() -> Self {
-        Self::Water
+        Self::Beach
     }
 }
 
 impl LogoStyle {
-    pub const ALL: [LogoStyle; 3] = [LogoStyle::Water, LogoStyle::Suprematism, LogoStyle::Geometry];
+    pub const ALL: [LogoStyle; 5] = [
+        LogoStyle::Beach,
+        LogoStyle::Artdeco,
+        LogoStyle::Ukiyoe,
+        LogoStyle::Poster,
+        LogoStyle::Porthole,
+    ];
+}
+
+impl<'de> Deserialize<'de> for LogoStyle {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "beach" | "water" => LogoStyle::Beach,
+            "artdeco" | "art_deco" => LogoStyle::Artdeco,
+            "ukiyoe" => LogoStyle::Ukiyoe,
+            "poster" => LogoStyle::Poster,
+            "porthole" => LogoStyle::Porthole,
+            // Older marks (suprematism, geometry, …) fall back to the default beach.
+            _ => LogoStyle::Beach,
+        })
+    }
 }
 
 /// Bump when the welcome screen itself changes and should be shown once more.
@@ -318,9 +342,9 @@ pub struct Config {
     /// Light (white) settings window. Default is the dark style.
     #[serde(default)]
     pub light_theme: bool,
-    /// Window, tray and Alt-Tab mark. Default is the original water painting.
-    #[serde(default)]
-    pub logo_style: LogoStyle,
+    /// Window, tray and Alt-Tab mark. Default is the beach photograph.
+    #[serde(default, alias = "logo_style")]
+    pub logo: LogoStyle,
     /// Skip the first-launch welcome screen.
     #[serde(default)]
     pub hide_welcome: bool,
@@ -392,7 +416,7 @@ impl Default for Config {
             vault_idle_minutes: 10,
             custom_words: Vec::new(),
             light_theme: false,
-            logo_style: LogoStyle::default(),
+            logo: LogoStyle::default(),
             hide_welcome: false,
             welcome_gen: 0,
             app_launches: BTreeMap::new(),
@@ -489,7 +513,9 @@ impl Config {
     }
 
     pub fn from_json(s: &str) -> io::Result<Config> {
-        serde_json::from_str(s).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let mut c: Config = serde_json::from_str(s).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        c.dedupe_app_lists();
+        Ok(c)
     }
 
     pub fn to_json(&self) -> String {
@@ -510,16 +536,48 @@ impl Config {
 
     pub fn is_exception(&self, app_id: &str) -> bool {
         let a = app_id.to_lowercase();
-        self.exception_apps.iter().any(|e| !e.is_empty() && a.contains(&e.to_lowercase()))
+        let exe = exe_name(app_id);
+        self.exception_apps.iter().any(|e| {
+            if e.is_empty() {
+                return false;
+            }
+            let el = e.to_lowercase();
+            a.contains(&el) || (!exe.is_empty() && exe_name(e) == exe)
+        })
     }
 
     pub fn layout_for(&self, app_id: &str) -> Option<Lang> {
-        self.apps.get(&normalize_app_id(app_id)).copied()
+        let id = normalize_app_id(app_id);
+        if let Some(l) = self.apps.get(&id) {
+            return Some(*l);
+        }
+        let exe = exe_name(&id);
+        if exe.is_empty() {
+            return None;
+        }
+        self.apps.iter().find(|(k, _)| exe_name(k) == exe).map(|(_, l)| *l)
     }
 
     /// Remember `lang` for the app. Returns true if something changed.
+    /// Keys are canonical (basename of a path, otherwise the normalised id);
+    /// any other key for the same exe is dropped.
     pub fn set_layout(&mut self, app_id: &str, lang: Lang) -> bool {
-        self.apps.insert(normalize_app_id(app_id), lang) != Some(lang)
+        let key = canonical_app_id(app_id);
+        let exe = exe_name(&key);
+        let mut changed = false;
+        if !exe.is_empty() {
+            let drop: Vec<String> = self
+                .apps
+                .keys()
+                .filter(|k| *k != &key && exe_name(k) == exe)
+                .cloned()
+                .collect();
+            for k in drop {
+                self.apps.remove(&k);
+                changed = true;
+            }
+        }
+        changed | (self.apps.insert(key, lang) != Some(lang))
     }
 
     /// The user hid this app in the settings list.
@@ -545,9 +603,86 @@ impl Config {
 
     pub fn remove_app(&mut self, app_id: &str) -> bool {
         let id = normalize_app_id(app_id);
-        self.app_launches.remove(&id);
-        self.hidden_apps.retain(|h| *h != id);
-        self.apps.remove(&id).is_some()
+        let exe = exe_name(&id);
+        let keys: Vec<String> = self
+            .apps
+            .keys()
+            .filter(|k| *k == &id || (!exe.is_empty() && exe_name(k) == exe))
+            .cloned()
+            .collect();
+        let mut changed = false;
+        for k in &keys {
+            self.app_launches.remove(k);
+            self.hidden_apps.retain(|h| h != k && (exe.is_empty() || exe_name(h) != exe));
+            changed |= self.apps.remove(k).is_some();
+        }
+        changed
+    }
+
+    /// Put `app_id` on the exceptions list (Typed fully off) and drop the same exe
+    /// from the layout list. Returns true if something changed.
+    pub fn add_exception(&mut self, app_id: &str) -> bool {
+        let key = canonical_app_id(app_id);
+        if key.is_empty() {
+            return false;
+        }
+        let exe = exe_name(&key);
+        let changed = self.remove_app(&key);
+        if self.exception_apps.iter().any(|e| {
+            e.eq_ignore_ascii_case(&key) || (!exe.is_empty() && exe_name(e) == exe)
+        }) {
+            return changed;
+        }
+        self.exception_apps.push(key);
+        true
+    }
+
+    pub fn remove_exception(&mut self, app_id: &str) -> bool {
+        let id = normalize_app_id(app_id);
+        let exe = exe_name(&id);
+        let before = self.exception_apps.len();
+        self.exception_apps.retain(|e| {
+            e.to_lowercase() != id && (exe.is_empty() || exe_name(e) != exe)
+        });
+        self.exception_apps.len() != before
+    }
+
+    /// Collapse path/name and case duplicates. If the same exe is in both lists,
+    /// the exception wins. Idempotent; called when a config is loaded.
+    pub fn dedupe_app_lists(&mut self) {
+        let mut apps: BTreeMap<String, Lang> = BTreeMap::new();
+        for (k, lang) in std::mem::take(&mut self.apps) {
+            let key = canonical_app_id(&k);
+            if key.is_empty() {
+                continue;
+            }
+            apps.insert(key, lang); // last one wins if two different langs
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut exceptions = Vec::new();
+        for e in std::mem::take(&mut self.exception_apps) {
+            if e.trim().is_empty() {
+                continue;
+            }
+            // Short default tokens (`terminal`, `powershell`) stay as-is so
+            // substring matching keeps working; path entries collapse to the exe name.
+            let key = if is_path_id(&e) { canonical_app_id(&e) } else { normalize_app_id(&e) };
+            let exe = exe_name(&key);
+            let dedupe_key = if exe.is_empty() { key.clone() } else { exe };
+            if !seen.insert(dedupe_key) {
+                continue;
+            }
+            exceptions.push(key);
+        }
+        // Exception wins: drop the same exe from the layout list.
+        apps.retain(|k, _| {
+            let exe = exe_name(k);
+            !exceptions.iter().any(|e| {
+                (!exe.is_empty() && exe_name(e) == exe) || e.eq_ignore_ascii_case(k)
+            })
+        });
+        self.apps = apps;
+        self.exception_apps = exceptions;
     }
 
     pub fn launch_count(&self, app_id: &str) -> u32 {
@@ -642,6 +777,26 @@ pub const UNDONE_ONCE_MAX: usize = 200;
 /// App ids are compared case-insensitively (Windows paths, WM_CLASS variations).
 pub fn normalize_app_id(id: &str) -> String {
     id.trim().to_lowercase()
+}
+
+/// Last path component (`C:\Foo\Bar.EXE` → `bar.exe`); the whole id if there is no slash.
+pub fn exe_name(id: &str) -> String {
+    let t = id.trim().trim_end_matches(['/', '\\']);
+    t.rsplit(['/', '\\']).next().unwrap_or(t).to_lowercase()
+}
+
+fn is_path_id(id: &str) -> bool {
+    id.contains('/') || id.contains('\\')
+}
+
+/// Basename of a path, otherwise the normalised id (bundle id, WM_CLASS, bare exe).
+pub fn canonical_app_id(id: &str) -> String {
+    let n = normalize_app_id(id);
+    if is_path_id(&n) {
+        exe_name(&n)
+    } else {
+        n
+    }
 }
 
 #[cfg(test)]
@@ -779,7 +934,7 @@ mod tests {
     fn theme_and_launches_default_from_old_json() {
         let old = Config::from_json(r#"{"autocorrect":true,"apps":{"chat":"ru"}}"#).unwrap();
         assert!(!old.light_theme);
-        assert_eq!(old.logo_style, LogoStyle::Water);
+        assert_eq!(old.logo, LogoStyle::Beach);
         assert!(!old.hide_welcome);
         assert_eq!(old.welcome_gen, 0);
         assert!(old.app_launches.is_empty());
@@ -876,5 +1031,49 @@ mod tests {
         assert_eq!("Backspace".parse::<Hotkey>().unwrap(), Hotkey::BACKSPACE);
         assert!(Hotkey::BACKSPACE.is_safe() && Hotkey::BACKSPACE.is_plain_backspace());
         assert_eq!(Config::from_json(&off.to_json()).unwrap(), off);
+    }
+
+    #[test]
+    fn logo_defaults_to_beach_and_old_json_loads() {
+        assert_eq!(Config::from_json("{}").unwrap().logo, LogoStyle::Beach);
+        let named = Config::from_json(r#"{"logo":"ukiyoe"}"#).unwrap();
+        assert_eq!(named.logo, LogoStyle::Ukiyoe);
+        // Previous field name and the old water / suprematism / geometry marks.
+        let alias = Config::from_json(r#"{"logo_style":"water"}"#).unwrap();
+        assert_eq!(alias.logo, LogoStyle::Beach);
+        let old = Config::from_json(r#"{"logo_style":"suprematism"}"#).unwrap();
+        assert_eq!(old.logo, LogoStyle::Beach);
+        assert_eq!(Config::from_json(&named.to_json()).unwrap(), named);
+    }
+
+    #[test]
+    fn dedupes_apps_and_exceptions_by_exe_name() {
+        let c = Config::from_json(r#"{
+            "apps": {
+                "c:\\users\\a\\layout-keeper.exe": "en",
+                "LAYOUT-KEEPER.EXE": "ru",
+                "c:\\program files\\google\\chrome\\application\\chrome.exe": "en"
+            },
+            "exception_apps": [
+                "c:\\temp\\innosetup-6.7.1.tmp",
+                "InnoSetup-6.7.1.tmp",
+                "c:\\app\\layout-keeper.exe",
+                "powershell"
+            ]
+        }"#).unwrap();
+        assert_eq!(c.apps.len(), 1);
+        assert_eq!(c.layout_for(r"C:\Program Files\Google\Chrome\Application\chrome.exe"), Some(Lang::En));
+        assert_eq!(c.layout_for("CHROME.EXE"), Some(Lang::En));
+        // Same exe in both lists: exception wins.
+        assert!(c.layout_for("layout-keeper.exe").is_none());
+        assert!(c.is_exception(r"C:\Program Files\Typed\layout-keeper.exe"));
+        assert_eq!(c.exception_apps.iter().filter(|e| exe_name(e) == "innosetup-6.7.1.tmp").count(), 1);
+        assert_eq!(c.exception_apps.iter().filter(|e| exe_name(e) == "layout-keeper.exe").count(), 1);
+        assert!(c.exception_apps.iter().any(|e| e == "powershell"));
+        // Adding again is a no-op; a path for a new exe is stored as the basename.
+        let mut c = c;
+        assert!(!c.add_exception("layout-keeper.exe"));
+        assert!(c.add_exception(r"C:\Temp\Foo.EXE"));
+        assert!(c.exception_apps.iter().any(|e| e == "foo.exe"));
     }
 }

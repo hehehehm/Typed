@@ -13,10 +13,11 @@ fn stamp_build_time() {
 
 fn main() {
     stamp_build_time();
-    println!("cargo:rerun-if-changed=../../assets/typed.ico");
+    let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/typed.ico");
+    println!("cargo:rerun-if-changed={}", icon.display());
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winres::WindowsResource::new();
-        res.set_icon("../../assets/typed.ico");
+        res.set_icon(icon.to_str().expect("icon path utf-8"));
         res.set("ProductName", "Typed");
         res.set("FileDescription", "Typed");
         res.set("InternalName", "Typed");

@@ -1,62 +1,64 @@
-//! Bundled app marks the user can pick in settings.
+//! Bundled window / tray / welcome marks. Each style is a full-bleed rounded square.
 
 use eframe::egui;
 use layout_keeper_core::LogoStyle;
 
 pub fn png(style: LogoStyle) -> &'static [u8] {
-    match style {
-        LogoStyle::Water => include_bytes!("../../../assets/typed-icon-256.png"),
-        LogoStyle::Suprematism => include_bytes!("../../../assets/typed-logo-suprematism.png"),
-        LogoStyle::Geometry => include_bytes!("../../../assets/typed-logo-geometry.png"),
-    }
+    icon_png(style)
 }
 
-/// Opaque square for the Windows title bar, taskbar and tray.
-/// The water painting keeps a rounded alpha fringe that Windows draws as white corners.
 pub fn icon_png(style: LogoStyle) -> &'static [u8] {
     match style {
-        LogoStyle::Water => include_bytes!("../../../assets/typed-icon-app.png"),
-        LogoStyle::Suprematism => include_bytes!("../../../assets/typed-logo-suprematism-app.png"),
-        LogoStyle::Geometry => include_bytes!("../../../assets/typed-logo-geometry-app.png"),
+        LogoStyle::Beach => include_bytes!("../../../assets/logo-beach.png"),
+        LogoStyle::Artdeco => include_bytes!("../../../assets/logo-artdeco.png"),
+        LogoStyle::Ukiyoe => include_bytes!("../../../assets/logo-ukiyoe.png"),
+        LogoStyle::Poster => include_bytes!("../../../assets/logo-poster.png"),
+        LogoStyle::Porthole => include_bytes!("../../../assets/logo-porthole.png"),
     }
 }
 
 pub fn uri(style: LogoStyle) -> &'static str {
     match style {
-        LogoStyle::Water => "bytes://typed-logo-water",
-        LogoStyle::Suprematism => "bytes://typed-logo-suprematism",
-        LogoStyle::Geometry => "bytes://typed-logo-geometry",
+        LogoStyle::Beach => "bytes://typed-logo-beach",
+        LogoStyle::Artdeco => "bytes://typed-logo-artdeco",
+        LogoStyle::Ukiyoe => "bytes://typed-logo-ukiyoe",
+        LogoStyle::Poster => "bytes://typed-logo-poster",
+        LogoStyle::Porthole => "bytes://typed-logo-porthole",
     }
 }
 
 pub fn label(style: LogoStyle) -> &'static str {
     match style {
-        LogoStyle::Water => "Море",
-        LogoStyle::Suprematism => "Супреморе",
-        LogoStyle::Geometry => "Геометроморе",
+        LogoStyle::Beach => "Пляж",
+        LogoStyle::Artdeco => "Ар-деко",
+        LogoStyle::Ukiyoe => "Укиё-э",
+        LogoStyle::Poster => "Плакат",
+        LogoStyle::Porthole => "Иллюминатор",
     }
 }
 
 pub fn index(style: LogoStyle) -> u8 {
     match style {
-        LogoStyle::Water => 0,
-        LogoStyle::Suprematism => 1,
-        LogoStyle::Geometry => 2,
+        LogoStyle::Beach => 0,
+        LogoStyle::Artdeco => 1,
+        LogoStyle::Ukiyoe => 2,
+        LogoStyle::Poster => 3,
+        LogoStyle::Porthole => 4,
     }
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
+#[allow(dead_code)]
 pub fn from_index(index: u8) -> LogoStyle {
     match index {
-        1 => LogoStyle::Suprematism,
-        2 => LogoStyle::Geometry,
-        _ => LogoStyle::Water,
+        1 => LogoStyle::Artdeco,
+        2 => LogoStyle::Ukiyoe,
+        3 => LogoStyle::Poster,
+        4 => LogoStyle::Porthole,
+        _ => LogoStyle::Beach,
     }
 }
 
 pub fn texture(ctx: &egui::Context, style: LogoStyle) -> egui::TextureHandle {
-    // Use the opaque full-bleed marks so picker tiles are the same visual size.
-    // The rounded/transparent water PNG looks smaller next to the other two.
     let icon = eframe::icon_data::from_png_bytes(icon_png(style)).expect("bundled logo png");
     let mut rgba = icon.rgba;
     for px in rgba.chunks_exact_mut(4) {
@@ -73,10 +75,7 @@ pub fn texture(ctx: &egui::Context, style: LogoStyle) -> egui::TextureHandle {
     }
     ctx.load_texture(
         uri(style),
-        egui::ColorImage::from_rgba_premultiplied(
-            [icon.width as usize, icon.height as usize],
-            &rgba,
-        ),
+        egui::ColorImage::from_rgba_premultiplied([icon.width as usize, icon.height as usize], &rgba),
         egui::TextureOptions::LINEAR,
     )
 }

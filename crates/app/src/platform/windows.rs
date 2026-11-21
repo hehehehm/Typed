@@ -991,7 +991,7 @@ fn tray_logo() -> u8 {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| layout_keeper_core::Config::from_json(&s).ok())
-        .map(|c| crate::logos::index(c.logo_style))
+        .map(|c| crate::logos::index(c.logo))
         .unwrap_or_else(|| crate::logos::index(Default::default()))
 }
 
