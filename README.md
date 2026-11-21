@@ -614,6 +614,36 @@ EVAL_SEED=76 EVAL_N=5000 EVAL_OUT=/tmp/typist.md \
 `tests/data/typist_chat.txt`. Короткий дымовой прогон (`typist_eval_smoke`) входит в обычный
 `cargo test` и не падает из-за ложных срабатываний.
 
+### UI/UX tester (окно настроек)
+
+Гоняет настоящее GUI-состояние headless (события указателя и клавиш в egui 0.29,
+без `egui_kittest`) и проверяет вёрстку: выход за окно и обрезку, пересечение
+кликабельных областей, размер цели (≥ 24 px), контраст текста (≥ 4.5, в том
+числе подписи на фотошапке), пустой экран, сценарии (добавление программы,
+вкладки Программы/Исключения, логотип, тема, приветствие, пять квадратов на
+главной). Дешёвые проверки входят в обычный `cargo test` и **не падают** из-за
+известных визуальных замечаний — пишут отчёт. Снимки и pixel-diff с baseline
+запущены отдельно, как `render_ui_screenshots`.
+
+```bash
+# сценарии + структурные проверки (отчёт в /tmp/typed-ui-ux-report.md)
+cargo test -p layout-keeper --bin typed ux_ -- --nocapture
+
+# снимки по матрице (тема × Win/Mac × размер) и diff с baseline
+TYPED_UI_UX_SHOTS=/tmp/typed-ui-ux-shots \
+TYPED_UI_UX_BASELINE=/tmp/typed-ui-ux-baseline \
+TYPED_UI_UX_DIFF=/tmp/typed-ui-ux-diff \
+TYPED_UI_UX_UPDATE_BASELINE=1 \
+  cargo test -p layout-keeper --bin typed ux_visual_regression -- --ignored --nocapture
+```
+
+Повторный прогон без `TYPED_UI_UX_UPDATE_BASELINE` сравнивает PNG с baseline
+(порог — доля пикселей с Δ канала > 8, по умолчанию 1%, `TYPED_UI_UX_DIFF_PCT`).
+`TYPED_UI_UX_FAIL_ON_DIFF=1` заставляет проигнорированный тест упасть при
+расхождении. Каталог `ui-ux-baseline/` в корне репозитория гитигнорирован:
+большие бинарники в git не кладём. Существующие скриншоты экранов по-прежнему
+снимаются через `TYPED_UI_SHOTS=/tmp/typed-ui-shots cargo test -p layout-keeper --bin typed render_ui_screenshots -- --ignored`.
+
 ## Графические настройки (`typed gui`)
 
 Окно настроек — отдельный процесс: он только редактирует тот же `config.json`, а работающий демон
@@ -1383,6 +1413,19 @@ Build: `cargo test && cargo build --release`. Run: `typed` (`status`, `set-app <
 Typist testers (engine-level, no GUI): two seeded personas type through `Engine::feed`.
 Run `EVAL_SEED=76 EVAL_N=5000 EVAL_OUT=/tmp/typist.md cargo test --release -p layout_keeper_core --test typist_eval -- --ignored --nocapture`.
 See the Russian «Typist testers» section for env vars (`EVAL_LEVEL`, `EVAL_PERSONA`, `EVAL_N_OTHER`).
+
+
+UI/UX tester (settings window): headless egui 0.29 input events drive real GUI
+state. `cargo test -p layout-keeper --bin typed ux_` runs scenarios and structural
+checks (overflow, overlap, 24 px hit targets, WCAG contrast, blank screens) and
+writes `/tmp/typed-ui-ux-report.md` without failing on known visual issues.
+Heavier PNG shots and a pixel-diff against a (gitignored) baseline:
+
+`TYPED_UI_UX_SHOTS=/tmp/typed-ui-ux-shots TYPED_UI_UX_BASELINE=/tmp/typed-ui-ux-baseline TYPED_UI_UX_UPDATE_BASELINE=1 cargo test -p layout-keeper --bin typed ux_visual_regression -- --ignored --nocapture`.
+
+See the Russian «UI/UX tester» section for env vars (`TYPED_UI_UX_DIFF`,
+`TYPED_UI_UX_DIFF_PCT`, `TYPED_UI_UX_FAIL_ON_DIFF`).
+
 
 Platforms: Linux X11 implemented and tested under Xvfb; Windows and macOS implemented against the
 native APIs and type-checked for their targets, not yet run on real hardware; Wayland and mobile are

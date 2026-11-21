@@ -11,15 +11,15 @@ use super::*;
 use eframe::egui::{epaint, Color32, ImageData, Pos2, Rect, TextureId};
 use std::collections::HashMap;
 
-const LONG_PATH: &str = r"c:\users\hehehehm\appdata\local\temp\3m40e6uivkbbnon1nlp\setup.tmp";
+pub(super) const LONG_PATH: &str = r"c:\users\hehehehm\appdata\local\temp\3m40e6uivkbbnon1nlp\setup.tmp";
 
-fn tmp_dir() -> PathBuf {
+pub(super) fn tmp_dir() -> PathBuf {
     let d = std::env::temp_dir().join(format!("typed-ui-test-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&d);
     d
 }
 
-fn sample_cfg() -> Config {
+pub(super) fn sample_cfg() -> Config {
     let mut c = Config::default();
     c.hide_welcome = true;
     c.welcome_gen = layout_keeper_core::config::CURRENT_WELCOME_GEN;
@@ -37,7 +37,7 @@ fn sample_cfg() -> Config {
     c
 }
 
-fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
+pub(super) fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
     let dir = tmp_dir();
     let mut cfg = cfg;
     cfg.light_theme = light;
@@ -75,7 +75,7 @@ fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
     }
 }
 
-fn focus() -> Focus {
+pub(super) fn focus() -> Focus {
     Focus { app: Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe".into()), layout: Some(Lang::En) }
 }
 
@@ -88,7 +88,7 @@ struct Shot {
     mac: bool,
 }
 
-const INTER: &str = "/usr/share/fonts/truetype/sand-box/google/Inter/Inter-VariableFont_opsz,wght.ttf";
+pub(super) const INTER: &str = "/usr/share/fonts/truetype/sand-box/google/Inter/Inter-VariableFont_opsz,wght.ttf";
 
 
 fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
@@ -217,10 +217,33 @@ fn sample(img: &egui::ColorImage, u: f32, v: f32) -> [f32; 4] {
     o
 }
 
-fn rasterize(ctx: &egui::Context, out: egui::FullOutput, textures: &HashMap<TextureId, egui::ColorImage>, size: egui::Vec2, ppp: f32) -> (usize, usize, Vec<[f32; 4]>) {
+
+pub(super) fn merge_textures(textures: &mut HashMap<TextureId, egui::ColorImage>, out: &egui::FullOutput) {
+    for (id, delta) in &out.textures_delta.set {
+        let img = match &delta.image {
+            ImageData::Color(c) => (**c).clone(),
+            ImageData::Font(f) => egui::ColorImage { size: f.size, pixels: f.srgba_pixels(None).collect() },
+        };
+        match delta.pos {
+            None => {
+                textures.insert(*id, img);
+            }
+            Some([x0, y0]) => {
+                let t = textures.get_mut(id).expect("partial update of a known texture");
+                for y in 0..img.size[1] {
+                    for x in 0..img.size[0] {
+                        t.pixels[(y0 + y) * t.size[0] + x0 + x] = img.pixels[y * img.size[0] + x];
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn rasterize(ctx: &egui::Context, out: &egui::FullOutput, textures: &HashMap<TextureId, egui::ColorImage>, size: egui::Vec2, ppp: f32) -> (usize, usize, Vec<[f32; 4]>) {
     let (w, h) = ((size.x * ppp).round() as usize, (size.y * ppp).round() as usize);
     let mut buf = vec![[0.0f32, 0.0, 0.0, 255.0]; w * h];
-    let prims = ctx.tessellate(out.shapes, out.pixels_per_point);
+    let prims = ctx.tessellate(out.shapes.clone(), out.pixels_per_point);
     for p in prims {
         let epaint::Primitive::Mesh(mesh) = p.primitive else { continue };
         let Some(tex) = textures.get(&mesh.texture_id) else { continue };
@@ -288,7 +311,7 @@ fn rasterize(ctx: &egui::Context, out: egui::FullOutput, textures: &HashMap<Text
     (w, h, buf)
 }
 
-fn write_png(path: &std::path::Path, w: usize, h: usize, buf: &[[f32; 4]]) {
+pub(super) fn write_png(path: &std::path::Path, w: usize, h: usize, buf: &[[f32; 4]]) {
     let f = std::fs::File::create(path).expect("png file");
     let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w as u32, h as u32);
     enc.set_color(png::ColorType::Rgb);
@@ -317,7 +340,7 @@ fn render_ui_screenshots() {
     let ppp = 2.0;
     for mut shot in shots(true) {
         let (ctx, out, tex) = run(&mut shot, ppp);
-        let (w, h, buf) = rasterize(&ctx, out, &tex, shot.size, ppp);
+        let (w, h, buf) = rasterize(&ctx, &out, &tex, shot.size, ppp);
         write_png(&dir.join(format!("{}.png", shot.name)), w, h, &buf);
         println!("{} overflow={}", shot.name, shot.app.content_overflow);
     }

@@ -111,19 +111,19 @@ enum HotkeySlot {
     Undo,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum AppMode {
     En,
     Ru,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum AppsPane {
     Programs,
     Exceptions,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum Tab {
     /// Five identical squares in one row.
     Home,
@@ -1108,7 +1108,34 @@ impl App {
         }
     }
 
+    /// Hotkey capture and Esc-to-home. Lives in `draw` so the headless UX
+    /// tester (which calls `draw` directly) sees the same path as the window.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        let capturing = self.capturing_hotkey.is_some();
+        if let Some(slot) = self.capturing_hotkey {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.capturing_hotkey = None;
+                self.status.clear();
+            } else if let Some(hk) = read_captured_hotkey(ctx) {
+                match slot {
+                    HotkeySlot::Convert => self.cfg.hotkey = hk,
+                    HotkeySlot::Summon => self.cfg.summon_hotkey = hk,
+                    HotkeySlot::Undo => {
+                        self.cfg.undo_key = hk;
+                        self.cfg.undo_hotkey = hk;
+                    }
+                }
+                self.capturing_hotkey = None;
+                self.save();
+            }
+        }
+        if !capturing && !self.welcome_open && self.tab != Tab::Home && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.go(Tab::Home);
+        }
+    }
+
     fn draw(&mut self, ctx: &egui::Context, focus: &Focus) {
+        self.handle_shortcuts(ctx);
         self.apply_theme(ctx);
         if self.grow_for_section {
             let rect = ctx.input(|i| i.screen_rect());
@@ -1352,28 +1379,6 @@ impl eframe::App for App {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(200));
-        // Esc in a section goes back to the squares (not while assigning a hotkey).
-        let capturing = self.capturing_hotkey.is_some();
-        if let Some(slot) = self.capturing_hotkey {
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.capturing_hotkey = None;
-                self.status.clear();
-            } else if let Some(hk) = read_captured_hotkey(ctx) {
-                match slot {
-                    HotkeySlot::Convert => self.cfg.hotkey = hk,
-                    HotkeySlot::Summon => self.cfg.summon_hotkey = hk,
-                    HotkeySlot::Undo => {
-                        self.cfg.undo_key = hk;
-                        self.cfg.undo_hotkey = hk;
-                    }
-                }
-                self.capturing_hotkey = None;
-                self.save();
-            }
-        }
-        if !capturing && !self.welcome_open && self.tab != Tab::Home && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.go(Tab::Home);
-        }
         let focus = self.focus.lock().map(|f| f.clone()).unwrap_or_default();
         self.vault.tick(ctx, self.cfg.vault_idle_minutes);
         self.draw(ctx, &focus);
@@ -1664,6 +1669,10 @@ fn qr_image(text: &str) -> egui::ColorImage {
 #[cfg(test)]
 #[path = "gui_shots.rs"]
 mod shots;
+
+#[cfg(test)]
+#[path = "gui_ux.rs"]
+mod ux;
 
 #[cfg(test)]
 mod qr_tests {

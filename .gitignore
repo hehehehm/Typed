@@ -23,3 +23,8 @@ desktop.ini
 .idea/
 .vscode/
 target-base/
+
+# UI/UX visual-regression baselines and local shot dumps (PNG).
+# Generate with TYPED_UI_UX_UPDATE_BASELINE=1; do not commit the binaries.
+ui-ux-baseline/
+ui-ux-shots/
