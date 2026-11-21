@@ -278,13 +278,16 @@ pub struct Config {
     pub apps: BTreeMap<String, Lang>,
     /// Fill in a default for apps that have none yet, from the layout the user picks there.
     /// Never overwrites an existing assignment (only `set-app` / the GUI change those).
+    /// Always on at runtime; the field is kept so old `config.json` files still parse.
     pub auto_learn: bool,
     /// Automatically fix words typed in the wrong layout.
     pub autocorrect: bool,
     /// Convert single letters toward the focused app's assigned language.
+    /// Always on at runtime; the field is kept for config compatibility.
     #[serde(default = "default_convert_single_letters")]
     pub convert_single_letters: bool,
-    /// Fix one-letter typos (поечаток → опечаток). On by default.
+    /// Fix one-letter typos (поечаток → опечаток). Always on at runtime;
+    /// the field is kept for config compatibility.
     #[serde(default = "default_true")]
     pub fix_typos: bool,
     /// Never autocorrect or hotkey-convert in these apps (substring match, case-insensitive).
@@ -329,6 +332,7 @@ pub struct Config {
     #[serde(default = "default_undo_hotkey")]
     pub undo_hotkey: Hotkey,
     /// Backspace right after an autocorrection (before any other key) undoes it.
+    /// Always on at runtime; the field is kept for config compatibility.
     #[serde(default = "default_true")]
     pub undo_on_backspace: bool,
     /// Words the user undid: never autocorrected again (normalised, lowercase).
@@ -347,9 +351,11 @@ pub struct Config {
     #[serde(default)]
     pub undone_once: Vec<String>,
     /// Let the previous words (word n-grams) choose and veto typo fixes (since 0.3.72).
+    /// Always on at runtime; the field is kept for config compatibility.
     #[serde(default = "default_true")]
     pub use_context: bool,
     /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
+    /// Always on at runtime; the field is kept for config compatibility.
     #[serde(default = "default_true")]
     pub fix_missing_spaces: bool,
     /// Windows: start Typed with administrator rights (a «Typed» Task Scheduler task at
@@ -541,21 +547,26 @@ impl Config {
     pub fn engine_options(&self) -> EngineOptions {
         EngineOptions {
             autocorrect: self.autocorrect,
-            convert_single_letters: self.convert_single_letters,
+            convert_single_letters: true,
             preferred_lang: None,
             skip_urls_emails: self.skip_urls_emails,
             skip_tokens_with_digits: self.skip_tokens_with_digits,
             min_word_len: self.min_word_len,
             user_words: crate::userdict::UserWords::from_words(&self.custom_words),
-            fix_typos: self.fix_typos,
+            fix_typos: true,
             never_correct: self.never_correct.iter().map(|w| crate::engine::never_key(w)).filter(|w| !w.is_empty()).collect(),
-            undo_on_backspace: self.undo_on_backspace,
-            fix_missing_spaces: self.fix_missing_spaces,
+            undo_on_backspace: true,
+            fix_missing_spaces: true,
             typo_level: self.typo_level,
             never_typo: self.never_typo_fix.iter().map(|w| crate::engine::never_key(w)).filter(|w| !w.is_empty()).collect(),
             undone_once: self.undone_once.iter().cloned().collect(),
-            use_context: self.use_context,
+            use_context: true,
         }
+    }
+
+    /// Layout memory for new apps is always on; `auto_learn` is only kept in the file.
+    pub fn learns_layouts(&self) -> bool {
+        true
     }
 
     /// Add a never-typo-fix word (normalised); `false` if it was already there or empty.
@@ -795,7 +806,8 @@ mod tests {
         assert!(old.engine_options().convert_single_letters);
         assert_eq!(old.engine_options().preferred_lang, None);
         let disabled = Config::from_json(r#"{"convert_single_letters":false}"#).unwrap();
-        assert!(!disabled.engine_options().convert_single_letters);
+        assert!(!disabled.convert_single_letters);
+        assert!(disabled.engine_options().convert_single_letters);
         assert_eq!(Config::from_json(&disabled.to_json()).unwrap(), disabled);
     }
 
@@ -806,7 +818,8 @@ mod tests {
         assert!(old.engine_options().fix_missing_spaces);
         assert!(Config::default().fix_missing_spaces);
         let off = Config::from_json(r#"{"fix_missing_spaces":false}"#).unwrap();
-        assert!(!off.engine_options().fix_missing_spaces);
+        assert!(!off.fix_missing_spaces);
+        assert!(off.engine_options().fix_missing_spaces);
         assert_eq!(Config::from_json(&off.to_json()).unwrap(), off);
     }
 
@@ -815,8 +828,12 @@ mod tests {
         let fresh = Config::from_json("{}").unwrap();
         assert!(fresh.fix_typos && fresh.auto_learn && fresh.use_context);
         assert!(fresh.autocorrect && fresh.convert_single_letters && fresh.fix_missing_spaces && fresh.undo_on_backspace);
-        let saved = Config::from_json(r#"{"fix_typos":false,"auto_learn":false,"use_context":false}"#).unwrap();
+        let saved = Config::from_json(r#"{"fix_typos":false,"auto_learn":false,"use_context":false,"convert_single_letters":false,"fix_missing_spaces":false,"undo_on_backspace":false}"#).unwrap();
         assert!(!saved.fix_typos && !saved.auto_learn && !saved.use_context);
+        assert!(!saved.convert_single_letters && !saved.fix_missing_spaces && !saved.undo_on_backspace);
+        let o = saved.engine_options();
+        assert!(o.fix_typos && o.use_context && o.convert_single_letters && o.fix_missing_spaces && o.undo_on_backspace);
+        assert!(saved.learns_layouts());
         assert_eq!(Config::from_json(&saved.to_json()).unwrap(), saved);
     }
 }

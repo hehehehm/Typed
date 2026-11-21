@@ -107,7 +107,7 @@ fn real_main() -> Result<(), String> {
             eprintln!("Typed {} — config: {}", env!("CARGO_PKG_VERSION"), path.display());
             log::info!(
                 "autocorrect={} auto_learn={} hotkey={} summon={} remembered_apps={}",
-                cfg.autocorrect, cfg.auto_learn, cfg.hotkey, cfg.summon_hotkey, cfg.apps.len()
+                cfg.autocorrect, cfg.learns_layouts(), cfg.hotkey, cfg.summon_hotkey, cfg.apps.len()
             );
             platform::run(Controller::new(cfg, Some(path)))
         }
@@ -129,11 +129,11 @@ fn real_main() -> Result<(), String> {
             let (cfg, path) = load()?;
             println!("config:       {}", path.display());
             println!("autocorrect:  {}", cfg.autocorrect);
-            println!("auto-learn:   {}", cfg.auto_learn);
+            println!("auto-learn:   always on");
             println!("hotkey:       {}", cfg.hotkey);
             println!("summon:       {}", cfg.summon_hotkey);
-            println!("undo:         {} (backspace undo: {}), never-correct words: {}, never-typo-fix words: {}", cfg.undo_hotkey, cfg.undo_on_backspace, cfg.never_correct.len(), cfg.never_typo_fix.len());
-            println!("typos:        {} (level {:?}, context {})", cfg.fix_typos, cfg.typo_level, cfg.use_context);
+            println!("undo:         {} (backspace undo: always on), never-correct words: {}, never-typo-fix words: {}", cfg.undo_hotkey, cfg.never_correct.len(), cfg.never_typo_fix.len());
+            println!("typos:        always on (level {:?}, context always on)", cfg.typo_level);
             println!("apps:         {} remembered, {} exceptions", cfg.apps.len(), cfg.exception_apps.len());
             let (app, lang) = platform::probe();
             println!("focused app:  {}", app.as_deref().unwrap_or("(unknown)"));

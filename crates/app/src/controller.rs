@@ -113,7 +113,7 @@ impl Controller {
 
     fn learn(&mut self, app: &str, lang: Lang) {
         // Exceptions disable autocorrect only; layout memory still applies.
-        if !self.config.auto_learn {
+        if !self.config.learns_layouts() {
             return;
         }
         // Installers, temp unpackers and OS shell hosts should not accumulate.
@@ -332,12 +332,14 @@ mod tests {
     }
 
     #[test]
-    fn no_learning_when_disabled() {
+    fn learns_even_if_saved_auto_learn_is_off() {
         let mut c = ctl();
         c.config.auto_learn = false;
+        assert!(c.config.learns_layouts());
         c.tick(Some("code"), Some(Lang::En));
         c.tick(Some("code"), Some(Lang::Ru));
-        assert_eq!(c.config.layout_for("code"), None);
+        c.tick(Some("x"), Some(Lang::En));
+        assert_eq!(c.config.layout_for("code"), Some(Lang::Ru));
     }
 
     #[test]
@@ -647,8 +649,11 @@ mod tests {
         c.config_mtime = None;
         c.last_reload_check = Instant::now() - Duration::from_secs(2);
         c.tick(Some("chat"), Some(Lang::En));
-        assert!(!c.engine.options.convert_single_letters);
-        assert!(typ(&mut c, "в ").is_empty());
+        assert!(!c.config.convert_single_letters);
+        assert!(c.engine.options.convert_single_letters);
+        assert_eq!(typ(&mut c, "й ")[0], Command::Replace(Replacement {
+            delete: 2, insert: "q ".into(), target: Lang::En,
+        }));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

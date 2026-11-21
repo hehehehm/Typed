@@ -9,7 +9,6 @@ use layout_keeper_core::{typo::Level as TypoLevel, Config, Hotkey, HotkeyCode, L
 use crate::icons::{basename, delete_icon_button, IconCache};
 use crate::ui_style as st;
 use layout_keeper_core::userdict;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -42,11 +41,10 @@ pub(crate) fn is_self(app: &str) -> bool {
 /// Shortest gap between frames while the window is hidden or minimized.
 const IDLE_FRAME: Duration = Duration::from_millis(250);
 
-const SETTINGS_GROUPS: &[&str] = &["fix", "typo", "undo", "keys", "admin", "look", "about"];
-
-fn default_open_groups() -> HashSet<&'static str> {
-    SETTINGS_GROUPS.iter().copied().collect()
-}
+/// Home window: five squares in one short row.
+const HOME_INNER: [f32; 2] = [512.0, 192.0];
+/// Section window: settings (and other tabs) fit this height without scrolling.
+const SECTION_INNER: [f32; 2] = [512.0, 416.0];
 
 pub(crate) fn hide_window(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -74,9 +72,8 @@ struct App {
     capturing_hotkey: Option<HotkeySlot>,
     word_draft: String,
     icons: IconCache,
-    /// Settings groups opened in this session (all open by default; the Settings
-    /// section itself starts behind the home square).
-    open_groups: HashSet<&'static str>,
+    /// Grow the window to `SECTION_INNER` the next time a non-home tab is shown.
+    grow_for_section: bool,
     /// How much the last frame's content was wider than the window (should stay 0).
     content_overflow: f32,
     tray: Option<crate::tray::TrayHandle>,
@@ -384,37 +381,42 @@ impl App {
             HotkeySlot::Undo => self.cfg.undo_hotkey,
         };
         let t = st::cur(ui);
-        st::block(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = st::GAP;
-            ui.horizontal(|ui| {
-                let capturing = self.capturing_hotkey == Some(slot);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if capturing {
-                        st::primary(ui, "Нажмите… Esc", accent);
-                    } else if st::secondary(ui, "Назначить").clicked() {
-                        self.capturing_hotkey = Some(slot);
-                        self.status = "Нажмите сочетание…".into();
-                    }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(label).color(t.ink)).truncate());
-                        ui.add(egui::Label::new(egui::RichText::new(current.to_string()).monospace().color(t.muted)).truncate());
-                    });
-                });
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
-                for &(h, name) in presets {
-                    if st::choice_tile(ui, current == h, name, 0.0, accent).clicked() {
-                        match slot {
-                            HotkeySlot::Convert => self.cfg.hotkey = h,
-                            HotkeySlot::Summon => self.cfg.summon_hotkey = h,
-                            HotkeySlot::Undo => self.cfg.undo_hotkey = h,
-                        }
-                        self.save();
+        let capturing = self.capturing_hotkey == Some(slot);
+        let mut picked = None;
+        let mut start_capture = false;
+        st::row(
+            ui,
+            t.surface,
+            |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(label).color(t.ink)).truncate());
+            },
+            |ui| {
+                if capturing {
+                    st::primary(ui, "Нажмите…", accent).on_hover_text("Esc — отмена");
+                    return;
+                }
+                if st::secondary(ui, "…").on_hover_text("Назначить").clicked() {
+                    start_capture = true;
+                }
+                for &(h, name) in presets.iter().rev() {
+                    if st::choice_tile(ui, current == h, name, 0.0, accent).on_hover_text(name).clicked() {
+                        picked = Some(h);
                     }
                 }
-            });
-        });
+            },
+        );
+        if start_capture {
+            self.capturing_hotkey = Some(slot);
+            self.status = "Нажмите сочетание…".into();
+        }
+        if let Some(h) = picked {
+            match slot {
+                HotkeySlot::Convert => self.cfg.hotkey = h,
+                HotkeySlot::Summon => self.cfg.summon_hotkey = h,
+                HotkeySlot::Undo => self.cfg.undo_hotkey = h,
+            }
+            self.save();
+        }
     }
 
     fn donate_tab(&mut self, ui: &mut egui::Ui) {
@@ -458,23 +460,10 @@ impl App {
         });
     }
 
-    /// Collapsible group of the settings section. Closed until opened.
-    fn group(&mut self, ui: &mut egui::Ui, key: &'static str, title: &str, mark: st::Mark, body: impl FnOnce(&mut Self, &mut egui::Ui)) {
-        let open = self.open_groups.contains(key);
-        if st::group_header(ui, open, title, &mark, Tab::Settings.color()).clicked() {
-            if open {
-                self.open_groups.remove(key);
-            } else {
-                self.open_groups.insert(key);
-            }
-        }
-        if self.open_groups.contains(key) {
-            body(self, ui);
-        }
-    }
-
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
         let accent = Tab::Settings.color();
+        let t = st::cur(ui);
+        ui.spacing_mut().item_spacing.y = 0.0;
         let mut changed = false;
         changed |= st::toggle_row(
             ui,
@@ -484,145 +473,94 @@ impl App {
             accent,
         );
 
-        let on = [self.cfg.convert_single_letters, self.cfg.fix_missing_spaces, self.cfg.auto_learn].iter().filter(|b| **b).count();
-        let mut c = false;
-        self.group(ui, "fix", "Исправления", st::Mark::Count { on: on as u8, of: 3 }, |s, ui| {
-            c |= st::toggle_row(
-                ui,
-                &mut s.cfg.convert_single_letters,
-                "Отдельные буквы",
-                "d → в, z → я, ф → a, ш → i (настоящие a, I, в, и, я остаются)",
-                accent,
-            );
-            c |= st::toggle_row(
-                ui,
-                &mut s.cfg.fix_missing_spaces,
-                "Пропущенные пробелы",
-                "После предлогов и «не»: незнаю → не знаю",
-                accent,
-            );
-            c |= st::toggle_row(
-                ui,
-                &mut s.cfg.auto_learn,
-                "Автозапоминание",
-                "Запоминает раскладку новых программ",
-                accent,
-            );
-        });
+        let typo_opts = [
+            (TypoLevel::Cautious, level_name(TypoLevel::Cautious), "1 ошибка от 4 букв, 2 от 8, только частые"),
+            (TypoLevel::Normal, level_name(TypoLevel::Normal), "1 от 3, 2 от 5, 3 от 9; раскладка + опечатка"),
+            (TypoLevel::Aggressive, level_name(TypoLevel::Aggressive), "Смелее при близких вариантах"),
+        ];
+        let mut typo = self.cfg.typo_level;
+        st::row(
+            ui,
+            t.surface,
+            |ui| {
+                ui.add(egui::Label::new(egui::RichText::new("Смелость").color(t.ink)))
+                    .on_hover_text("Насколько смело исправлять опечатки");
+            },
+            |ui| {
+                let label_need = st::text_w(ui, "Смелость", st::font_md()) + st::GAP * 2.0;
+                let w = (ui.available_width() - label_need).max(st::HIT * 3.0);
+                if st::segment_strip(ui, &mut typo, &typo_opts, w, accent) {
+                    changed = true;
+                }
+            },
+        );
+        if typo != self.cfg.typo_level {
+            self.cfg.typo_level = typo;
+        }
 
-        let typo_mark = if self.cfg.fix_typos {
-            st::Mark::Count { on: typo_rank(self.cfg.typo_level), of: 3 }
-        } else {
-            st::Mark::Toggle(false)
-        };
-        self.group(ui, "typo", "Опечатки", typo_mark, |s, ui| {
-            c |= st::toggle_row(ui, &mut s.cfg.fix_typos, "Исправлять опечатки", "поечаток → опечаток", accent);
-            ui.add_enabled_ui(s.cfg.fix_typos, |ui| {
-                st::block(ui, |ui| {
-                    st::caption(ui, "Смелость", "Насколько смело исправлять опечатки");
-                    let typo_opts = [
-                        (TypoLevel::Cautious, level_name(TypoLevel::Cautious), "1 ошибка от 4 букв, 2 от 8, только частые"),
-                        (TypoLevel::Normal, level_name(TypoLevel::Normal), "1 от 3, 2 от 5, 3 от 9; раскладка + опечатка"),
-                        (TypoLevel::Aggressive, level_name(TypoLevel::Aggressive), "Смелее при близких вариантах"),
-                    ];
-                    let strip_w = ui.available_width();
-                    c |= st::segment_strip(ui, &mut s.cfg.typo_level, &typo_opts, strip_w, accent);
-                });
-                c |= st::toggle_row(
-                    ui,
-                    &mut s.cfg.use_context,
-                    "Соседние слова",
-                    "Учитывает 1–2 предыдущих слова предложения",
-                    accent,
-                );
-            });
-        });
+        ui.add_space(st::GAP);
+        self.hotkey_picker(
+            ui,
+            HotkeySlot::Convert,
+            "Конвертация",
+            &[
+                (Hotkey::Pause, "Pause"),
+                (Hotkey::ShiftShift, "Shift+Shift"),
+                (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
+            ],
+        );
+        self.hotkey_picker(
+            ui,
+            HotkeySlot::Summon,
+            "Окно",
+            &[
+                (Hotkey::CTRL_SHIFT_V, "Ctrl+Shift+V"),
+                (Hotkey::CTRL_SHIFT_K, "Ctrl+Shift+K"),
+                (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
+            ],
+        );
+        self.hotkey_picker(
+            ui,
+            HotkeySlot::Undo,
+            "Отмена",
+            &[
+                (Hotkey::CTRL_ALT_Z, if cfg!(target_os = "macos") { "Ctrl+Option+Z" } else { "Ctrl+Alt+Z" }),
+                (Hotkey::CTRL_ALT_BACKSPACE, if cfg!(target_os = "macos") { "Ctrl+Option+Delete" } else { "Ctrl+Alt+Backspace" }),
+                (Hotkey::SHIFT_PAUSE, "Shift+Pause"),
+            ],
+        );
+        if self.cfg.hotkey == self.cfg.summon_hotkey
+            || self.cfg.undo_hotkey == self.cfg.hotkey
+            || self.cfg.undo_hotkey == self.cfg.summon_hotkey
+        {
+            st::warn(ui, "Совпадение сочетаний");
+        }
 
-        let undo_mark = if self.cfg.undo_on_backspace {
-            st::Mark::Label("Backspace")
-        } else {
-            st::Mark::Value(self.cfg.undo_hotkey.to_string())
-        };
-        self.group(ui, "undo", "Отмена", undo_mark, |s, ui| {
-            c |= st::toggle_row(
-                ui,
-                &mut s.cfg.undo_on_backspace,
-                "Отмена по Backspace",
-                "Первый Backspace снимает опечатку, второй — раскладку; двойная отмена добавляет в Пропуск",
-                accent,
-            );
-        });
+        ui.add_space(st::GAP);
+        changed |= st::toggle_row(ui, &mut self.cfg.light_theme, "Светлая тема", "", accent);
+        changed |= self.logo_picker(ui);
 
-        self.group(ui, "keys", "Клавиши", st::Mark::Value(self.cfg.hotkey.to_string()), |s, ui| {
-            s.hotkey_picker(
-                ui,
-                HotkeySlot::Convert,
-                "Конвертация",
-                &[
-                    (Hotkey::Pause, "Pause"),
-                    (Hotkey::ShiftShift, "Shift+Shift"),
-                    (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
-                ],
-            );
-            s.hotkey_picker(
-                ui,
-                HotkeySlot::Summon,
-                "Окно",
-                &[
-                    (Hotkey::CTRL_SHIFT_V, "Ctrl+Shift+V"),
-                    (Hotkey::CTRL_SHIFT_K, "Ctrl+Shift+K"),
-                    (Hotkey::CtrlAltSpace, "Ctrl+Alt+Space"),
-                ],
-            );
-            s.hotkey_picker(
-                ui,
-                HotkeySlot::Undo,
-                "Отмена",
-                &[
-                    (Hotkey::CTRL_ALT_Z, if cfg!(target_os = "macos") { "Ctrl+Option+Z" } else { "Ctrl+Alt+Z" }),
-                    (Hotkey::CTRL_ALT_BACKSPACE, if cfg!(target_os = "macos") { "Ctrl+Option+Delete" } else { "Ctrl+Alt+Backspace" }),
-                    (Hotkey::SHIFT_PAUSE, "Shift+Pause"),
-                ],
-            );
-            if s.cfg.hotkey == s.cfg.summon_hotkey
-                || s.cfg.undo_hotkey == s.cfg.hotkey
-                || s.cfg.undo_hotkey == s.cfg.summon_hotkey
-            {
-                st::block(ui, |ui| st::warn(ui, "Совпадение сочетаний"));
-            }
-        });
+        st::row(
+            ui,
+            t.surface,
+            |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(env!("CARGO_PKG_VERSION")).color(t.muted)))
+                    .on_hover_text(format!("{}", self.path.display()));
+            },
+            |ui| {
+                if st::secondary(ui, "Приветствие").clicked() {
+                    self.welcome_dont_show = self.cfg.hide_welcome;
+                    self.welcome_open = true;
+                }
+            },
+        );
 
         #[cfg(windows)]
         {
-            self.group(ui, "admin", "Запуск", st::Mark::Toggle(self.cfg.run_as_admin), |s, ui| s.admin_section(ui));
+            ui.add_space(st::GAP);
+            self.admin_section(ui);
         }
 
-        self.group(ui, "look", "Вид", st::Mark::Theme { light: self.cfg.light_theme }, |s, ui| {
-            c |= st::toggle_row(ui, &mut s.cfg.light_theme, "Светлая тема", "", accent);
-            st::block(ui, |ui| {
-                c |= s.logo_picker(ui);
-            });
-        });
-
-        self.group(ui, "about", "О программе", st::Mark::Label(env!("CARGO_PKG_VERSION")), |s, ui| {
-            st::block(ui, |ui| {
-                st::row(
-                    ui,
-                    egui::Color32::TRANSPARENT,
-                    |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(WINDOW_TITLE).color(st::cur(ui).muted)).truncate())
-                            .on_hover_text(format!("{}", s.path.display()));
-                    },
-                    |ui| {
-                        if st::secondary(ui, "Приветствие").clicked() {
-                            s.welcome_dont_show = s.cfg.hide_welcome;
-                            s.welcome_open = true;
-                        }
-                    },
-                );
-            });
-        });
-        changed |= c;
         if changed {
             self.save();
         }
@@ -756,6 +694,9 @@ impl App {
         if self.tab != tab {
             self.status.clear();
             self.tab = tab;
+            if tab != Tab::Home {
+                self.grow_for_section = true;
+            }
         }
     }
 
@@ -768,8 +709,6 @@ impl App {
             Tab::Settings => {
                 if !self.cfg.autocorrect {
                     "Автоисправление выключено".into()
-                } else if !self.cfg.fix_typos {
-                    "Опечатки выключены".into()
                 } else {
                     format!("Смелость: {}", level_name(self.cfg.typo_level))
                 }
@@ -866,16 +805,16 @@ impl App {
 
     fn logo_picker(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        const TILE: f32 = st::ROW;
+        const TILE: f32 = st::HIT;
         let spacing = st::GAP * 2.0;
         let col = |ui: &egui::Ui, style| TILE.max(st::text_w(ui, crate::logos::label(style), st::font_sm()));
         let total: f32 = LogoStyle::ALL.iter().map(|&s| col(ui, s)).sum::<f32>() + spacing * (LogoStyle::ALL.len().saturating_sub(1) as f32);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = spacing;
-            ui.add_space(((ui.available_width() - total) * 0.5).max(0.0));
+            ui.add_space((ui.available_width() - total).max(0.0));
             for style in LogoStyle::ALL {
                 let col_w = col(ui, style);
-                ui.allocate_ui_with_layout(egui::vec2(col_w, st::ROW + st::GAP + st::FONT_SM + st::U), egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(col_w, st::HIT + st::GAP + st::FONT_SM + st::U), egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.y = st::GAP;
                     let tex = self.logo_texture(ui.ctx(), style);
                     let img = egui::Image::new(&tex)
@@ -949,6 +888,15 @@ impl App {
 
     fn draw(&mut self, ctx: &egui::Context, focus: &Focus) {
         self.apply_theme(ctx);
+        if self.grow_for_section {
+            let rect = ctx.input(|i| i.screen_rect());
+            let w = rect.width().max(SECTION_INNER[0]);
+            let h = rect.height().max(SECTION_INNER[1]);
+            if h > rect.height() + 0.5 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+            }
+            self.grow_for_section = false;
+        }
         let t = st::theme(!self.cfg.light_theme);
         if self.welcome_open {
             egui::CentralPanel::default()
@@ -1058,13 +1006,6 @@ fn level_name(l: TypoLevel) -> &'static str {
     }
 }
 
-fn typo_rank(l: TypoLevel) -> u8 {
-    match l {
-        TypoLevel::Cautious => 1,
-        TypoLevel::Normal => 2,
-        TypoLevel::Aggressive => 3,
-    }
-}
 
 fn chips(ui: &mut egui::Ui, words: &[String]) -> Option<usize> {
     let mut hit = None;
@@ -1320,7 +1261,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         capturing_hotkey: None,
         word_draft: String::new(),
         icons: IconCache::default(),
-        open_groups: default_open_groups(),
+        grow_for_section: false,
         content_overflow: 0.0,
         welcome_open,
         welcome_dont_show: false,
@@ -1339,7 +1280,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
     let viewport = {
         let mut vp = egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
-            .with_inner_size([512.0, 192.0])
+            .with_inner_size(HOME_INNER)
             .with_min_inner_size([432.0, 160.0])
             .with_resizable(true);
         if start_hidden {

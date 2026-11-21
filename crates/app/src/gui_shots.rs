@@ -56,7 +56,7 @@ fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
         capturing_hotkey: None,
         word_draft: String::new(),
         icons: IconCache::default(),
-        open_groups: default_open_groups(),
+        grow_for_section: false,
         content_overflow: 0.0,
         tray: None,
         allow_close: false,
@@ -84,13 +84,6 @@ struct Shot {
     size: egui::Vec2,
 }
 
-fn all_groups(app: &mut App) {
-    app.open_groups = default_open_groups();
-}
-
-fn collapse_groups(app: &mut App) {
-    app.open_groups.clear();
-}
 
 fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
     use layout_keeper_core::vault::{Card, Login, Vault};
@@ -117,7 +110,7 @@ fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
 
 fn shots(with_vault: bool) -> Vec<Shot> {
     let home_sz = egui::vec2(512.0, 192.0);
-    let sec_sz = egui::vec2(512.0, 352.0);
+    let sec_sz = egui::vec2(512.0, 416.0);
     let mut v = Vec::new();
     for light in [true, false] {
         let sfx = |s: &'static str| -> &'static str {
@@ -132,12 +125,8 @@ fn shots(with_vault: bool) -> Vec<Shot> {
             a.vault = unlocked_vault(&tmp_dir());
             v.push(Shot { name: sfx("05-vault-open"), app: a, focus: focus(), size: egui::vec2(512.0, 448.0) });
         }
-        let mut collapsed = app_with(sample_cfg(), Tab::Settings, light);
-        collapse_groups(&mut collapsed);
-        v.push(Shot { name: sfx("06-settings-collapsed"), app: collapsed, focus: focus(), size: egui::vec2(512.0, 400.0) });
-        let mut s = app_with(sample_cfg(), Tab::Settings, light);
-        all_groups(&mut s);
-        v.push(Shot { name: sfx("07-settings-expanded"), app: s, focus: focus(), size: egui::vec2(512.0, 1408.0) });
+        v.push(Shot { name: sfx("06-settings-collapsed"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: egui::vec2(512.0, 416.0) });
+        v.push(Shot { name: sfx("07-settings-expanded"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: egui::vec2(512.0, 416.0) });
         v.push(Shot { name: sfx("08-support"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: egui::vec2(512.0, 368.0) });
     }
     v.push(Shot { name: "09-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(432.0, 160.0) });
