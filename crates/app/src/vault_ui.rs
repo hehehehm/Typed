@@ -20,24 +20,37 @@ use zeroize::{Zeroize, Zeroizing};
 /// The section colour (lime square on the home screen).
 const ACCENT: egui::Color32 = st::LIME;
 
-/// Ruled group heading: spaced caption + count on the left, `+` square on the right.
+/// Group heading: small muted caption + count, inset like the rows; `+` on the right.
 fn heading_row(ui: &mut egui::Ui, caption: &str, count: usize, tip: &str, clicked: &mut bool) {
     let t = st::cur(ui);
-    ui.add_space(st::MARGIN);
+    ui.add_space(st::PAD);
     st::row(
         ui,
         egui::Color32::TRANSPARENT,
         |ui| {
-            st::caption(ui, caption, "");
-            ui.label(egui::RichText::new(count.to_string()).size(st::FONT_SM).monospace().color(t.ink));
+            ui.add_space(st::INSET);
+            ui.label(egui::RichText::new(caption).size(st::FONT_SM).color(t.muted));
+            ui.label(egui::RichText::new(count.to_string()).size(st::FONT_SM).color(t.muted));
         },
         |ui| *clicked = st::plus_square(ui, ACCENT, tip).clicked(),
     );
+    ui.add_space(st::GAP);
 }
 
-/// 1 px rule under an entry.
+/// Hairline between entries of a group.
 fn entry_rule(ui: &mut egui::Ui) {
-    st::rule(ui);
+    st::sep(ui);
+}
+
+/// One entry inside a group: 8 px above and below.
+fn entry<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(0.0, st::PAD))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
 }
 
 enum Edit {
@@ -185,7 +198,7 @@ impl VaultUi {
             st::block(ui, |ui| {
                 ui.horizontal(|ui| {
                     let (sq, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                    ui.painter().rect_filled(sq, 0.0, ACCENT);
+                    ui.painter().circle_filled(sq.center(), 4.0, ACCENT);
                     ui.add(egui::Label::new(egui::RichText::new(&self.msg).color(t.ink)).truncate());
                 });
             });
@@ -194,10 +207,9 @@ impl VaultUi {
         if self.vault.is_none() {
             self.show_locked(ui);
         } else {
-            st::block(ui, |ui| {
-                st::row(
+            st::group(ui, |ui| {
+                st::line_row(
                     ui,
-                    egui::Color32::TRANSPARENT,
                     |ui| {
                         let r = st::secondary(ui, "Заблокировать");
                         let tip = format!("Файл: {}", self.path.display());
@@ -209,11 +221,12 @@ impl VaultUi {
                     |ui| {
                         ui.scope(|ui| {
                             let v = &mut ui.visuals_mut().widgets;
-                            v.inactive.weak_bg_fill = t.bg;
-                            v.inactive.bg_stroke = egui::Stroke::new(1.0, t.muted);
+                            v.inactive.weak_bg_fill = t.field;
+                            v.inactive.bg_stroke = egui::Stroke::new(1.0, t.line);
                             v.hovered.bg_stroke = egui::Stroke::new(1.0, t.muted);
+                            v.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
                             cfg_changed |= ui
-                                .add_sized([st::ROW, st::HIT], egui::DragValue::new(idle_minutes).range(1..=120))
+                                .add_sized([st::ROW, st::CTRL_H], egui::DragValue::new(idle_minutes).range(1..=120))
                                 .on_hover_text("Автоблокировка, мин")
                                 .changed();
                         });
@@ -231,13 +244,14 @@ impl VaultUi {
     fn show_locked(&mut self, ui: &mut egui::Ui) {
         let exists = self.path.exists();
         let mut go = false;
-        st::block(ui, |ui| {
+        st::group(ui, |ui| entry(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = st::PAD;
             let w = ui.available_width();
             if exists {
                 let bw = st::text_w(ui, "Открыть", st::font_md()) + st::PAD * 2.0;
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = st::GAP;
-                    st::password_bg(ui, &mut self.pw1, "пароль", w - bw - 6.0, ACCENT);
+                    ui.spacing_mut().item_spacing.x = st::PAD;
+                    st::password_bg(ui, &mut self.pw1, "пароль", w - bw - st::PAD, ACCENT);
                     go = st::primary(ui, "Открыть", ACCENT)
                         .on_hover_text(format!("Файл: {}", self.path.display()))
                         .clicked();
@@ -245,11 +259,13 @@ impl VaultUi {
             } else {
                 st::password_bg(ui, &mut self.pw1, "новый пароль (8+)", w, ACCENT);
                 st::password_bg(ui, &mut self.pw2, "повтор", w, ACCENT);
-                go = st::primary(ui, "Создать", ACCENT)
-                    .on_hover_text("Мастер-пароль нельзя восстановить")
-                    .clicked();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    go = st::primary(ui, "Создать", ACCENT)
+                        .on_hover_text("Мастер-пароль нельзя восстановить")
+                        .clicked();
+                });
             }
-        });
+        }));
         let go = go || ui.input(|i| i.key_pressed(egui::Key::Enter));
         if !go || self.pw1.is_empty() {
             return;
@@ -313,53 +329,57 @@ impl VaultUi {
         order.sort_by_key(|&i| !is_match(i));
         let matches: Vec<bool> = order.iter().map(|&i| is_match(i)).collect();
         let mut action: Option<(usize, &'static str)> = None;
-        for (k, (&i, &m)) in order.iter().zip(&matches).enumerate() {
-            if k > 0 {
-                entry_rule(ui);
-            }
-            let l = &self.vault.as_ref().unwrap().data.logins[i];
-            let revealed = self.reveal == Some(i);
-            st::block(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = st::GAP;
-                st::row(
-                    ui,
-                    egui::Color32::TRANSPARENT,
-                    |ui| {
-                        if m {
-                            let (r, resp) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                            ui.painter().rect_filled(r, 0.0, ACCENT);
-                            resp.on_hover_text("Подходит к текущему приложению");
-                        }
-                        ui.add(egui::Label::new(egui::RichText::new(&l.label).color(t.ink)).truncate()).on_hover_text(&l.label);
-                        ui.add(egui::Label::new(egui::RichText::new(&l.username).color(t.muted)).truncate()).on_hover_text(&l.username);
-                        if revealed {
-                            ui.add(egui::Label::new(egui::RichText::new(&l.password).monospace().color(t.ink)).truncate());
-                        }
-                    },
-                    |ui| {
-                        if crate::icons::delete_icon_button(ui).clicked() {
-                            action = Some((i, "del"));
-                        }
-                        if crate::icons::edit_icon_button(ui).clicked() {
-                            action = Some((i, "edit"));
-                        }
-                        if crate::icons::eye_icon_button(ui, revealed).clicked() {
-                            action = Some((i, if revealed { "hide" } else { "show" }));
-                        }
-                    },
-                );
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
-                    if st::primary(ui, "Логин", ACCENT).on_hover_text("Подставить имя и пароль").clicked() {
-                        action = Some((i, "both"));
+        if !order.is_empty() {
+            st::group(ui, |ui| {
+                for (k, (&i, &m)) in order.iter().zip(&matches).enumerate() {
+                    if k > 0 {
+                        entry_rule(ui);
                     }
-                    if st::secondary(ui, "Пароль").on_hover_text("Только пароль").clicked() {
-                        action = Some((i, "pass"));
-                    }
-                    if st::secondary(ui, "Имя").on_hover_text("Только имя").clicked() {
-                        action = Some((i, "user"));
-                    }
-                });
+                    let l = &self.vault.as_ref().unwrap().data.logins[i];
+                    let revealed = self.reveal == Some(i);
+                    entry(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = st::GAP;
+                        st::row(
+                            ui,
+                            egui::Color32::TRANSPARENT,
+                            |ui| {
+                                if m {
+                                    let (r, resp) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                                    ui.painter().circle_filled(r.center(), 4.0, ACCENT);
+                                    resp.on_hover_text("Подходит к текущему приложению");
+                                }
+                                ui.add(egui::Label::new(egui::RichText::new(&l.label).color(t.ink)).truncate()).on_hover_text(&l.label);
+                                ui.add(egui::Label::new(egui::RichText::new(&l.username).color(t.muted)).truncate()).on_hover_text(&l.username);
+                                if revealed {
+                                    ui.add(egui::Label::new(egui::RichText::new(&l.password).monospace().color(t.ink)).truncate());
+                                }
+                            },
+                            |ui| {
+                                if crate::icons::delete_icon_button(ui).clicked() {
+                                    action = Some((i, "del"));
+                                }
+                                if crate::icons::edit_icon_button(ui).clicked() {
+                                    action = Some((i, "edit"));
+                                }
+                                if crate::icons::eye_icon_button(ui, revealed).clicked() {
+                                    action = Some((i, if revealed { "hide" } else { "show" }));
+                                }
+                            },
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(st::PAD, st::GAP);
+                            if st::primary(ui, "Логин", ACCENT).on_hover_text("Подставить имя и пароль").clicked() {
+                                action = Some((i, "both"));
+                            }
+                            if st::secondary(ui, "Пароль").on_hover_text("Только пароль").clicked() {
+                                action = Some((i, "pass"));
+                            }
+                            if st::secondary(ui, "Имя").on_hover_text("Только имя").clicked() {
+                                action = Some((i, "user"));
+                            }
+                        });
+                    });
+                }
             });
         }
         if let Some((i, a)) = action {
@@ -393,43 +413,47 @@ impl VaultUi {
             self.edit = Edit::Card(None, Card::default());
         }
         let mut caction: Option<(usize, &'static str)> = None;
-        for i in 0..n {
-            if i > 0 {
-                entry_rule(ui);
-            }
-            let c = &self.vault.as_ref().unwrap().data.cards[i];
-            st::block(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = st::GAP;
-                st::row(
-                    ui,
-                    egui::Color32::TRANSPARENT,
-                    |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(&c.label).color(t.ink)).truncate()).on_hover_text(&c.label);
-                        ui.add(egui::Label::new(egui::RichText::new(format!("{}  {}", c.masked(), c.expiry)).monospace().color(t.muted)).truncate());
-                    },
-                    |ui| {
-                        if crate::icons::delete_icon_button(ui).clicked() {
-                            caction = Some((i, "del"));
-                        }
-                        if crate::icons::edit_icon_button(ui).clicked() {
-                            caction = Some((i, "edit"));
-                        }
-                    },
-                );
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(st::GAP, st::GAP);
-                    if st::primary(ui, "Номер", ACCENT).clicked() {
-                        caction = Some((i, "num"));
+        if n > 0 {
+            st::group(ui, |ui| {
+                for i in 0..n {
+                    if i > 0 {
+                        entry_rule(ui);
                     }
-                    for (k, name) in [("exp", "Срок"), ("name", "Имя")] {
-                        if st::secondary(ui, name).clicked() {
-                            caction = Some((i, k));
-                        }
-                    }
-                    if !c.cvc.is_empty() && st::secondary(ui, "CVC").clicked() {
-                        caction = Some((i, "cvc"));
-                    }
-                });
+                    let c = &self.vault.as_ref().unwrap().data.cards[i];
+                    entry(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = st::GAP;
+                        st::row(
+                            ui,
+                            egui::Color32::TRANSPARENT,
+                            |ui| {
+                                ui.add(egui::Label::new(egui::RichText::new(&c.label).color(t.ink)).truncate()).on_hover_text(&c.label);
+                                ui.add(egui::Label::new(egui::RichText::new(format!("{}  {}", c.masked(), c.expiry)).monospace().color(t.muted)).truncate());
+                            },
+                            |ui| {
+                                if crate::icons::delete_icon_button(ui).clicked() {
+                                    caction = Some((i, "del"));
+                                }
+                                if crate::icons::edit_icon_button(ui).clicked() {
+                                    caction = Some((i, "edit"));
+                                }
+                            },
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(st::PAD, st::GAP);
+                            if st::primary(ui, "Номер", ACCENT).clicked() {
+                                caction = Some((i, "num"));
+                            }
+                            for (k, name) in [("exp", "Срок"), ("name", "Имя")] {
+                                if st::secondary(ui, name).clicked() {
+                                    caction = Some((i, k));
+                                }
+                            }
+                            if !c.cvc.is_empty() && st::secondary(ui, "CVC").clicked() {
+                                caction = Some((i, "cvc"));
+                            }
+                        });
+                    });
+                }
             });
         }
         if let Some((i, a)) = caction {
@@ -502,7 +526,7 @@ impl VaultUi {
                 st::field_bg(ui, s, "", w, ACCENT);
             }
         };
-        st::block(ui, |ui| {
+        st::group(ui, |ui| entry(ui, |ui| {
             ui.spacing_mut().item_spacing.y = st::GAP;
             match &mut self.edit {
                 Edit::Login(_, l) => {
@@ -532,7 +556,7 @@ impl VaultUi {
                     done = Some(false);
                 }
             });
-        });
+        }));
         let Some(save) = done else { return };
         let edit = std::mem::replace(&mut self.edit, Edit::None);
         if !save {

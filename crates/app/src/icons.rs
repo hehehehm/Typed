@@ -5,65 +5,68 @@ pub use crate::app_id::basename;
 
 pub const ICON_SIZE: f32 = crate::ui_style::HIT;
 
-/// Compact trash-can button used instead of the word «Удалить».
-pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
-    let size = egui::vec2(crate::ui_style::HIT, crate::ui_style::HIT);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let visuals = ui.style().interact(&response);
-    let painter = ui.painter();
-    if response.hovered() || response.is_pointer_button_down_on() {
-        painter.rect_filled(rect, 0.0, visuals.bg_fill);
+fn icon_frame(ui: &mut egui::Ui) -> (egui::Rect, egui::Response, egui::Stroke) {
+    use crate::ui_style as st;
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(st::HIT), egui::Sense::click());
+    let t = st::cur(ui);
+    let bg = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(st::CTRL_H));
+    if response.is_pointer_button_down_on() {
+        ui.painter().rect_filled(bg, st::RADIUS_SM, st::mix(t.surface_hover, t.line, 0.5));
+    } else if response.hovered() {
+        ui.painter().rect_filled(bg, st::RADIUS_SM, t.surface_hover);
     }
-    let stroke = visuals.fg_stroke;
+    st::focus_ring(ui, bg, st::RADIUS_SM, response.has_focus());
+    let color = if response.hovered() { t.ink } else { st::mix(t.muted, t.ink, 0.35) };
+    (rect, response, egui::Stroke::new(1.3, color))
+}
+
+/// Trash-can button instead of the word «Удалить».
+pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
+    let (rect, response, stroke) = icon_frame(ui);
+    let p = ui.painter();
     let c = rect.center();
-    painter.line_segment(
-        [egui::pos2(c.x - 5.0, c.y - 2.5), egui::pos2(c.x + 5.0, c.y - 2.5)],
-        stroke,
-    );
-    painter.line_segment(
-        [egui::pos2(c.x - 2.0, c.y - 4.5), egui::pos2(c.x + 2.0, c.y - 4.5)],
-        stroke,
-    );
-    let body = egui::Rect::from_min_max(egui::pos2(c.x - 3.5, c.y - 2.5), egui::pos2(c.x + 3.5, c.y + 5.0));
-    painter.rect_stroke(body, 0.0, stroke);
-    painter.line_segment([egui::pos2(c.x, c.y - 1.0), egui::pos2(c.x, c.y + 3.5)], stroke);
+    p.line_segment([egui::pos2(c.x - 5.5, c.y - 3.5), egui::pos2(c.x + 5.5, c.y - 3.5)], stroke);
+    p.line_segment([egui::pos2(c.x - 2.0, c.y - 5.5), egui::pos2(c.x + 2.0, c.y - 5.5)], stroke);
+    let body = egui::Rect::from_min_max(egui::pos2(c.x - 4.0, c.y - 3.5), egui::pos2(c.x + 4.0, c.y + 5.5));
+    p.rect_stroke(body, 1.5, stroke);
+    p.line_segment([egui::pos2(c.x - 1.5, c.y - 0.5), egui::pos2(c.x - 1.5, c.y + 3.0)], stroke);
+    p.line_segment([egui::pos2(c.x + 1.5, c.y - 0.5), egui::pos2(c.x + 1.5, c.y + 3.0)], stroke);
     response.on_hover_text("Удалить")
 }
 
-/// Compact painted pencil button used instead of the word «Изменить».
+/// Pencil button instead of the word «Изменить».
 pub fn edit_icon_button(ui: &mut egui::Ui) -> egui::Response {
-    let size = egui::vec2(crate::ui_style::HIT, crate::ui_style::HIT);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let visuals = ui.style().interact(&response);
-    let painter = ui.painter();
-    if response.hovered() || response.is_pointer_button_down_on() {
-        painter.rect_filled(rect, 0.0, visuals.bg_fill);
-    }
-    let stroke = visuals.fg_stroke;
+    let (rect, response, stroke) = icon_frame(ui);
+    let p = ui.painter();
     let c = rect.center();
-    // Diagonal pencil + baseline
-    painter.line_segment([egui::pos2(c.x - 4.5, c.y + 4.5), egui::pos2(c.x + 4.5, c.y + 4.5)], stroke);
-    painter.line_segment([egui::pos2(c.x - 3.5, c.y + 2.0), egui::pos2(c.x + 3.5, c.y - 5.0)], egui::Stroke::new(1.0, stroke.color));
-    painter.line_segment([egui::pos2(c.x - 4.5, c.y + 3.0), egui::pos2(c.x - 2.5, c.y + 1.0)], stroke);
+    let a = egui::pos2(c.x - 4.5, c.y + 4.5);
+    let b = egui::pos2(c.x + 3.0, c.y - 3.0);
+    let n = egui::vec2(1.6, 1.6);
+    let perp = egui::vec2(1.6, -1.6);
+    p.add(egui::Shape::closed_line(vec![a, b - n + perp, b + n - n + perp + n, b + n - perp, a], stroke));
+    p.line_segment([egui::pos2(c.x - 1.0, c.y + 5.5), egui::pos2(c.x + 5.5, c.y + 5.5)], stroke);
     response.on_hover_text("Изменить")
 }
 
-/// Compact painted eye button used to show/hide a password.
+/// Eye button to show / hide a password.
 pub fn eye_icon_button(ui: &mut egui::Ui, revealed: bool) -> egui::Response {
-    let size = egui::vec2(crate::ui_style::HIT, crate::ui_style::HIT);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let visuals = ui.style().interact(&response);
-    let painter = ui.painter();
-    if response.hovered() || response.is_pointer_button_down_on() {
-        painter.rect_filled(rect, 0.0, visuals.bg_fill);
-    }
-    let stroke = visuals.fg_stroke;
+    let (rect, response, stroke) = icon_frame(ui);
+    let p = ui.painter();
     let c = rect.center();
-    let frame = egui::Rect::from_center_size(c, egui::vec2(12.0, 7.0));
-    painter.rect_stroke(frame, 0.0, stroke);
-    painter.rect_filled(egui::Rect::from_center_size(c, egui::vec2(3.5, 3.5)), 0.0, stroke.color);
+    let (w, h) = (7.0, 4.5);
+    let mut pts = Vec::new();
+    for k in 0..=16 {
+        let t = k as f32 / 16.0;
+        pts.push(egui::pos2(c.x - w + 2.0 * w * t, c.y - h * (std::f32::consts::PI * t).sin()));
+    }
+    for k in (1..16).rev() {
+        let t = k as f32 / 16.0;
+        pts.push(egui::pos2(c.x - w + 2.0 * w * t, c.y + h * (std::f32::consts::PI * t).sin()));
+    }
+    p.add(egui::Shape::closed_line(pts, stroke));
+    p.circle_filled(c, 2.0, stroke.color);
     if revealed {
-        painter.line_segment([egui::pos2(c.x - 6.0, c.y + 4.5), egui::pos2(c.x + 6.0, c.y - 4.5)], stroke);
+        p.line_segment([egui::pos2(c.x - 6.0, c.y + 5.5), egui::pos2(c.x + 6.0, c.y - 5.5)], stroke);
     }
     response.on_hover_text(if revealed { "Скрыть" } else { "Показать" })
 }
@@ -86,17 +89,19 @@ impl IconCache {
 
     /// Draw the icon (or placeholder) for `id`.
     pub fn show(&mut self, ui: &mut egui::Ui, id: &str) {
-        let size = egui::vec2(ICON_SIZE, ICON_SIZE);
-        let rounding = 0.0;
+        use crate::ui_style as st;
+        let (cell, _) = ui.allocate_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE), egui::Sense::hover());
+        let rect = egui::Rect::from_center_size(cell.center(), egui::Vec2::splat(st::CAP_H));
         if let Some(tex) = self.get(ui.ctx(), id) {
-            ui.add(egui::Image::new(&tex).fit_to_exact_size(size).rounding(rounding));
+            egui::Image::new(&tex).maintain_aspect_ratio(true).paint_at(ui, rect);
             return;
         }
-        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let t = st::cur(ui);
         let p = ui.painter();
-        p.rect_stroke(rect.shrink(0.5), 0.0, egui::Stroke::new(1.0, crate::ui_style::cur(ui).line));
+        p.rect_filled(rect, st::RADIUS_SM + 1.0, if t.dark { t.surface_hover } else { t.bg });
+        p.rect_stroke(rect.shrink(0.5), st::RADIUS_SM + 1.0, st::hair(t.line));
         let letter = basename(id).chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
-        p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(crate::ui_style::FONT_MD), ui.visuals().text_color());
+        p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, st::font_sm(), t.muted);
     }
 }
 

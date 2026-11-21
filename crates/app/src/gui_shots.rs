@@ -82,7 +82,11 @@ struct Shot {
     app: App,
     focus: Focus,
     size: egui::Vec2,
+    /// macOS preview: ⌃⌥⇧⌘ keycaps and Inter standing in for SF.
+    mac: bool,
 }
+
+const INTER: &str = "/usr/share/fonts/truetype/sand-box/google/Inter/Inter-VariableFont_opsz,wght.ttf";
 
 
 fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
@@ -110,29 +114,35 @@ fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
 
 fn shots(with_vault: bool) -> Vec<Shot> {
     let home_sz = egui::vec2(512.0, 192.0);
-    let sec_sz = egui::vec2(512.0, 416.0);
+    let sec_sz = egui::vec2(512.0, 456.0);
     let mut v = Vec::new();
     for light in [true, false] {
         let sfx = |s: &'static str| -> &'static str {
             if light { s } else { Box::leak(format!("{s}-dark").into_boxed_str()) }
         };
-        v.push(Shot { name: sfx("01-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: home_sz });
-        v.push(Shot { name: sfx("02-apps-long-path"), app: app_with(sample_cfg(), Tab::Apps, light), focus: focus(), size: sec_sz });
-        v.push(Shot { name: sfx("03-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz });
-        v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: sec_sz });
+        v.push(Shot { name: sfx("01-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: home_sz, mac: false });
+        v.push(Shot { name: sfx("02-apps-long-path"), app: app_with(sample_cfg(), Tab::Apps, light), focus: focus(), size: sec_sz, mac: false });
+        v.push(Shot { name: sfx("03-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz, mac: false });
+        v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: sec_sz, mac: false });
         if with_vault {
             let mut a = app_with(sample_cfg(), Tab::Vault, light);
             a.vault = unlocked_vault(&tmp_dir());
-            v.push(Shot { name: sfx("05-vault-open"), app: a, focus: focus(), size: egui::vec2(512.0, 448.0) });
+            v.push(Shot { name: sfx("05-vault-open"), app: a, focus: focus(), size: egui::vec2(512.0, 448.0), mac: false });
         }
-        v.push(Shot { name: sfx("07-settings"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: sec_sz });
-        v.push(Shot { name: sfx("08-support"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: sec_sz });
+        v.push(Shot { name: sfx("07-settings"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: sec_sz, mac: false });
+        v.push(Shot { name: sfx("08-support"), app: app_with(sample_cfg(), Tab::Donate, light), focus: focus(), size: sec_sz, mac: false });
     }
-    v.push(Shot { name: "09-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(432.0, 160.0) });
-    v.push(Shot { name: "10-apps-min-width", app: app_with(sample_cfg(), Tab::Apps, true), focus: focus(), size: egui::vec2(432.0, 416.0) });
+    v.push(Shot { name: "09-home-min-size", app: app_with(sample_cfg(), Tab::Home, true), focus: focus(), size: egui::vec2(432.0, 160.0), mac: false });
+    v.push(Shot { name: "10-apps-min-width", app: app_with(sample_cfg(), Tab::Apps, true), focus: focus(), size: egui::vec2(432.0, 416.0), mac: false });
     let mut a = app_with(sample_cfg(), Tab::Home, true);
     a.welcome_open = true;
-    v.push(Shot { name: "11-welcome", app: a, focus: focus(), size: egui::vec2(512.0, 448.0) });
+    v.push(Shot { name: "11-welcome", app: a, focus: focus(), size: egui::vec2(512.0, 448.0), mac: false });
+    for light in [true, false] {
+        let d = if light { "" } else { "-dark" };
+        let name = |s: &str| -> &'static str { Box::leak(format!("{s}{d}").into_boxed_str()) };
+        v.push(Shot { name: name("12-mac-home"), app: app_with(sample_cfg(), Tab::Home, light), focus: focus(), size: home_sz, mac: true });
+        v.push(Shot { name: name("13-mac-settings"), app: app_with(sample_cfg(), Tab::Settings, light), focus: focus(), size: sec_sz, mac: true });
+    }
     v
 }
 
@@ -140,7 +150,12 @@ fn shots(with_vault: bool) -> Vec<Shot> {
 fn run(shot: &mut Shot, ppp: f32) -> (egui::Context, egui::FullOutput, HashMap<TextureId, egui::ColorImage>) {
     let ctx = egui::Context::default();
     ctx.set_pixels_per_point(ppp);
-    st::install_fonts(&ctx);
+    st::set_mac_preview(shot.mac);
+    if shot.mac {
+        st::install_fonts_with(&ctx, st::font_file(INTER));
+    } else {
+        st::install_fonts(&ctx);
+    }
     let mut textures: HashMap<TextureId, egui::ColorImage> = HashMap::new();
     let mut last = None;
     for frame in 0..4 {
@@ -171,6 +186,7 @@ fn run(shot: &mut Shot, ppp: f32) -> (egui::Context, egui::FullOutput, HashMap<T
         }
         last = Some(out);
     }
+    st::set_mac_preview(false);
     (ctx, last.unwrap(), textures)
 }
 
