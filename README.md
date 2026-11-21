@@ -97,6 +97,13 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.76
+
+- **Отдельный список «Исключения».** Во вкладке «Программы» сверху сегмент «Программы | Исключения»: в программах запоминается раскладка EN/RU, в исключениях Typed полностью выключен. Одинаковые записи (путь и имя файла, разный регистр) больше не дублируются; если программа есть в обоих списках, действует исключение.
+- **Море в шапке в настоящих цветах.** Полоса фотографии больше не перекрыта полупрозрачной заливкой; название, «назад» и точки навигации остаются читаемыми на тонких матовых плашках.
+- **Выбор логотипа.** В настройках и на приветствии ряд «Логотип» с пятью картинками: пляж (по умолчанию, им же ставятся иконки приложения), ар-деко, укиё-э, плакат, иллюминатор. Выбранный знак — иконка окна, панели задач, Dock и трея.
+- **Лишняя или не та соседняя буква в начале длинного слова.** `тллюминатора` → «иллюминатора». Только при исправлении опечаток, на уровне «Обычно» и «Смело»; короткие слова как раньше (`ждети` не становится «дети»).
+
 ## Что нового в 0.3.75
 
 - **Новый интерфейс.** Пять одинаковых квадратов на домашнем экране, фотографический морской фон (день в светлой теме, сумерки в тёмной), единый список «Программы», выключатели-капсулы, системный шрифт и клавиши macOS в виде символов (⌃⌥⇧⌘).
@@ -877,6 +884,13 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.76
+
+- A separate Exceptions list: a «Программы | Исключения» segment at the top of Programs. Programs still remember an EN/RU layout; in Exceptions, Typed is fully off. Duplicate entries (path vs file name, different case) are merged; if the same app is in both lists, the exception wins.
+- The sea photograph in the section header is no longer washed by a tint; the title, back button and nav dots stay legible on tight frosted plates.
+- Selectable logos in Settings and on the welcome screen (row «Логотип»): beach (the default, and the installed app icons), art deco, ukiyo-e, poster, porthole. The chosen mark is the window, taskbar, Dock and tray icon.
+- A neighbour-key slip at the start of a long unknown word is fixed (`тллюминатора` → «иллюминатора»), on Normal/Aggressive typo fix only. Short words are unchanged (`ждети` does not become «дети»).
 
 ### New in 0.3.75
 
