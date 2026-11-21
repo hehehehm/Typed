@@ -25,6 +25,9 @@ pub const HIT: f32 = U * 8.0;
 pub const ROW: f32 = HIT + GAP * 2.0;
 /// Visual marks, expanders, nav chips and plus/back arms (4U = 16 px).
 pub const MARK: f32 = U * 4.0;
+/// DIN-rail breaker housing (6U × 8U), centred in a 32×32 hit target.
+pub const BREAKER_W: f32 = U * 6.0;
+pub const BREAKER_H: f32 = HIT;
 /// 1 px structural hairline.
 pub const HAIR: f32 = 1.0;
 
@@ -288,16 +291,50 @@ pub fn plus_square(ui: &mut Ui, accent: Color32, tip: &str) -> egui::Response {
     if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
 }
 
+/// DIN-rail breaker: vertical housing, lever UP (accent, «I») when on,
+/// DOWN (neutral grey, «O») when off. `rect` is the hit target (≥ 32×32).
 fn paint_onoff(ui: &Ui, rect: Rect, on: bool, accent: Color32) {
+    let t = cur(ui);
     let p = ui.painter();
-    if on {
-        p.rect_filled(rect, 0.0, accent);
+    let w = BREAKER_W.min(rect.width());
+    let h = BREAKER_H.min(rect.height()).max(MARK);
+    let house = Rect::from_center_size(rect.center(), Vec2::new(w, h));
+    p.rect_filled(house, 0.0, t.field);
+    p.rect_stroke(house.shrink(0.5), 0.0, hair(t.line));
+    let slot = Rect::from_center_size(house.center(), Vec2::new(w - U * 2.0, h - U * 2.0));
+    p.rect_stroke(slot.shrink(0.5), 0.0, hair(t.line));
+    let lever_h = (slot.height() / 2.0).max(U);
+    let lever = if on {
+        Rect::from_min_size(slot.min, Vec2::new(slot.width(), lever_h))
     } else {
-        p.rect_stroke(rect.shrink(0.5), 0.0, hair(cur(ui).muted));
+        Rect::from_min_size(egui::pos2(slot.min.x, slot.max.y - lever_h), Vec2::new(slot.width(), lever_h))
+    };
+    let enabled = ui.is_enabled();
+    // Off paddle is a mid-dark grey (≥ 3:1 vs the housing) so the down position
+    // reads as a solid block in both themes; marks on it are light (≥ 4.5:1).
+    let off_fill = if t.dark {
+        Color32::from_rgb(0x6A, 0x6E, 0x76)
+    } else {
+        Color32::from_rgb(0x70, 0x6D, 0x68)
+    };
+    let light_mark = Color32::from_rgb(0xF7, 0xF6, 0xF2);
+    let fill = if on && enabled { accent } else { off_fill };
+    p.rect_filled(lever, 0.0, fill);
+    let c = lever.center();
+    if on {
+        let mark = if enabled { INK_ON_COLOR } else { light_mark };
+        p.rect_filled(Rect::from_center_size(c, Vec2::new(U, U * 2.0)), 0.0, mark);
+    } else {
+        p.rect_stroke(Rect::from_center_size(c, Vec2::new(U * 2.0, U * 2.0)).shrink(0.5), 0.0, hair(light_mark));
     }
 }
 
-/// Full-width row, 6U tall, one-word label + 32×32 filled/empty square.
+fn state_tip(on: bool, tip: &str) -> String {
+    let state = if on { "Вкл" } else { "Выкл" };
+    if tip.is_empty() { state.into() } else { format!("{tip} · {state}") }
+}
+
+/// Full-width row, 10U tall, one-word label + DIN-rail breaker (32×32 hit).
 pub fn toggle_row(ui: &mut Ui, on: &mut bool, title: &str, tip: &str, accent: Color32) -> bool {
     let t = cur(ui);
     let id = ui.next_auto_id();
@@ -313,7 +350,7 @@ pub fn toggle_row(ui: &mut Ui, on: &mut bool, title: &str, tip: &str, accent: Co
     let box_r = Rect::from_center_size(egui::pos2(rect.right() - pad - HIT / 2.0, rect.center().y), Vec2::splat(HIT));
     paint_onoff(ui, box_r, *on, accent);
     focus_ring(ui, rect, resp.has_focus());
-    let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
+    let resp = resp.on_hover_text(state_tip(*on, tip));
     if resp.clicked() {
         *on = !*on;
         true
@@ -511,6 +548,7 @@ pub fn check(ui: &mut Ui, on: &mut bool, text: &str, accent: Color32) -> bool {
     let g = line_galley(ui, text, f, t.ink, w - HIT - GAP);
     ui.painter().galley(egui::pos2(b.right() + GAP, rect.center().y - g.size().y / 2.0), g, t.ink);
     focus_ring(ui, rect, resp.has_focus());
+    let resp = resp.on_hover_text(state_tip(*on, text));
     if resp.clicked() {
         *on = !*on;
         true
@@ -547,7 +585,7 @@ pub enum Mark {
     Value(String),
     /// `on` filled squares out of `of` (e.g. 2 of 3).
     Count { on: u8, of: u8 },
-    /// Filled = on, empty = off.
+    /// DIN-rail breaker: lever up = on, down = off.
     Toggle(bool),
     /// Half-filled square: left half = light, right half = dark.
     Theme { light: bool },
@@ -559,7 +597,8 @@ fn mark_width(ui: &Ui, mark: &Mark) -> f32 {
         Mark::Label(s) => text_w(ui, s, font_md()).max(U),
         Mark::Value(s) => text_w(ui, s, font_mono()).max(U),
         Mark::Count { of, .. } => *of as f32 * MARK + (*of as f32 - 1.0).max(0.0) * GAP,
-        Mark::Toggle(_) | Mark::Theme { .. } => MARK,
+        Mark::Toggle(_) => BREAKER_W,
+        Mark::Theme { .. } => MARK,
     }
 }
 
@@ -605,7 +644,7 @@ fn paint_mark(ui: &Ui, right: f32, cy: f32, mark: &Mark, accent: Color32) -> f32
             }
         }
         Mark::Toggle(on) => {
-            let r = Rect::from_center_size(egui::pos2(right - MARK / 2.0, cy), Vec2::splat(MARK));
+            let r = Rect::from_center_size(egui::pos2(right - BREAKER_W / 2.0, cy), Vec2::new(BREAKER_W, BREAKER_H));
             paint_onoff(ui, r, *on, accent);
         }
         Mark::Theme { light } => {
@@ -755,13 +794,15 @@ mod contrast_tests {
 
     #[test]
     fn grid_constants_are_multiples_of_u() {
-        for (n, v) in [("GAP", GAP), ("PAD", PAD), ("HIT", HIT), ("ROW", ROW), ("MARK", MARK)] {
+        for (n, v) in [("GAP", GAP), ("PAD", PAD), ("HIT", HIT), ("ROW", ROW), ("MARK", MARK), ("BREAKER_W", BREAKER_W), ("BREAKER_H", BREAKER_H)] {
             assert!((v / U).fract().abs() < 1e-6, "{n}={v} is not a multiple of {U}");
         }
         assert_eq!(U, 4.0);
         assert_eq!(HIT, 32.0);
         assert_eq!(ROW, 40.0);
         assert_eq!(MARK, 16.0);
+        assert_eq!(BREAKER_W, 24.0);
+        assert_eq!(BREAKER_H, 32.0);
         assert!((FONT_LG / FONT_MD - FONT_MD / FONT_SM).abs() < 1e-6, "type scale is not a single ratio");
         assert!((FONT_MD / FONT_SM - 4.0 / 3.0).abs() < 1e-6);
     }
