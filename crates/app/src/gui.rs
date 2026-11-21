@@ -786,6 +786,10 @@ impl App {
         let origin = ui.cursor().min + egui::vec2(x_pad, top_pad);
         let mut clicked = None;
         let d = st::snap(s * 0.44, st::U * 6.0).min(st::U * 12.0);
+        // Wave just under the cards, painted before the captions so it never
+        // sits on the letters.
+        let panel = ui.max_rect();
+        st::paint_shore_wave(ui, panel.left() - st::PAD, panel.right() + st::PAD, origin.y + s + 2.0, st::mood_phase(ui.ctx()));
         for (i, &tab) in SECTIONS.iter().enumerate() {
             let x = origin.x + i as f32 * (s + g);
             let rect = egui::Rect::from_min_size(egui::pos2(x, origin.y), egui::vec2(s, s));
@@ -889,8 +893,18 @@ impl App {
         let title_rect = egui::Rect::from_min_max(egui::pos2(dot_c.x - 6.0, rect.top()), egui::pos2(tx + tw, rect.bottom()));
         ui.interact(title_rect, ui.id().with("title"), egui::Sense::hover()).on_hover_text(self.section_tooltip(tab));
 
-        // Bottom hairline.
-        p.rect_filled(egui::Rect::from_min_size(egui::pos2(rect.left(), rect.bottom() - st::HAIR), egui::vec2(rect.width(), st::HAIR)), 0.0, t.line);
+        // A quiet wave instead of a straight hairline — the same line as the shore.
+        let phase = st::mood_phase(ui.ctx());
+        st::paint_wave(
+            &p,
+            rect.left(),
+            rect.right(),
+            rect.bottom() - 1.5,
+            1.0,
+            48.0,
+            0.12 + phase * 0.55,
+            st::hair(st::mix(t.line, st::SEA, 0.35)),
+        );
         if let Some(t) = target {
             self.go(t);
         }
@@ -945,6 +959,7 @@ impl App {
     fn welcome_panel(&mut self, ui: &mut egui::Ui) {
         let t = st::cur(ui);
         let full = ui.max_rect();
+        st::paint_shore(ui, full, st::mood_phase(ui.ctx()), false);
         let m = st::MARGIN;
         let footer = m + st::ROW + st::HAIR * 2.0 + m + st::HIT + m;
         let art = st::snap((full.width() * 0.5).min(full.height() - m - footer), st::HIT * 3.0);
@@ -982,9 +997,9 @@ impl App {
         let mut next = false;
         child.horizontal(|ui| {
             ui.set_min_height(st::HIT);
-            st::check(ui, &mut self.welcome_dont_show, "Не показывать", st::CYAN);
+            st::check(ui, &mut self.welcome_dont_show, "Не показывать", st::SEA);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                next = st::primary(ui, "Далее", st::CYAN).clicked();
+                next = st::primary(ui, "Далее", st::SEA).clicked();
             });
         });
         let used = child.min_rect();
@@ -1014,7 +1029,10 @@ impl App {
         let t = st::theme(!self.cfg.light_theme);
         if self.welcome_open {
             let lt = st::theme(false);
-            st::apply(ctx, false, st::CYAN);
+            st::apply(ctx, false, st::SEA);
+            if st::mood_live(ctx) {
+                ctx.request_repaint_after(std::time::Duration::from_millis(32));
+            }
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(lt.bg).inner_margin(egui::Margin::ZERO))
                 .show(ctx, |ui| {
@@ -1052,6 +1070,12 @@ impl App {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(t.bg).inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
+                if self.tab == Tab::Home {
+                    st::paint_shore(ui, ui.max_rect(), st::mood_phase(ctx), true);
+                    if st::mood_live(ctx) {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(32));
+                    }
+                }
                 let scroll = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     let margin = if self.tab == Tab::Home {
                         egui::Margin::same(st::PAD)
@@ -1103,12 +1127,12 @@ const SECTIONS: [Tab; 5] = [Tab::Apps, Tab::Words, Tab::Vault, Tab::Settings, Ta
 impl Tab {
     fn color(self) -> egui::Color32 {
         match self {
-            Tab::Home => st::CYAN,
-            Tab::Apps => st::YELLOW,
-            Tab::Words => st::ORANGE,
-            Tab::Vault => st::LIME,
-            Tab::Settings => st::CYAN,
-            Tab::Donate => st::RED,
+            Tab::Home => st::SEA,
+            Tab::Apps => st::SUN,
+            Tab::Words => st::SAND,
+            Tab::Vault => st::SEAFOAM,
+            Tab::Settings => st::SEA,
+            Tab::Donate => st::CORAL,
         }
     }
 

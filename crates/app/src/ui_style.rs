@@ -1,11 +1,12 @@
-//! Look of the settings window: a quiet cross-platform desktop utility.
+//! Look of the settings window: a quiet cross-platform desktop utility
+//! with the warmth of the original water logo (sea, sand, sun).
 //!
 //! One base unit `U` = 4 px; spacing is an integer multiple of `U`. Neutral surfaces,
 //! 1 px hairlines, one small radius family (6 px containers, 4 px controls). The five
-//! section colours are accents only: the circle mark of a section, a selected segment,
-//! a switch that is on. Text uses the platform UI font when it can be found
-//! (Segoe UI on Windows, SF / Helvetica Neue on macOS), else the bundled one.
-//! Type scale is one ratio, 6:5: 12 · 14.4 · 17.3 · 20.7 · 24.9.
+//! section colours are accents only, taken from the logo: sun gold, sand, seafoam,
+//! sea turquoise, coral. A switch that is on is always sea turquoise. Text uses the
+//! platform UI font when it can be found (Segoe UI on Windows, SF / Helvetica Neue
+//! on macOS), else the bundled one. Type scale is one ratio, 6:5: 12 · 14.4 · 17.3 · 20.7 · 24.9.
 //! Layout rule: no widget asks for more width than `ui.available_width()`.
 
 use eframe::egui::{self, Color32, FontId, Rect, Rounding, Sense, Stroke, Ui, Vec2};
@@ -45,13 +46,29 @@ pub const FONT_LG: f32 = FONT_MD * 1.2;
 pub const FONT_XL: f32 = FONT_LG * 1.2;
 pub const FONT_XXL: f32 = FONT_XL * 1.2;
 
-/// Section colours (accents; dark ink `INK_ON_COLOR` on them).
-pub const YELLOW: Color32 = Color32::from_rgb(0xE8, 0xC4, 0x68); // Программы
-pub const ORANGE: Color32 = Color32::from_rgb(0xEE, 0x9F, 0x5E); // Словарь
-pub const LIME: Color32 = Color32::from_rgb(0xA9, 0xC6, 0x6A); // Сейф
-pub const CYAN: Color32 = Color32::from_rgb(0x6D, 0xB7, 0xC8); // Настройки
-pub const RED: Color32 = Color32::from_rgb(0xE4, 0x7A, 0x6A); // Поддержать
+/// Accents taken from the original water logo (sun sparkles, sand, shallow
+/// sea, coral at sunset). Dark ink `INK_ON_COLOR` sits on all of them (WCAG AA).
+pub const SUN: Color32 = Color32::from_rgb(0xE8, 0xC4, 0x68); // Программы
+pub const SAND: Color32 = Color32::from_rgb(0xD4, 0xA0, 0x6E); // Словарь
+pub const SEAFOAM: Color32 = Color32::from_rgb(0x72, 0xC2, 0xB9); // Сейф
+pub const SEA: Color32 = Color32::from_rgb(0x5B, 0xB8, 0xC4); // Настройки; switch that is on
+pub const CORAL: Color32 = Color32::from_rgb(0xE4, 0x7A, 0x6A); // Поддержать
 pub const INK_ON_COLOR: Color32 = Color32::from_rgb(0x23, 0x26, 0x2B);
+
+/// Older names kept so existing call sites compile.
+#[allow(dead_code)]
+pub const YELLOW: Color32 = SUN;
+#[allow(dead_code)]
+pub const ORANGE: Color32 = SAND;
+#[allow(dead_code)]
+pub const LIME: Color32 = SEAFOAM;
+#[allow(dead_code)]
+pub const CYAN: Color32 = SEA;
+#[allow(dead_code)]
+pub const RED: Color32 = CORAL;
+
+/// Sun-sparkle gold, for the disc and the three little glints on the shore.
+pub const SUN_GLOW: Color32 = Color32::from_rgb(0xF8, 0xDE, 0x92);
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -68,27 +85,29 @@ pub struct Theme {
 
 pub fn theme(dark: bool) -> Theme {
     if dark {
+        // Night sea: deep teal water, warm sand-white ink, gold as the warning.
         Theme {
             dark,
-            bg: Color32::from_rgb(0x1E, 0x1F, 0x22),
-            surface: Color32::from_rgb(0x2A, 0x2B, 0x2F),
-            surface_hover: Color32::from_rgb(0x34, 0x35, 0x3A),
-            field: Color32::from_rgb(0x1A, 0x1B, 0x1E),
-            line: Color32::from_rgb(0x3C, 0x3D, 0x42),
-            ink: Color32::from_rgb(0xF0, 0xF0, 0xF2),
-            muted: Color32::from_rgb(0xA3, 0xA5, 0xAB),
+            bg: Color32::from_rgb(0x15, 0x1E, 0x21),
+            surface: Color32::from_rgb(0x22, 0x2C, 0x30),
+            surface_hover: Color32::from_rgb(0x2C, 0x39, 0x3E),
+            field: Color32::from_rgb(0x12, 0x1A, 0x1D),
+            line: Color32::from_rgb(0x33, 0x40, 0x45),
+            ink: Color32::from_rgb(0xF2, 0xF0, 0xE8),
+            muted: Color32::from_rgb(0xA3, 0xAD, 0xAD),
             warn: Color32::from_rgb(0xE8, 0xC4, 0x48),
         }
     } else {
+        // Sun-warm sand, from the geometry mark's cream and the water's gold light.
         Theme {
             dark,
-            bg: Color32::from_rgb(0xF4, 0xF4, 0xF6),
-            surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-            surface_hover: Color32::from_rgb(0xF0, 0xF0, 0xF3),
-            field: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-            line: Color32::from_rgb(0xDE, 0xDE, 0xE3),
+            bg: Color32::from_rgb(0xF4, 0xEF, 0xE6),
+            surface: Color32::from_rgb(0xFF, 0xFC, 0xFA),
+            surface_hover: Color32::from_rgb(0xF4, 0xEE, 0xE6),
+            field: Color32::from_rgb(0xFF, 0xFC, 0xFA),
+            line: Color32::from_rgb(0xE4, 0xDC, 0xD0),
             ink: Color32::from_rgb(0x1D, 0x1D, 0x1F),
-            muted: Color32::from_rgb(0x66, 0x66, 0x6C),
+            muted: Color32::from_rgb(0x5F, 0x5A, 0x54),
             warn: Color32::from_rgb(0x8F, 0x56, 0x00),
         }
     }
@@ -728,7 +747,154 @@ pub fn check(ui: &mut Ui, on: &mut bool, text: &str, accent: Color32) -> bool {
     }
 }
 
+/// Seconds the greeting (sun glow, a short wave drift) is allowed to run after
+/// the window opens. After this the shore is still, and no extra repaint is asked.
+pub const MOOD_SECS: f64 = 1.2;
+
+/// 0 at open, 1 once the greeting has settled. Driven by egui's frame time so
+/// screenshots and tests stay deterministic.
+pub fn mood_phase(ctx: &egui::Context) -> f32 {
+    let t = ctx.input(|i| i.time);
+    (t / MOOD_SECS).clamp(0.0, 1.0) as f32
+}
+
+pub fn mood_live(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.time) < MOOD_SECS
+}
+
+/// Vertical colour stops of the quiet seascape behind the home squares.
+/// Light: pale sky, shallow water, warm sand. Dark: night sea and a dusk shore.
+pub fn shore_stops(dark: bool) -> [(f32, Color32); 4] {
+    if dark {
+        [
+            (0.00, Color32::from_rgb(0x0E, 0x1A, 0x1E)),
+            (0.36, Color32::from_rgb(0x1A, 0x33, 0x38)),
+            (0.66, Color32::from_rgb(0x1C, 0x2A, 0x2C)),
+            (1.00, Color32::from_rgb(0x1C, 0x1A, 0x16)),
+        ]
+    } else {
+        [
+            (0.00, Color32::from_rgb(0xE4, 0xF0, 0xF2)),
+            (0.36, Color32::from_rgb(0xC5, 0xE4, 0xE6)),
+            (0.66, Color32::from_rgb(0xE8, 0xDC, 0xC8)),
+            (1.00, Color32::from_rgb(0xE6, 0xD5, 0xB8)),
+        ]
+    }
+}
+
+/// Horizontal bands with mixed colour, a stand-in for a gradient (egui has none).
+fn fill_vgradient(p: &egui::Painter, rect: Rect, stops: &[(f32, Color32)]) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 || stops.len() < 2 {
+        return;
+    }
+    let n = (rect.height() * 0.75).clamp(24.0, 72.0) as i32;
+    let h = rect.height() / n as f32;
+    for i in 0..n {
+        let t0 = i as f32 / n as f32;
+        let t1 = (i + 1) as f32 / n as f32;
+        let c = sample_stops(stops, (t0 + t1) * 0.5);
+        let y = rect.top() + i as f32 * h;
+        p.rect_filled(Rect::from_min_max(egui::pos2(rect.left(), y), egui::pos2(rect.right(), y + h + 0.5)), 0.0, c);
+    }
+}
+
+fn sample_stops(stops: &[(f32, Color32)], t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    for w in stops.windows(2) {
+        let (t0, c0) = w[0];
+        let (t1, c1) = w[1];
+        if t <= t1 {
+            let u = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
+            return mix(c0, c1, u);
+        }
+    }
+    stops.last().map(|s| s.1).unwrap_or(Color32::BLACK)
+}
+
+/// A single quiet sine, used as the horizon and as the rule under a section header.
+pub fn paint_wave(p: &egui::Painter, x0: f32, x1: f32, y: f32, amp: f32, lambda: f32, phase: f32, stroke: Stroke) {
+    if x1 - x0 < 2.0 {
+        return;
+    }
+    let mut pts = Vec::with_capacity(((x1 - x0) / 4.0) as usize + 2);
+    let mut x = x0;
+    let tau = std::f32::consts::TAU;
+    while x <= x1 {
+        pts.push(egui::pos2(x, y + amp * ((x - x0) / lambda * tau + phase * tau).sin()));
+        x += 4.0;
+    }
+    if pts.last().is_none_or(|p| (p.x - x1).abs() > 0.1) {
+        pts.push(egui::pos2(x1, y + amp * ((x1 - x0) / lambda * tau + phase * tau).sin()));
+    }
+    p.add(egui::Shape::line(pts, stroke));
+}
+
+/// Quiet seascape: sky, a band of water, a sand shore, and optionally a small
+/// sun with three sparkles like the original logo. `phase` 0..1 is the
+/// one-second greeting — the glow eases, the wave drifts — then everything
+/// rests. `with_sun` is for the home squares; the welcome poster already
+/// carries the water painting, so it only gets the shore and the wave.
+pub fn paint_shore(ui: &Ui, rect: Rect, phase: f32, with_sun: bool) {
+    if rect.width() <= 1.0 || rect.height() <= 1.0 {
+        return;
+    }
+    let t = cur(ui);
+    let p = ui.painter();
+    fill_vgradient(p, rect, &shore_stops(t.dark));
+
+    let drift = 0.12 + phase * 0.55;
+    let wave_c = if t.dark { mix(SEA, t.line, 0.45) } else { mix(SEA, t.line, 0.28) };
+    if !with_sun {
+        // Welcome: the wave sits where the water meets the sand, under the poster.
+        let horizon_y = rect.top() + rect.height() * 0.66;
+        paint_wave(p, rect.left(), rect.right(), horizon_y, 1.4, 48.0, drift, Stroke::new(1.0, wave_c));
+        return;
+    }
+    // Sun (day) or a dusk sun (night), fully in the top-right sky. The halo is
+    // a tight wash around the disc — never a white balloon.
+    let rad = (rect.height() * 0.085).clamp(7.0, 11.0);
+    let c = egui::pos2(rect.right() - rad * 1.65 - 10.0, rect.top() + rad * 1.35 + 5.0);
+    let greet = 1.0 - phase;
+    let pulse = (phase * 6.0 + 0.3).sin().abs();
+    let glow_k = 0.8 + greet * (0.2 + 0.12 * pulse);
+    let sun = if t.dark { mix(SUN, Color32::from_rgb(0xF0, 0xC8, 0x78), 0.35) } else { mix(SUN_GLOW, SUN, 0.35) };
+    let rings: [(f32, f32); 3] = if t.dark {
+        [(1.9, 18.0), (1.5, 26.0), (1.2, 34.0)]
+    } else {
+        [(1.55, 10.0), (1.3, 16.0), (1.12, 22.0)]
+    };
+    for (mul, a) in rings {
+        let alpha = (a * glow_k).round().clamp(0.0, 40.0) as u8;
+        p.circle_filled(c, rad * mul, Color32::from_rgba_unmultiplied(sun.r(), sun.g(), sun.b(), alpha));
+    }
+    p.circle_filled(c, rad, sun);
+    p.circle_stroke(c, rad - 0.5, hair(shade(sun, if t.dark { -0.08 } else { -0.06 })));
+
+    // Three little gold glints in the sky just left of the sun, as on the logo.
+    for (i, &(dx, dy)) in [(-2.5, 0.2), (-1.6, 0.55), (-0.8, 0.15)].iter().enumerate() {
+        let q = c + egui::vec2(rad * dx, rad * dy);
+        if !rect.contains(q) {
+            continue;
+        }
+        let a = (56.0 - i as f32 * 12.0) * (0.75 + 0.25 * greet);
+        let col = Color32::from_rgba_unmultiplied(SUN.r(), SUN.g(), SUN.b(), a.clamp(20.0, 70.0) as u8);
+        let arm = 1.7 - i as f32 * 0.25;
+        p.line_segment([q + egui::vec2(-arm, 0.0), q + egui::vec2(arm, 0.0)], Stroke::new(1.0, col));
+        p.line_segment([q + egui::vec2(0.0, -arm), q + egui::vec2(0.0, arm)], Stroke::new(1.0, col));
+    }
+}
+
+/// The home-screen wave, drawn at the foot of the five cards so it never
+/// cuts through the captions, even at the smallest window.
+pub fn paint_shore_wave(ui: &Ui, x0: f32, x1: f32, y: f32, phase: f32) {
+    let t = cur(ui);
+    let wave_c = if t.dark { mix(SEA, t.line, 0.45) } else { mix(SEA, t.line, 0.28) };
+    let drift = 0.12 + phase * 0.55;
+    paint_wave(ui.painter(), x0, x1, y, 1.4, 48.0, drift, Stroke::new(1.0, wave_c));
+}
+
 /// Section mark: a solid circle in the section colour with the glyph in ink.
+
 pub fn paint_mark(p: &egui::Painter, c: egui::Pos2, d: f32, color: Color32, idx: usize) {
     p.circle_filled(c, d / 2.0, color);
     p.circle_stroke(c, d / 2.0 - 0.5, hair(shade(color, -0.12)));
@@ -833,8 +999,25 @@ mod contrast_tests {
 
     #[test]
     fn ink_on_section_colours_meets_wcag_aa() {
-        for (name, c) in [("yellow", YELLOW), ("orange", ORANGE), ("lime", LIME), ("cyan", CYAN), ("red", RED)] {
+        for (name, c) in [("sun", SUN), ("sand", SAND), ("seafoam", SEAFOAM), ("sea", SEA), ("coral", CORAL)] {
             assert_aa(&format!("ink on {name}"), INK_ON_COLOR, c);
+        }
+        // Aliases still point at the same swatches.
+        assert_eq!(YELLOW, SUN);
+        assert_eq!(ORANGE, SAND);
+        assert_eq!(LIME, SEAFOAM);
+        assert_eq!(CYAN, SEA);
+        assert_eq!(RED, CORAL);
+    }
+
+    #[test]
+    fn captions_on_the_shore_meet_wcag_aa() {
+        for dark in [false, true] {
+            let t = theme(dark);
+            let tag = if dark { "dark" } else { "light" };
+            for (i, &(_, c)) in shore_stops(dark).iter().enumerate() {
+                assert_aa(&format!("{tag} ink on shore stop {i}"), t.ink, c);
+            }
         }
     }
 

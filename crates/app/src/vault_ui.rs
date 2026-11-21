@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use zeroize::{Zeroize, Zeroizing};
 
 /// The section colour (lime square on the home screen).
-const ACCENT: egui::Color32 = st::LIME;
+const ACCENT: egui::Color32 = st::SEAFOAM;
 
 /// Group heading: small muted caption + count, inset like the rows; `+` on the right.
 fn heading_row(ui: &mut egui::Ui, caption: &str, count: usize, tip: &str, clicked: &mut bool) {
@@ -490,7 +490,7 @@ impl VaultUi {
                     },
                     |ui| {
                         no = st::secondary(ui, "Нет").clicked();
-                        yes = st::tile(ui, "Да", st::RED, st::INK_ON_COLOR).clicked();
+                        yes = st::tile(ui, "Да", st::CORAL, st::INK_ON_COLOR).clicked();
                     },
                 );
             });
