@@ -97,6 +97,14 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.75
+
+- **Новый интерфейс.** Пять одинаковых квадратов на домашнем экране, фотографический морской фон (день в светлой теме, сумерки в тёмной), единый список «Программы», выключатели-капсулы, системный шрифт и клавиши macOS в виде символов (⌃⌥⇧⌘).
+- Функции, которые всегда были нужны, теперь просто всегда включены и больше не занимают место в настройках.
+- **«Отмена исправления».** Отдельный выключатель в настройках и своя клавиша (по умолчанию Backspace, как раньше; можно назначить любую).
+- **Склейка слов.** Пропущенный пробел между двумя известными словами разбивается: `отменаисправления` → «отмена исправления».
+- **Лишняя соседняя буква в начале короткого слова.** `лдва` → «два» (только при исправлении опечаток, на уровне «Обычно» и «Смело»).
+
 ## Что нового в 0.3.74
 
 - **Орфографические ошибки дешевле случайных.** Пропущенная двойная буква (`стелаж`, `програма`) и перепутанные безударные гласные (а/о, е/и, е/а, е/я, и/я, а/я) теперь стоят меньше обычной опечатки (двойная 0,5 вместо 0,7, гласная 0,7 вместо 1,1, в словах от 6 букв; последняя буква — окончание — не в счёт). Лишняя двойная (`адресс`) как была, 0,6.
@@ -869,6 +877,14 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.75
+
+- New interface: five equal home squares, a photographic sea backdrop (day / dusk), a unified Programs list, capsule switches, the system font, and macOS keycaps.
+- Always-on features stay on and are no longer shown in Settings.
+- «Отмена исправления»: a Settings switch and a rebindable key (Backspace by default).
+- Glued words are split (`отменаисправления` → «отмена исправления»).
+- A neighbour-key letter typed at the start of a short word is dropped (`лдва` → «два»).
 
 ### New in 0.3.74
 
