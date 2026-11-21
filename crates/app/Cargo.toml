@@ -21,6 +21,7 @@ png = "0.17"
 arboard = { version = "3", default-features = false }
 qrcodegen = "1.8"
 ab_glyph = "0.2"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11-dl = "2.21"

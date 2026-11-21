@@ -91,6 +91,7 @@ struct App {
     welcome_dont_show: bool,
     logo_textures: [Option<egui::TextureHandle>; 3],
     logo_fade_textures: [Option<egui::TextureHandle>; 3],
+    sea_textures: [Option<egui::TextureHandle>; 2],
     /// «Запуск администратором» being switched: (wanted value, helper result when done).
     #[cfg_attr(not(windows), allow(dead_code))]
     admin_job: Option<(bool, AdminJobResult)>,
@@ -709,6 +710,13 @@ impl App {
         }
     }
 
+    fn sea_texture(&mut self, ctx: &egui::Context) -> egui::TextureHandle {
+        let i = if self.cfg.light_theme { 0 } else { 1 };
+        self.sea_textures[i]
+            .get_or_insert_with(|| st::load_sea_texture(ctx, !self.cfg.light_theme))
+            .clone()
+    }
+
     fn logo_texture(&mut self, ctx: &egui::Context, style: LogoStyle) -> egui::TextureHandle {
         let i = crate::logos::index(style) as usize;
         self.logo_textures[i]
@@ -786,10 +794,6 @@ impl App {
         let origin = ui.cursor().min + egui::vec2(x_pad, top_pad);
         let mut clicked = None;
         let d = st::snap(s * 0.44, st::U * 6.0).min(st::U * 12.0);
-        // Wave just under the cards, painted before the captions so it never
-        // sits on the letters.
-        let panel = ui.max_rect();
-        st::paint_shore_wave(ui, panel.left() - st::PAD, panel.right() + st::PAD, origin.y + s + 2.0, st::mood_phase(ui.ctx()));
         for (i, &tab) in SECTIONS.iter().enumerate() {
             let x = origin.x + i as f32 * (s + g);
             let rect = egui::Rect::from_min_size(egui::pos2(x, origin.y), egui::vec2(s, s));
@@ -801,6 +805,7 @@ impl App {
             let fill = if down { t.surface_hover } else if resp.hovered() { st::mix(t.surface, t.surface_hover, 0.6) } else { t.surface };
             let edge = if resp.hovered() { st::mix(t.line, t.muted, 0.45) } else { t.line };
             let r = if down { rect.shrink(1.0) } else { rect };
+            st::card_shadow(ui, r);
             p.rect_filled(r, st::RADIUS, fill);
             p.rect_stroke(r.shrink(0.5), st::RADIUS, st::hair(edge));
             st::focus_ring(ui, rect, st::RADIUS, resp.has_focus());
@@ -814,7 +819,9 @@ impl App {
                 p.circle_stroke(egui::pos2(r.right() - st::PAD - 3.0, r.top() + st::PAD + 3.0), 3.0, st::hair(t.muted));
             }
             let lg = st::line_galley(ui, tab.title(), caption_font.clone(), t.ink, s + g - st::GAP);
-            p.galley(egui::pos2(rect.center().x - lg.size().x / 2.0, rect.bottom() + st::PAD), lg, t.ink);
+            let lp = egui::pos2(rect.center().x - lg.size().x / 2.0, rect.bottom() + st::PAD);
+            st::caption_plate(ui, lp, lg.size());
+            p.galley(lp, lg, t.ink);
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -838,6 +845,11 @@ impl App {
         let tab = self.tab;
         let t = st::cur(ui);
         let rect = ui.max_rect();
+        // A thin crop of the same photograph (the water, aligned to the top).
+        let sea = self.sea_texture(ui.ctx());
+        st::paint_photo(ui, rect, &sea, 0.0, egui::Color32::WHITE);
+        let scrim = egui::Color32::from_rgba_unmultiplied(t.bg.r(), t.bg.g(), t.bg.b(), if t.dark { 150 } else { 165 });
+        ui.painter().rect_filled(rect, 0.0, scrim);
         let p = ui.painter().clone();
         let mut target = None;
         let cy = rect.center().y;
@@ -893,18 +905,8 @@ impl App {
         let title_rect = egui::Rect::from_min_max(egui::pos2(dot_c.x - 6.0, rect.top()), egui::pos2(tx + tw, rect.bottom()));
         ui.interact(title_rect, ui.id().with("title"), egui::Sense::hover()).on_hover_text(self.section_tooltip(tab));
 
-        // A quiet wave instead of a straight hairline — the same line as the shore.
-        let phase = st::mood_phase(ui.ctx());
-        st::paint_wave(
-            &p,
-            rect.left(),
-            rect.right(),
-            rect.bottom() - 1.5,
-            1.0,
-            48.0,
-            0.12 + phase * 0.55,
-            st::hair(st::mix(t.line, st::SEA, 0.35)),
-        );
+        // Bottom hairline.
+        p.rect_filled(egui::Rect::from_min_size(egui::pos2(rect.left(), rect.bottom() - st::HAIR), egui::vec2(rect.width(), st::HAIR)), 0.0, t.line);
         if let Some(t) = target {
             self.go(t);
         }
@@ -959,7 +961,6 @@ impl App {
     fn welcome_panel(&mut self, ui: &mut egui::Ui) {
         let t = st::cur(ui);
         let full = ui.max_rect();
-        st::paint_shore(ui, full, st::mood_phase(ui.ctx()), false);
         let m = st::MARGIN;
         let footer = m + st::ROW + st::HAIR * 2.0 + m + st::HIT + m;
         let art = st::snap((full.width() * 0.5).min(full.height() - m - footer), st::HIT * 3.0);
@@ -1030,9 +1031,6 @@ impl App {
         if self.welcome_open {
             let lt = st::theme(false);
             st::apply(ctx, false, st::SEA);
-            if st::mood_live(ctx) {
-                ctx.request_repaint_after(std::time::Duration::from_millis(32));
-            }
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(lt.bg).inner_margin(egui::Margin::ZERO))
                 .show(ctx, |ui| {
@@ -1071,10 +1069,8 @@ impl App {
             .frame(egui::Frame::none().fill(t.bg).inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
                 if self.tab == Tab::Home {
-                    st::paint_shore(ui, ui.max_rect(), st::mood_phase(ctx), true);
-                    if st::mood_live(ctx) {
-                        ctx.request_repaint_after(std::time::Duration::from_millis(32));
-                    }
+                    let sea = self.sea_texture(ctx);
+                    st::paint_photo(ui, ui.max_rect(), &sea, 0.0, egui::Color32::WHITE);
                 }
                 let scroll = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     let margin = if self.tab == Tab::Home {
@@ -1406,6 +1402,7 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         welcome_dont_show: false,
         logo_textures: [None, None, None],
         logo_fade_textures: [None, None, None],
+        sea_textures: [None, None],
         admin_job: None,
         daemon_admin: (None, true, None),
         // Windows: the tray icon belongs to the daemon (see `tray`).

@@ -68,6 +68,7 @@ fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
         welcome_dont_show: false,
         logo_textures: [None, None, None],
         logo_fade_textures: [None, None, None],
+        sea_textures: [None, None],
         admin_job: None,
         daemon_admin: (None, true, None),
     }
