@@ -33,7 +33,10 @@ def sweep_metrics(path):
 def table_rows(text):
     rows = []
     header = None
+    title = ""
     for line in text.splitlines():
+        if line.startswith("## "):
+            title = line[3:].split(":")[0].strip()
         if not line.startswith("|"):
             header = None
             continue
@@ -43,7 +46,7 @@ def table_rows(text):
         if header is None:
             header = cells
             continue
-        rows.append((header, cells))
+        rows.append((header, cells, title))
     return rows
 
 
@@ -56,8 +59,10 @@ def correction_metrics(path):
     for line in text.splitlines():
         if line.startswith("#"):
             section = line.strip("# ").strip()
-    for header, cells in table_rows(text):
+    for header, cells, title in table_rows(text):
         key = cells[0]
+        if header[0] == "kind" and title in ("Ru", "En"):
+            key = f"{title} {key}"
         if header[:3] == ["set", "right", "wrong"]:
             r, w = PCT.findall(cells[1]), PCT.findall(cells[2])
             if r and w:

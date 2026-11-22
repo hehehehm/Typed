@@ -366,6 +366,8 @@ pub const CHANNEL_MIN_COUNT: f64 = 2.0;
 pub const CHANNEL_SHORT_RANK: u32 = 10_000;
 
 const CHANNEL_W_NEAR_EXTRA: f64 = 0.2;
+const CHANNEL_END_RIVAL: f64 = 1.5;
+const CHANNEL_SEEN_RATIO: f64 = 100.0;
 const CHANNEL_W_SUBST: f64 = 0.25;
 const CHANNEL_W_OMIT: f64 = 1.0;
 
@@ -445,17 +447,26 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
     let mut ranked: Vec<(String, f64, bool)> = best.into_iter().map(|(k, (v, e))| (k, v, e)).collect();
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.cmp(&b.0)));
     if lang == Lang::En {
-        ranked.retain(|(c, _, _)| {
+        let end_edit = |c: &str| {
             let cc: Vec<char> = c.chars().collect();
             let last_only = cc.len() == w.len() && cc[..cc.len() - 1] == w[..w.len() - 1];
-            !en_end_letter_only(&lower, c) && !last_only
-        });
+            en_end_letter_only(&lower, c) || last_only
+        };
+        let end_best = ranked.iter().filter(|x| end_edit(&x.0)).map(|x| x.1).fold(0.0, f64::max);
+        ranked.retain(|(c, _, _)| !end_edit(c));
+        if ranked.first().is_some_and(|x| end_best * CHANNEL_END_RIVAL >= x.1) {
+            return None;
+        }
     }
     let (top, s1, ok) = ranked.first()?.clone();
     if !ok {
         return None;
     }
     let s2 = ranked.get(1).map_or(0.0, |x| x.1);
+    let seen = g.count(&[&lower]);
+    if seen > 0.0 && s1 * total < seen * CHANNEL_SEEN_RATIO {
+        return None;
+    }
     if ranked.iter().filter(|x| x.1 * CHANNEL_CROWD >= s1).count() > 2 {
         return None;
     }

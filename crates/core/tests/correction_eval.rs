@@ -221,6 +221,12 @@ fn correction_eval() {
                 let changed = typo::suggest_as_unknown_level(d, &t, lang, level()).or_else(|| layout_keeper_core::typo_wide::layout_typo_as_unknown_level(&t, lang, level()));
                 let k = bucket(n);
                 b[k].0 += 1;
+                if let Some(f) = &changed {
+                    if let Ok(p) = std::env::var("EVAL_DUMP_FP") {
+                        use std::io::Write as _;
+                        if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(p) { let _ = writeln!(fh, "{lang:?} {name}\t{t}\t{f}"); }
+                    }
+                }
                 if let Some(f) = changed { b[k].1 += 1; if ex.len() < 12 { ex.push(format!("{t}→{f}")); } }
             }
             let all = b.iter().fold((0, 0), |a, x| (a.0 + x.0, a.1 + x.1));
