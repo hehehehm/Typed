@@ -97,6 +97,12 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.85
+
+- **Пропущенный и лишний пробел.** Слипшиеся слова разделяются чаще: `drunkthat` → `drunk that`, `marytook` → `mary took`, в том числе три слова подряд. Лишний пробел внутри слова убирается: «кн иге» → «книге», «моц арт» → «моцарт». Пробел, нажатый соседней клавишей (с, м, и, т, ь или c, v, b, n, m), исправляется: `i thinkbthat is` → `i think that is`, «мы пошлисдомой» → «мы пошли домой». Разделение по соседней клавише и уборка лишнего пробела работают на уровнях «Обычно» и «Смело» с включённым исправлением опечаток.
+- **Сдвиг рук и капс.** Сдвиг рук на одну клавишу исправляется чаще, в том числе в мате и капсе: `ЩВИКМ` → «ЗАТЕИ». Опечатки в словах капсом исправляются так же, как в строчных. Короткие слова из 2–3 букв с заглавной или капсом в чужой раскладке переводятся чаще.
+- **Склейка с предлогом важнее двойной буквы.** Лишняя двойная буква убирается, но однобуквенный предлог не поглощается, если пара слов не в 10 раз реже исправленного слова: «ккафе» → «к кафе». Предыдущее слово не склеивается с коротким частым словом («не», «на») после него.
+
 ## Что нового в 0.3.84
 
 - **Дефисные слова и частицы.** Опечатки в частицах и частях дефисных слов исправляются («все-атки» → «все-таки», «все-тоо» → «все-то», «яркко-голубом» → «ярко-голубом»), при этом сложные слова с валидной основой и вторым словом («кошко-мальчик», «нейро-сеть») не ломаются.
@@ -977,6 +983,12 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.85
+
+- **Missing and extra spaces.** Glued words split more often: `drunkthat` → `drunk that`, `marytook` → `mary took`, including three words in a row. An extra space inside a word is removed: «кн иге» → «книге», «моц арт» → «моцарт». A space hit on a neighbouring key (с, м, и, т, ь or c, v, b, n, m) is fixed: `i thinkbthat is` → `i think that is`, «мы пошлисдомой» → «мы пошли домой». Neighbour-key splits and extra-space merges run at Normal and Aggressive when typo fixing is on.
+- **Hand-shift and CAPS.** A one-key hand shift is fixed more often, including in profanity and CAPS: `ЩВИКМ` → «ЗАТЕИ». Typos in CAPS words are fixed like lowercase ones. Short 2–3 letter Title and CAPS words in the wrong layout convert more often.
+- **A glued preposition beats a doubled letter.** An extra double letter is removed, but a one-letter preposition is kept if the word pair is not ten times rarer than the merged word: «ккафе» → «к кафе». A previous word is not merged with a short frequent word («не», «на») after it.
 
 ### New in 0.3.84
 
