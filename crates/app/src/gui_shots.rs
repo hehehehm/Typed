@@ -219,6 +219,7 @@ fn native_shots() -> Vec<Shot> {
         let sfx = |s: &'static str| -> &'static str {
             if light { s } else { Box::leak(format!("{s}-dark").into_boxed_str()) }
         };
+        v.push(Shot { name: sfx("15-apps-native"), app: app_with(sample_cfg(), Tab::Apps, light), focus: focus(), size: sec_sz, mac: false });
         v.push(Shot { name: sfx("15-words-native"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz, mac: false });
         let mut a = app_with(sample_cfg(), Tab::Vault, light);
         a.vault = locked_vault_ui();

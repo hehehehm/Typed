@@ -244,26 +244,32 @@ impl VaultUi {
     fn show_locked(&mut self, ui: &mut egui::Ui) {
         let exists = self.path.exists();
         let mut go = false;
-        // Same vertical rhythm as the dictionary / programs add row (GAP, shared field height).
+        // Same card as the dictionary / programs add row: group + GAP, hug content,
+        // top-aligned, no vertical stretch or centring.
         st::group(ui, |ui| {
             egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::GAP)).show(ui, |ui| {
                 let w = ui.available_width();
                 if exists {
-                    // Button first so it keeps its natural width; the field takes the rest.
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // horizontal() shrinks to the row; button first at natural width.
+                    ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = st::PAD;
-                        go = st::primary(ui, "Открыть", ACCENT)
-                            .on_hover_text(format!("Файл: {}", self.path.display()))
-                            .clicked();
-                        st::password_bg(ui, &mut self.pw1, "пароль", ui.available_width(), ACCENT);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = st::PAD;
+                            go = st::primary(ui, "Открыть", ACCENT)
+                                .on_hover_text(format!("Файл: {}", self.path.display()))
+                                .clicked();
+                            st::password_bg(ui, &mut self.pw1, "пароль", ui.available_width(), ACCENT);
+                        });
                     });
                 } else {
                     st::password_bg(ui, &mut self.pw1, "новый пароль (8+)", w, ACCENT);
                     st::password_bg(ui, &mut self.pw2, "повтор", w, ACCENT);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        go = st::primary(ui, "Создать", ACCENT)
-                            .on_hover_text("Мастер-пароль нельзя восстановить")
-                            .clicked();
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            go = st::primary(ui, "Создать", ACCENT)
+                                .on_hover_text("Мастер-пароль нельзя восстановить")
+                                .clicked();
+                        });
                     });
                 }
             });

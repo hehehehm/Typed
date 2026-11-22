@@ -97,6 +97,11 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.80
+
+- **Карточка пароля в сейфе.** Карточка с полем и кнопкой «Открыть» той же высоты и с теми же отступами, что и поле «слово» в словаре: она больше не растягивается на всё окно и не центрирует поле.
+- **Точка в шапке.** У цветной точки на плашке названия больше отступ слева, как справа у текста.
+
 ## Что нового в 0.3.79
 
 - **Поля и кнопки в сейфе.** Поле пароля той же высоты, что и поля на других экранах. Кнопка «Открыть» больше не обрезается до «Откр…» — она подстраивается под текст.
@@ -950,6 +955,11 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.80
+
+- The locked-vault password card is the same height and uses the same padding as the dictionary add-word row: it no longer stretches to fill the window or vertically centre the field.
+- The coloured dot in the header title plate has more left inset, matching the padding on the right of the title.
 
 ### New in 0.3.79
 

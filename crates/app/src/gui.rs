@@ -1041,7 +1041,8 @@ impl App {
         // square still uses `section_count` (programs only).
         let (title, title_count) = self.header_title_and_count();
         let plate_left = back.right() + st::PAD;
-        let dot_c = egui::pos2(plate_left + 6.0 + 4.0, cy);
+        // Left inset to the dot matches right inset from the title/count (PAD).
+        let dot_c = egui::pos2(plate_left + st::PAD + 6.0, cy);
         let tx = dot_c.x + 6.0 + st::PAD;
         let max_w = (nav_left - st::PAD - tx).max(st::HIT);
         let title_font = egui::FontId::proportional(st::FONT_LG);

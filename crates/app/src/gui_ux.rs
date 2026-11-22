@@ -534,11 +534,13 @@ struct Findings {
     issues: Vec<Issue>,
     /// Single-line text fields: (screen, height, rect). Compared across screens.
     field_heights: Vec<(String, f32, Rect)>,
+    /// Input-row cards (group around a field + action): (screen, height, top, rect).
+    input_cards: Vec<(String, f32, f32, Rect)>,
 }
 
 impl Findings {
     fn new() -> Self {
-        Self { issues: Vec::new(), field_heights: Vec::new() }
+        Self { issues: Vec::new(), field_heights: Vec::new(), input_cards: Vec::new() }
     }
     fn push(&mut self, i: Issue) {
         self.issues.push(i);
@@ -1112,7 +1114,9 @@ fn inspect_usability(h: &mut Harness, screen: &str, findings: &mut Findings) {
     ux_alignment(h, screen, findings);
     ux_consistency(h, screen, findings);
     ux_header_plate_gaps(h, screen, findings);
+    ux_title_plate_dot_inset(h, screen, findings);
     ux_collect_field_heights(h, screen, findings);
+    ux_collect_input_cards(h, screen, findings);
     // Tooltip-on-icon is checked in the expert review: egui tooltip timing is
     // not reliable enough in the headless harness for a report-only flag.
 }
@@ -1173,6 +1177,219 @@ fn ux_collect_field_heights(h: &Harness, screen: &str, findings: &mut Findings) 
             continue;
         }
         findings.field_heights.push((screen.to_owned(), r.height(), r));
+    }
+}
+
+fn header_frost_plates(h: &Harness) -> Vec<Rect> {
+    let mut plates: Vec<Rect> = h
+        .widgets()
+        .into_iter()
+        .filter(|w| !w.sense.click && !w.sense.drag)
+        .map(|w| w.interact_rect)
+        .filter(|r| {
+            r.center().y < st::HEADER
+                && (r.height() - st::HIT).abs() <= 3.0
+                && r.width() >= 16.0
+        })
+        .collect();
+    plates.sort_by(|a, b| a.left().partial_cmp(&b.left()).unwrap_or(std::cmp::Ordering::Equal));
+    plates.dedup_by(|a, b| (a.left() - b.left()).abs() < 2.0 && (a.width() - b.width()).abs() < 2.0);
+    plates
+}
+
+fn painted_rects_and_circles(h: &Harness) -> (Vec<epaint::RectShape>, Vec<epaint::CircleShape>) {
+    let mut rects = Vec::new();
+    let mut circles = Vec::new();
+    let Some(out) = h.last.as_ref() else {
+        return (rects, circles);
+    };
+    for cs in &out.shapes {
+        collect_paint(&cs.shape, &mut rects, &mut circles);
+    }
+    (rects, circles)
+}
+
+fn collect_paint(shape: &Shape, rects: &mut Vec<epaint::RectShape>, circles: &mut Vec<epaint::CircleShape>) {
+    match shape {
+        Shape::Vec(v) => {
+            for s in v {
+                collect_paint(s, rects, circles);
+            }
+        }
+        Shape::Rect(r) => {
+            if r.fill.a() > 0 {
+                rects.push(r.clone());
+            }
+        }
+        Shape::Circle(c) => {
+            if c.fill.a() > 0 {
+                circles.push(*c);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The colour dot inside the title plate must have at least as much inset on the
+/// left as the title/count has on the right.
+fn ux_title_plate_dot_inset(h: &Harness, screen: &str, findings: &mut Findings) {
+    if h.app.tab == Tab::Home || h.app.welcome_open {
+        return;
+    }
+    let plates = header_frost_plates(h);
+    if plates.len() < 2 {
+        return;
+    }
+    let title = plates[1];
+    let (_, circles) = painted_rects_and_circles(h);
+    let mut dots: Vec<&epaint::CircleShape> = circles
+        .iter()
+        .filter(|c| {
+            c.radius >= 5.5
+                && c.radius <= 6.5
+                && title.expand(0.5).contains(c.center)
+        })
+        .collect();
+    dots.sort_by(|a, b| a.center.x.partial_cmp(&b.center.x).unwrap_or(std::cmp::Ordering::Equal));
+    let Some(dot) = dots.first() else {
+        return;
+    };
+    let left_inset = (dot.center.x - dot.radius) - title.left();
+    let mut text_right = title.left();
+    for t in h.texts() {
+        if title.expand(1.0).intersects(t.rect) && t.rect.center().y < st::HEADER {
+            text_right = text_right.max(t.rect.right());
+        }
+    }
+    if text_right <= title.left() + 1.0 {
+        return;
+    }
+    let right_pad = title.right() - text_right;
+    if left_inset + 1.5 < right_pad {
+        findings.push(Issue::ux(
+            "must",
+            "ux-spacing",
+            screen,
+            format!(
+                "title-plate dot left inset is {left_inset:.1}px; right padding is {right_pad:.1}px"
+            ),
+            Some(title),
+        ));
+    }
+}
+
+/// Group card around a single input row (dictionary add, vault password, …).
+fn ux_collect_input_cards(h: &Harness, screen: &str, findings: &mut Findings) {
+    if h.app.welcome_open || h.app.tab == Tab::Home {
+        return;
+    }
+    let (rects, _) = painted_rects_and_circles(h);
+    let cards: Vec<Rect> = rects
+        .into_iter()
+        .filter(|r| {
+            (r.rounding.nw - st::RADIUS).abs() < 0.6
+                && r.rect.top() >= st::HEADER - 0.5
+                && r.rect.width() >= 200.0
+                && r.fill.a() >= 200
+        })
+        .map(|r| r.rect)
+        .collect();
+    let fields: Vec<Rect> = {
+        let mut v = Vec::new();
+        for w in h.widgets() {
+            let r = w.interact_rect;
+            if !w.sense.drag || !w.sense.click {
+                continue;
+            }
+            if r.top() < st::HEADER || r.width() < 80.0 {
+                continue;
+            }
+            if r.height() < 24.0 || r.height() > 36.0 {
+                continue;
+            }
+            v.push(r);
+        }
+        v
+    };
+    let mut seen: Vec<Rect> = Vec::new();
+    for f in &fields {
+        let mut hit: Option<Rect> = None;
+        for c in &cards {
+            if !c.expand(1.0).contains(f.center()) {
+                continue;
+            }
+            match hit {
+                None => hit = Some(*c),
+                Some(prev) if c.area() < prev.area() => hit = Some(*c),
+                _ => {}
+            }
+        }
+        let Some(c) = hit else {
+            continue;
+        };
+        let n = fields.iter().filter(|ff| c.expand(1.0).contains(ff.center())).count();
+        if n != 1 {
+            continue;
+        }
+        if seen.iter().any(|s| (s.top() - c.top()).abs() < 1.0 && (s.left() - c.left()).abs() < 1.0) {
+            continue;
+        }
+        seen.push(c);
+        findings.input_cards.push((screen.to_owned(), c.height(), c.top(), c));
+    }
+}
+
+fn ux_input_cards_across(findings: &mut Findings) {
+    if findings.input_cards.len() < 2 {
+        return;
+    }
+    let mut heights: Vec<f32> = findings.input_cards.iter().map(|(_, h, _, _)| *h).collect();
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid_h = heights[heights.len() / 2];
+    let rows = findings.input_cards.clone();
+    for (screen, h, _, rect) in &rows {
+        if (h - mid_h).abs() > 1.5 {
+            findings.push(Issue::ux(
+                "must",
+                "ux-spacing",
+                screen,
+                format!("input-row card is {h:.1}px tall; other screens use {mid_h:.1}px"),
+                Some(*rect),
+            ));
+        }
+    }
+    // Align tops only for input cards that sit directly under the header
+    // (dictionary, vault). Programs/Exceptions have a pane switcher first.
+    let mut first: Vec<(String, f32, Rect)> = Vec::new();
+    for (screen, _, top, rect) in rows {
+        let expect = st::HEADER + st::INSET;
+        if (top - expect).abs() > st::PAD + 1.0 {
+            continue;
+        }
+        if let Some((_, y, _)) = first.iter_mut().find(|(s, _, _)| s == &screen) {
+            if top < *y {
+                *y = top;
+            }
+        } else {
+            first.push((screen, top, rect));
+        }
+    }
+    if first.len() < 2 {
+        return;
+    }
+    let mut tops: Vec<f32> = first.iter().map(|(_, y, _)| *y).collect();
+    tops.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid_y = tops[tops.len() / 2];
+    for (screen, y, rect) in first {
+        if (y - mid_y).abs() > 1.5 {
+            findings.push(Issue::ux(
+                "must",
+                "ux-spacing",
+                &screen,
+                format!("first input-row card starts at y={y:.1}; other screens use y={mid_y:.1}"),
+                Some(rect),
+            ));
+        }
     }
 }
 
@@ -2426,6 +2643,7 @@ fn ux_inspect_screens_report() {
     }
 
     ux_input_heights_across(&mut findings);
+    ux_input_cards_across(&mut findings);
 
     let depths = measure_action_depths(&mut findings);
     let report = PathBuf::from("/tmp/typed-ui-ux-report.md");
