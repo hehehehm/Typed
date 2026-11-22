@@ -105,6 +105,8 @@ fn reading_likelier(typed: &str, src: Lang, conv: &str, dst: Lang) -> bool {
     fc > 0.0 && fc > READING_CORPUS_RATIO * ft
 }
 
+pub const SPLIT_VS_DEDUPE: f64 = 10.0;
+
 pub const NC_ERROR_RATE: f64 = 0.01;
 pub const NC_UNSEEN: f64 = 0.5;
 pub const NC_UNKNOWN_RATE: f64 = 0.01;
@@ -1105,7 +1107,7 @@ impl Engine {
                         let split_likelier = split_count >= SPLIT_MIN_COUNT && split_count * SPLIT_VS_TYPO >= fix_count;
                         let lm_split = split::split_glued(src_dict, core, src).is_none();
                         let lm_loses = lm_split && !is_single_letter_prep_split(split_text) && split_count < fix_count * LM_SPLIT_OVER_TYPO;
-                        let dedupe = typo::is_dedupe_of(core, &fix) && split_count < fix_count;
+                        let dedupe = typo::is_dedupe_of(core, &fix) && split_count * SPLIT_VS_DEDUPE < fix_count;
                         let unseen_glued = !lm_split && split_count <= 0.0 && !is_single_letter_prep_split(split_text);
                         if dedupe || unseen_glued || lm_loses || (!is_single_letter_prep_split(split_text) && !split_likelier && (m > n || a == b || vowel_slip)) {
                             return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
