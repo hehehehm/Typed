@@ -380,6 +380,9 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
     if n < CHANNEL_MIN_LEN || !chars.iter().all(|c| c.is_alphabetic()) {
         return None;
     }
+    if chars[0].is_uppercase() {
+        return None;
+    }
     let lower = Dictionary::normalize(word);
     if !assume_unknown && (d.is_word(&lower) || (lang == Lang::Ru && morph::is_known_form(d, &lower)) || d.is_name_form(&lower)) {
         return None;
@@ -475,6 +478,11 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
     }
     if lang == Lang::Ru {
         let tc: Vec<char> = top.chars().collect();
+        let common = tc.iter().zip(&w).take_while(|(a, b)| a == b).count();
+        let soft = |c: &char| "аеёиоуыэюяйь".contains(*c);
+        if common + 1 >= tc.len().min(w.len()) && tc[common..].iter().all(soft) && w[common..].iter().all(soft) {
+            return None;
+        }
         let rival_form = ranked.iter().skip(1).any(|(c, _, _)| {
             let cc: Vec<char> = c.chars().collect();
             let common = tc.iter().zip(&cc).take_while(|(a, b)| a == b).count();
