@@ -180,6 +180,7 @@ struct Rates {
     transp: f64,
     wrong_layout: f64,
     mid_switch: f64,
+    hand_shift: f64,
     miss_space: f64,
     space_nb: f64,
     stuck_shift: f64,
@@ -214,6 +215,7 @@ const TORPYGA: Profile = Profile {
         transp: 0.012,
         wrong_layout: 0.10,
         mid_switch: 0.04,
+        hand_shift: 0.015,
         miss_space: 0.03,
         space_nb: 0.012,
         stuck_shift: 0.008,
@@ -236,6 +238,7 @@ const GRAMOTEY: Profile = Profile {
         transp: 0.002,
         wrong_layout: 0.012,
         mid_switch: 0.005,
+        hand_shift: 0.0,
         miss_space: 0.004,
         space_nb: 0.001,
         stuck_shift: 0.004,
@@ -430,6 +433,21 @@ fn plan_keys(
     actions
 }
 
+
+fn shift_actions(actions: &[Action], dir: i32) -> Option<Vec<Action>> {
+    let mut out = Vec::with_capacity(actions.len());
+    let mut keys = 0;
+    for a in actions {
+        match *a {
+            Action::Key { phys, shift } => {
+                keys += 1;
+                out.push(Action::Key { phys: layout::shift_phys(phys, dir)?, shift });
+            }
+            ref other => out.push(other.clone()),
+        }
+    }
+    (keys >= 4).then_some(out)
+}
 
 fn intended_layout_for(word: &str, current: Lang) -> Lang {
     layout::detect_script(word).unwrap_or(current)
@@ -721,9 +739,20 @@ fn play_form(
     mid_at: Option<usize>,
     rates: Rates,
     rng: &mut Rng,
+    col_shift: Option<i32>,
 ) -> Lang {
     let plan = plan_keys(form, intended_layout, typist, mid_at, rng, rates);
-    let plan = perturb(plan, rates, rng);
+    let (plan, shifted) = if let Some(dir) = col_shift {
+        match shift_actions(&plan, dir) {
+            Some(p) => (p, true),
+            None => (plan, false),
+        }
+    } else {
+        (plan, false)
+    };
+    // Keep a clean whole-hand shift so the engine can recover it; other slips
+    // are applied on unshifted words as before.
+    let plan = if shifted { plan } else { perturb(plan, rates, rng) };
     let plan = self_fix(plan, typist, form, rates.self_fix, rng);
     exec_actions(e, out, &plan, typist)
 }
@@ -780,6 +809,8 @@ fn type_phrase(
         .unwrap_or("");
     let mut layout = intended_layout_for(first_word, Lang::En);
     e.options.preferred_lang = Some(layout);
+    // Once a word is hand-shifted, later words in the phrase often stay that way.
+    let mut pending_shift: Option<i32> = None;
 
     let mut i = 0;
     while i < parts.len() {
@@ -846,7 +877,22 @@ fn type_phrase(
             } else {
                 None
             };
-            layout = play_form(&mut e, &mut out, typist, want, form, mid_at, profile.rates, rng);
+            // Mid-word layout switches already mangle the token; don't also column-shift.
+            let col_shift = if mid {
+                pending_shift = None;
+                None
+            } else if let Some(dir) = pending_shift {
+                Some(dir)
+            } else if form.chars().count() >= 4 && rng.chance(profile.rates.hand_shift) {
+                let dir = if rng.chance(0.5) { -1 } else { 1 };
+                if rng.chance(0.5) {
+                    pending_shift = Some(dir);
+                }
+                Some(dir)
+            } else {
+                None
+            };
+            layout = play_form(&mut e, &mut out, typist, want, form, mid_at, profile.rates, rng, col_shift);
         }
 
         let typed: String = out[word_start..].iter().collect();
@@ -1128,6 +1174,18 @@ fn physical_neighbours_include_first_letter_keys() {
     assert!(neighbours('b').contains(&'n'));
     assert_eq!(produce(Lang::Ru, 'b', false), 'и');
     assert_eq!(produce(Lang::Ru, 'n', false), 'т');
+}
+
+#[test]
+fn typist_hand_shift_matches_engine_examples() {
+    assert_eq!(layout::shift_token("привет", Lang::Ru, Lang::Ru, 1).as_deref(), Some("ротань"));
+    assert_eq!(layout::shift_token("hello", Lang::En, Lang::En, 1).as_deref(), Some("jr;;p"));
+    let plan = plan_correct("привет", Lang::Ru);
+    let shifted = shift_actions(&plan, 1).expect("привет can shift right");
+    assert_eq!(replay_chars(&shifted, Lang::Ru), "ротань");
+    let plan = plan_correct("hello", Lang::En);
+    let shifted = shift_actions(&plan, 1).expect("hello can shift right");
+    assert_eq!(replay_chars(&shifted, Lang::En), "jr;;p");
 }
 
 #[test]

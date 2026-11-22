@@ -149,6 +149,8 @@ const BRAND_PREFIX_RANK: u32 = 20_000;
 /// Wrong layout and a typo at once (`xnjj` → `что`): Backspace first undoes the typo
 /// fix only (`чтоо`), a second one the layout switch.
 pub const LAYOUT_TYPO_REASON: &str = "wrong layout and a typo";
+/// `Decision::Convert` reason for a whole-token home-row hand shift (`ротань` → `привет`).
+pub const HAND_SHIFT_REASON: &str = "home-row hand shift";
 /// `Decision::Convert` reason for an inserted missing space (undoable like a typo fix).
 pub const SPACE_REASON: &str = "missing space after a function word";
 
@@ -857,6 +859,12 @@ impl Engine {
         }
 
         if o.fix_typos {
+            // Hands one column off, optionally also in the other layout (`ротань` →
+            // «привет», `jr;;p` → `hello`, `окжжз` → `hello`). Before typo_wide so a
+            // long column shift is not guessed as a shorter edit.
+            if let Some(d) = self.hand_shift_decision(token, src) {
+                return d;
+            }
             if core.chars().all(char::is_alphabetic) {
                 if let Some(fix) = self.typo_fix(core, src) {
                     return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
@@ -1092,6 +1100,41 @@ impl Engine {
             return None;
         }
         typo::suggest_ctx(core, lang, o.typo_level, &self.left_context(lang))
+    }
+
+    /// Previous finished word was itself a home-row hand-shift fix: reuse that
+    /// direction and destination for the next token of the same phrase.
+    fn prev_hand_shift(&self) -> Option<(i32, Lang)> {
+        let last = self.last.as_ref()?;
+        let fix = last.fix.as_ref()?;
+        typo::hand_shift_which(trim_non_letters(&fix.typed), trim_non_letters(&last.word))
+    }
+
+    fn hand_shift_decision(&self, token: &str, src: Lang) -> Option<Decision> {
+        let o = &self.options;
+        if !o.fix_typos || o.typo_level == typo::Level::Cautious {
+            return None;
+        }
+        let core = trim_non_letters(token);
+        if typo::is_title_case(core) {
+            let mid = self
+                .left_context(src)
+                .prev
+                .as_deref()
+                .is_some_and(|p| p != crate::ngram::START);
+            if mid {
+                return None;
+            }
+        }
+        if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(core)) {
+            return None;
+        }
+        let (fix, dest) = typo::hand_shift_fix(core, src, o.typo_level, self.prev_hand_shift())?;
+        Some(Decision::Convert {
+            text: token.replacen(core, &fix, 1),
+            target: dest,
+            reason: HAND_SHIFT_REASON,
+        })
     }
 
     /// The previous word (same sentence) is a dictionary word of `lang`.
@@ -1814,6 +1857,39 @@ mod tests {
         assert_eq!(type_str(&mut e, "делать кореркцию "), vec![Replacement { delete: 10, insert: "коррекцию ".into(), target: Lang::Ru }]);
         assert_eq!(type_str(&mut e, "чтокой ")[0].insert, "точкой ");
         assert!(type_str(&mut e, "коррекцию ").is_empty());
+    }
+
+    #[test]
+    fn hand_shift_fixes_home_row_misplacement() {
+        let e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
+        assert_eq!(e.decide("ротань"), Decision::Convert { text: "привет".into(), target: Lang::Ru, reason: HAND_SHIFT_REASON });
+        let left = layout::shift_token("привет", Lang::Ru, Lang::Ru, -1).unwrap();
+        assert_eq!(e.decide(&left), Decision::Convert { text: "привет".into(), target: Lang::Ru, reason: HAND_SHIFT_REASON });
+        assert_eq!(e.decide("jr;;p"), Decision::Convert { text: "hello".into(), target: Lang::En, reason: HAND_SHIFT_REASON });
+        let en_left = layout::shift_token("hello", Lang::En, Lang::En, -1).unwrap();
+        assert_eq!(e.decide(&en_left), Decision::Convert { text: "hello".into(), target: Lang::En, reason: HAND_SHIFT_REASON });
+        assert_eq!(e.decide("окжжз"), Decision::Convert { text: "hello".into(), target: Lang::En, reason: HAND_SHIFT_REASON });
+        assert_eq!(e.decide("hjnfym"), Decision::Convert { text: "привет".into(), target: Lang::Ru, reason: HAND_SHIFT_REASON });
+        assert_eq!(e.decide("Ротань"), Decision::Convert { text: "Привет".into(), target: Lang::Ru, reason: HAND_SHIFT_REASON });
+        let cautious = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Cautious, ..Default::default() });
+        assert!(matches!(cautious.decide("ротань"), Decision::Keep(_)));
+        assert!(matches!(cautious.decide("jr;;p"), Decision::Keep(_)));
+        // Negatives: real words, clips, tech, typo_wide cases still as before.
+        assert!(matches!(e.decide("привет"), Decision::Keep(_)));
+        assert!(matches!(e.decide("hello"), Decision::Keep(_)));
+        assert!(matches!(e.decide("загран"), Decision::Keep(_)));
+        assert!(matches!(e.decide("struct"), Decision::Keep(_)));
+        assert_eq!(e.decide("програма"), Decision::Convert { text: "программа".into(), target: Lang::Ru, reason: TYPO_REASON });
+        let off = engine();
+        assert!(matches!(off.decide("ротань"), Decision::Keep(_)), "fix_typos is off by default");
+
+        // Phrase consistency: after a right-shift fix, the next word in the same
+        // direction is also recovered.
+        let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
+        let a = layout::shift_token("привет", Lang::Ru, Lang::Ru, 1).unwrap();
+        let b = layout::shift_token("хорошо", Lang::Ru, Lang::Ru, 1).unwrap();
+        assert_eq!(type_str(&mut e, &format!("{a} "))[0].insert, "привет ");
+        assert_eq!(type_str(&mut e, &format!("{b} "))[0].insert, "хорошо ");
     }
 
     fn bs(e: &mut Engine) -> Option<Replacement> {

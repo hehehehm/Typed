@@ -176,6 +176,97 @@ pub fn us_key_for(c: char, target: Lang) -> Option<char> {
     }
 }
 
+/// Physical unshifted US key rows, including punctuation keys that are letters
+/// on ЙЦУКЕН (`жэхъ`, `бю`, `[];',./`).
+const PHYS_ROWS: [&str; 4] = [
+    "`1234567890-=",
+    "qwertyuiop[]",
+    "asdfghjkl;'",
+    "zxcvbnm,./",
+];
+
+const US_SHIFT: &[(char, char)] = &[
+    ('`', '~'), ('1', '!'), ('2', '@'), ('3', '#'), ('4', '$'),
+    ('5', '%'), ('6', '^'), ('7', '&'), ('8', '*'), ('9', '('),
+    ('0', ')'), ('-', '_'), ('=', '+'),
+    ('[', '{'), (']', '}'), (';', ':'), ('\'', '"'),
+    (',', '<'), ('.', '>'), ('/', '?'),
+];
+
+fn unshift_us(us: char) -> (char, bool) {
+    if us.is_ascii_uppercase() {
+        return (us.to_ascii_lowercase(), true);
+    }
+    for &(lo, hi) in US_SHIFT {
+        if us == hi {
+            return (lo, true);
+        }
+    }
+    (us, false)
+}
+
+fn apply_us_shift(phys: char, shift: bool) -> char {
+    if !shift {
+        return phys;
+    }
+    if phys.is_ascii_lowercase() {
+        return phys.to_ascii_uppercase();
+    }
+    for &(lo, hi) in US_SHIFT {
+        if phys == lo {
+            return hi;
+        }
+    }
+    phys
+}
+
+/// The key `dir` columns away on the same physical row (`dir` is −1 or +1).
+pub fn shift_phys(phys: char, dir: i32) -> Option<char> {
+    if dir == 0 {
+        return Some(phys);
+    }
+    for row in PHYS_ROWS {
+        if let Some(i) = row.chars().position(|c| c == phys) {
+            let j = i as i32 + dir;
+            if j < 0 {
+                return None;
+            }
+            return row.chars().nth(j as usize);
+        }
+    }
+    None
+}
+
+/// What `c` (produced in `from`) would have been if the same hand motion had hit
+/// the key `dir` columns away, read in layout `to`.
+pub fn shift_char(c: char, from: Lang, to: Lang, dir: i32) -> Option<char> {
+    let us = us_key_for(c, from)?;
+    let (phys, shift) = unshift_us(us);
+    let phys2 = shift_phys(phys, dir)?;
+    let us2 = apply_us_shift(phys2, shift);
+    Some(match to {
+        Lang::En => us2,
+        Lang::Ru => en_to_ru(us2).unwrap_or(us2),
+    })
+}
+
+/// [`shift_char`] for every character of `s`. `None` if any key would fall off the row.
+pub fn shift_token(s: &str, from: Lang, to: Lang, dir: i32) -> Option<String> {
+    if dir != 1 && dir != -1 {
+        return None;
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut n = 0;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            return None;
+        }
+        out.push(shift_char(c, from, to, dir)?);
+        n += 1;
+    }
+    (n > 0).then_some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +336,25 @@ mod tests {
         assert_eq!(convert_text("ghbdtn Москва"), Some(("привет Москва".into(), Lang::Ru)));
         assert_eq!(convert_text("line1\nyt nfr\t"), Some(("дшту1\nне так\t".into(), Lang::Ru)));
         assert_eq!(convert_text("123 !!"), None);
+    }
+
+
+    #[test]
+    fn hand_shift_one_column() {
+        // Hands one key to the right of "привет" / "hello".
+        assert_eq!(shift_token("привет", Lang::Ru, Lang::Ru, 1).as_deref(), Some("ротань"));
+        assert_eq!(shift_token("ротань", Lang::Ru, Lang::Ru, -1).as_deref(), Some("привет"));
+        assert_eq!(shift_token("hello", Lang::En, Lang::En, 1).as_deref(), Some("jr;;p"));
+        assert_eq!(shift_token("jr;;p", Lang::En, Lang::En, -1).as_deref(), Some("hello"));
+        // The same motion typed in the other layout.
+        assert_eq!(shift_token("hello", Lang::En, Lang::Ru, 1).as_deref(), Some("окжжз"));
+        assert_eq!(shift_token("окжжз", Lang::Ru, Lang::En, -1).as_deref(), Some("hello"));
+        assert_eq!(shift_token("привет", Lang::Ru, Lang::En, 1).as_deref(), Some("hjnfym"));
+        assert_eq!(shift_token("hjnfym", Lang::En, Lang::Ru, -1).as_deref(), Some("привет"));
+        // A key on the edge cannot move off the row.
+        assert_eq!(shift_token("фыва", Lang::Ru, Lang::Ru, -1), None);
+        assert_eq!(shift_phys('q', -1), None);
+        assert_eq!(shift_phys('p', 1), Some('['));
     }
 
 }

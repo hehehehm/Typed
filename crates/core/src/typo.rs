@@ -269,6 +269,13 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
     if (strict.is_some() && !vetoed) || level == Level::Cautious {
         return strict.filter(|_| !vetoed);
     }
+    // Whole-token home-row misplacement (`ротань` → `привет`): tried before the
+    // scored search, which cannot reach a 5–6 letter column shift.
+    if let Some((fix, dest)) = hand_shift_fix(word, lang, level, None) {
+        if dest == lang && !ngram::veto(ctx, word, &fix, lang) {
+            return Some(fix);
+        }
+    }
     let wide = crate::typo_wide::suggest_wide(d, word, lang, assume_unknown, level, ctx);
     if wide.is_some() {
         return wide;
@@ -1049,6 +1056,126 @@ fn distance_by(a: &[char], b: &[char], max: usize, sub: impl Fn(char, char) -> u
     prev[m]
 }
 
+
+/// Shortest token a whole-hand column shift may fix (Normal / Aggressive only).
+pub const HAND_SHIFT_MIN_LEN: usize = 4;
+/// 4-letter hand-shift targets must be at least this frequent.
+const HAND_SHIFT_SHORT_RANK: u32 = 5_000;
+/// Longer ranked targets may be this rare.
+const HAND_SHIFT_RANK: u32 = 20_000;
+/// An unranked full-form / curated word is accepted only from this length.
+const HAND_SHIFT_WORD_LEN: usize = 6;
+
+/// A whole-token home-row misplacement: every key is one column left or right
+/// of what was meant, optionally also read in the other layout.
+///
+/// Accepts a candidate only when exactly one of the four (direction × layout)
+/// readings is a known word, the typed token is not a word of either language,
+/// and `level` is not Cautious. `prefer` is the shift that fixed the previous
+/// word in the same phrase: that reading wins when it is a known word, even if
+/// another direction also is, or if it is a longer unranked form.
+pub(crate) fn hand_shift_fix(
+    word: &str,
+    src: Lang,
+    level: Level,
+    prefer: Option<(i32, Lang)>,
+) -> Option<(String, Lang)> {
+    if level == Level::Cautious {
+        return None;
+    }
+    let n = word.chars().count();
+    if n < HAND_SHIFT_MIN_LEN {
+        return None;
+    }
+    if dict::get(Lang::En).is_word(word) || dict::get(Lang::Ru).is_word(word) {
+        return None;
+    }
+    if looks_like_identifier(word) || (src == Lang::Ru && is_ruslish_form(word)) {
+        return None;
+    }
+
+    struct Hit {
+        text: String,
+        dest: Lang,
+        dir: i32,
+    }
+    let mut hits: Vec<Hit> = Vec::new();
+    for dest in [src, src.other()] {
+        for dir in [-1i32, 1] {
+            let Some(cand) = crate::layout::shift_token(word, src, dest, dir) else { continue };
+            if Dictionary::normalize(&cand) == Dictionary::normalize(word) {
+                continue;
+            }
+            if !hand_shift_target_ok(&cand, dest, n) {
+                continue;
+            }
+            if !hits.iter().any(|h| h.text == cand && h.dest == dest) {
+                hits.push(Hit { text: cand, dest, dir });
+            }
+        }
+    }
+
+    if let Some((pdir, pdest)) = prefer {
+        if let Some(h) = hits.iter().find(|h| h.dir == pdir && h.dest == pdest) {
+            return Some((match_case(word, &h.text), h.dest));
+        }
+        // The consistent direction may be a real form that missed the rank cut.
+        if let Some(cand) = crate::layout::shift_token(word, src, pdest, pdir) {
+            let letters: String = cand.chars().filter(|c| c.is_alphabetic()).collect();
+            if letters.chars().count() >= HAND_SHIFT_MIN_LEN
+                && crate::layout::detect_script(&letters) == Some(pdest)
+                && dict::get(pdest).is_word(&letters)
+            {
+                return Some((match_case(word, &cand), pdest));
+            }
+        }
+    }
+
+    if hits.len() == 1 {
+        let h = &hits[0];
+        return Some((match_case(word, &h.text), h.dest));
+    }
+    None
+}
+
+fn hand_shift_target_ok(cand: &str, dest: Lang, _typed_n: usize) -> bool {
+    if !cand.chars().all(char::is_alphabetic) {
+        return false;
+    }
+    if crate::layout::detect_script(cand) != Some(dest) {
+        return false;
+    }
+    let n = cand.chars().count();
+    if n < HAND_SHIFT_MIN_LEN {
+        return false;
+    }
+    let d = dict::get(dest);
+    if let Some(r) = d.rank(cand) {
+        return if n <= 4 { r < HAND_SHIFT_SHORT_RANK } else { r < HAND_SHIFT_RANK };
+    }
+    n >= HAND_SHIFT_WORD_LEN && d.is_word(cand)
+}
+
+/// Which (direction, destination layout) takes `typed` to `fixed`, if unique.
+pub(crate) fn hand_shift_which(typed: &str, fixed: &str) -> Option<(i32, Lang)> {
+    let src = crate::layout::detect_script(typed)?;
+    let want = Dictionary::normalize(fixed);
+    let mut found = None;
+    for dest in [src, src.other()] {
+        for dir in [-1i32, 1] {
+            if let Some(c) = crate::layout::shift_token(typed, src, dest, dir) {
+                if Dictionary::normalize(&c) == want {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some((dir, dest));
+                }
+            }
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1307,4 +1434,34 @@ mod tests {
         // Isolated / sentence-start typo of a frequent word is unchanged (not tested here).
         // Mid-sentence is the conservative path for names.
     }
+
+    #[test]
+    fn hand_shift_recovers_home_row_misplacement() {
+        assert_eq!(suggest("ротань", Lang::Ru).as_deref(), Some("привет"));
+        let left = crate::layout::shift_token("привет", Lang::Ru, Lang::Ru, -1).unwrap();
+        assert_eq!(suggest(&left, Lang::Ru).as_deref(), Some("привет"));
+        assert_eq!(suggest("jr;;p", Lang::En).as_deref(), Some("hello"));
+        let en_left = crate::layout::shift_token("hello", Lang::En, Lang::En, -1).unwrap();
+        assert_eq!(suggest(&en_left, Lang::En).as_deref(), Some("hello"));
+        // Combined with the other layout: typo::suggest stays in the given language;
+        // the engine converts. Same-layout wrong direction is not a word.
+        assert_eq!(suggest("окжжз", Lang::Ru), None);
+        assert_eq!(suggest("hjnfym", Lang::En), None);
+        assert_eq!(hand_shift_fix("окжжз", Lang::Ru, Level::Normal, None), Some(("hello".into(), Lang::En)));
+        assert_eq!(hand_shift_fix("hjnfym", Lang::En, Level::Normal, None), Some(("привет".into(), Lang::Ru)));
+        assert_eq!(suggest_level("ротань", Lang::Ru, Level::Cautious), None);
+        assert_eq!(suggest_level("jr;;p", Lang::En, Level::Cautious), None);
+        // Known words and earlier typo / clipping cases stay.
+        assert_eq!(suggest("привет", Lang::Ru), None);
+        assert_eq!(suggest("hello", Lang::En), None);
+        assert_eq!(suggest("загран", Lang::Ru), None);
+        assert_eq!(suggest("struct", Lang::En), None);
+        assert_eq!(suggest("програма", Lang::Ru).as_deref(), Some("программа"));
+        assert_eq!(suggest("превт", Lang::Ru).as_deref(), Some("привет"));
+        // Short or one-off slips are not a whole-hand shift.
+        assert_eq!(hand_shift_fix("рот", Lang::Ru, Level::Normal, None), None);
+        assert_eq!(hand_shift_which("ротань", "привет"), Some((-1, Lang::Ru)));
+        assert_eq!(hand_shift_which("jr;;p", "hello"), Some((-1, Lang::En)));
+    }
+
 }
