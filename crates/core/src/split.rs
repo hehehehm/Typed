@@ -346,6 +346,98 @@ fn compound_part_ok(d: &Dictionary, part: &str) -> bool {
     d.is_word(part) || morph::is_known_form(d, part)
 }
 
+pub const LM_MIN_BIGRAM: f64 = 3.0;
+pub const LM_MIN_BIGRAM_SHORT: f64 = 20.0;
+pub const LM_MIN_TOKEN: usize = 4;
+pub const LM_SHORT_PART_RANK: u32 = 20_000;
+pub const LM_MARGIN: f64 = 4.0;
+pub const LM_WHOLE_RATIO: f64 = 2.0;
+
+pub fn space_neighbours(lang: Lang) -> &'static [char] {
+    match lang {
+        Lang::En => &['c', 'v', 'b', 'n', 'm'],
+        Lang::Ru => &['с', 'м', 'и', 'т', 'ь'],
+    }
+}
+
+fn lm_part_ok(d: &Dictionary, lang: Lang, part: &str) -> bool {
+    let n = part.chars().count();
+    match n {
+        0 => false,
+        1 => match lang {
+            Lang::En => matches!(part, "a" | "i"),
+            Lang::Ru => matches!(part, "а" | "в" | "и" | "к" | "о" | "с" | "у" | "я"),
+        },
+        2 | 3 => d.rank_exact(part).is_some_and(|r| r < LM_SHORT_PART_RANK),
+        _ => d.rank_exact(part).is_some() || d.in_full_forms(part),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LmSplit {
+    pub text: String,
+    pub count: f64,
+    pub dropped: bool,
+}
+
+pub fn lm_segment(d: &Dictionary, token: &str, lang: Lang) -> Option<LmSplit> {
+    let chars: Vec<char> = token.chars().collect();
+    if chars.len() < LM_MIN_TOKEN || !chars.iter().all(|c| c.is_alphabetic()) {
+        return None;
+    }
+    let lower: Vec<char> = Dictionary::normalize(token).chars().collect();
+    if lower.len() != chars.len() {
+        return None;
+    }
+    let ng = crate::ngram::get(lang);
+    let nb = space_neighbours(lang);
+    let mut cands: Vec<(f64, usize, usize)> = Vec::new();
+    for i in 1..lower.len() {
+        let a: String = lower[..i].iter().collect();
+        if !lm_part_ok(d, lang, &a) {
+            continue;
+        }
+        let b: String = lower[i..].iter().collect();
+        if lm_part_ok(d, lang, &b) {
+            let c = ng.count(&[&a, &b]);
+            let need = if a.chars().count() == 1 || b.chars().count() == 1 { LM_MIN_BIGRAM_SHORT } else { LM_MIN_BIGRAM };
+            if c >= need {
+                cands.push((c, i, i));
+            }
+        }
+        if i + 1 < lower.len() && nb.contains(&lower[i]) {
+            let b: String = lower[i + 1..].iter().collect();
+            if a.chars().count() >= 2 && b.chars().count() >= 2 && lm_part_ok(d, lang, &b) {
+                let x: String = lower[i].to_string();
+                let c = ng.count(&[&a, &b]);
+                let c3 = ng.count(&[&a, &x, &b]);
+                if c >= LM_MIN_BIGRAM * 4.0 && c3 < c {
+                    cands.push((c / 4.0, i, i + 1));
+                }
+            }
+        }
+    }
+    if cands.iter().any(|x| x.1 == x.2) {
+        cands.retain(|x| x.1 == x.2);
+    }
+    if cands.is_empty() {
+        return None;
+    }
+    cands.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal));
+    if cands.len() >= 2 && cands[0].0 < cands[1].0 * LM_MARGIN {
+        return None;
+    }
+    let (c, i, j) = cands[0];
+    let lw: String = lower.iter().collect();
+    let whole = ng.count(&[&lw]);
+    if whole > 0.0 && c < whole * LM_WHOLE_RATIO {
+        return None;
+    }
+    let head: String = chars[..i].iter().collect();
+    let tail: String = chars[j..].iter().collect();
+    Some(LmSplit { text: format!("{head} {tail}"), count: c, dropped: j > i })
+}
+
 /// Convenience over the process-wide dictionary.
 pub fn suggest(token: &str, lang: Lang) -> Option<String> {
     split_glued(crate::dict::get(lang), token, lang)

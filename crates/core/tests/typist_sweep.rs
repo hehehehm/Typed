@@ -23,11 +23,42 @@ fn n_threads() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).max(1)
 }
 
+static SECTION: AtomicU64 = AtomicU64::new(0);
+
+fn section(n: u64) {
+    SECTION.store(n, Ordering::Relaxed);
+}
+
+fn section_on() -> bool {
+    let n = SECTION.load(Ordering::Relaxed);
+    match std::env::var("SWEEP_SECTIONS") {
+        Ok(v) => n == 0 || v.split(',').any(|x| x.trim().parse::<u64>().ok() == Some(n)),
+        Err(_) => true,
+    }
+}
+
 fn par_chunks<T: Sync, F>(items: &[T], chunk: usize, f: F)
 where
     F: Fn(&[T]) + Sync,
 {
-    if items.is_empty() {
+    if items.is_empty() || !section_on() {
+        return;
+    }
+    let fast: usize = std::env::var("SWEEP_FAST").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+    if fast > 1 {
+        let pieces: Vec<&[T]> = items.chunks(chunk.min(64)).step_by(fast).collect();
+        let threads = n_threads();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                let (f, pieces, next) = (&f, &pieces, &next);
+                scope.spawn(move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(p) = pieces.get(i) else { break };
+                    f(p);
+                });
+            }
+        });
         return;
     }
     let threads = n_threads();
@@ -517,6 +548,7 @@ fn typist_sweep() {
     let mut report = String::new();
 
     // 1. All ranked words (RU+EN) × 3 cases
+    section(1);
     let t0 = Instant::now();
     let mut ranked: Vec<(Lang, String, u32)> = Vec::new();
     for lang in [Lang::Ru, Lang::En] {
@@ -555,6 +587,7 @@ fn typist_sweep() {
     println!("fp_ranked done in {:.1}s", t0.elapsed().as_secs_f64());
 
     // 2. All full forms (RU+EN, all morph forms) × 3 cases (~11.92M)
+    section(2);
     let t0 = Instant::now();
     let mut forms: Vec<(Lang, String)> = Vec::new();
     for lang in [Lang::Ru, Lang::En] {
@@ -587,6 +620,7 @@ fn typist_sweep() {
     println!("fp_full_forms ({forms_total} lemmas) done in {:.1}s", t0.elapsed().as_secs_f64());
 
     // 3. All productive mat forms × 3 cases (~2.12M)
+    section(3);
     let t0 = Instant::now();
     let mat = morph::mat_forms();
     let mat_total = mat.len();
@@ -595,6 +629,7 @@ fn typist_sweep() {
     println!("fp_mat ({mat_total} forms) done in {:.1}s", t0.elapsed().as_secs_f64());
 
     // 4. Hyphenated words (corpora + particles + compound stems) × 3 cases
+    section(4);
     let t0 = Instant::now();
     let hy = hyphen_from_corpora();
     let b_hy = Bucket::new("fp_hyphen");
@@ -602,6 +637,7 @@ fn typist_sweep() {
     println!("fp_hyphen ({} words) done in {:.1}s", hy.len(), t0.elapsed().as_secs_f64());
 
     // 5. All corpus bi/trigrams clean FP (~783k)
+    section(5);
     let t0 = Instant::now();
     let mut ngrams_all: Vec<(Lang, Vec<String>)> = Vec::new();
     for lang in [Lang::Ru, Lang::En] {
@@ -635,6 +671,7 @@ fn typist_sweep() {
     println!("fp_ngram_phrase ({ngrams_total}) done in {:.1}s", t0.elapsed().as_secs_f64());
 
     // 6. Single-letter prep valid & glued (lower + CAPS) + all RU prep bigrams
+    section(6);
     let t0 = Instant::now();
     let b_space_g = Recall::new("space_glued_prep");
     let b_space_v = Bucket::new("space_prep_valid");
@@ -695,6 +732,7 @@ fn typist_sweep() {
     println!("space_prep done in {:.1}s", t0.elapsed().as_secs_f64());
 
     // 7. Corpus bigrams/trigrams for space/merge errors (sampled 10% across all bi/tri)
+    section(7);
     let t0 = Instant::now();
     let bi_all: Vec<&Vec<String>> = ngrams_all.iter().filter(|(_, p)| p.len() == 2).map(|(_, p)| p).collect();
     let tri_all: Vec<&Vec<String>> = ngrams_all.iter().filter(|(_, p)| p.len() == 3).map(|(_, p)| p).collect();
@@ -723,7 +761,9 @@ fn typist_sweep() {
                 let got = decide(&mut e, &glued);
                 r_bi_glued.check(&glued, &got, &exp);
             }
-            let nb = format!("{}x{}", p[0], p[1]);
+            let nbs: &[char] = if *lang == Lang::En { &['c', 'v', 'b', 'n', 'm'] } else { &['с', 'м', 'и', 'т', 'ь'] };
+            let h = p[0].chars().chain(p[1].chars()).fold(0usize, |h, c| h.wrapping_mul(31).wrapping_add(c as usize));
+            let nb = format!("{}{}{}", p[0], nbs[h % nbs.len()], p[1]);
             if p[0].chars().all(|c| c.is_alphabetic()) && p[1].chars().all(|c| c.is_alphabetic()) {
                 let exp = format!("{} {}", p[0], p[1]);
                 let got = decide(&mut e, &nb);
@@ -775,6 +815,7 @@ fn typist_sweep() {
     );
 
     // 8. Hand-shift ±1: 100% ranked words (lower) + 25% Title/CAPS + 5% mat_forms
+    section(8);
     let t0 = Instant::now();
     let r_shift_ranked = Recall::new("typo_hand_shift_ranked (100% lower)");
     let r_shift_title = Recall::new("typo_hand_shift_ranked (25% Title)");
@@ -807,6 +848,7 @@ fn typist_sweep() {
     println!("hand_shift done in {:.1}s", t0.elapsed().as_secs_f64());
 
     // 9. Single-edit typo types (all 5: SubstNb, Omit, InsertNb, Double, Transpose)
+    section(9);
     //    Stratified 25% of all 80,455 ranked words × 3 cases (lower/Title/CAPS)
     let t0 = Instant::now();
     let ranked_edit = strided(&ranked, 4);
@@ -850,6 +892,7 @@ fn typist_sweep() {
     println!("typo_single_edit done in {:.1}s", t0.elapsed().as_secs_f64());
 
     // 10. Hyphen typos (particles + corpus hyphen segments, 3 cases)
+    section(10);
     let t0 = Instant::now();
     let r_hy_typo = Recall::new("typo_hyphen (3 cases)");
     let heads = ["все", "как", "кто", "где", "когда", "дай", "кое"];
@@ -890,6 +933,7 @@ fn typist_sweep() {
     println!("typo_hyphen done in {:.1}s", t0.elapsed().as_secs_f64());
 
     // 11. Layout conversion recall (100% ranked RU+EN, lower/Title/CAPS + 2-3 letter)
+    section(11);
     let t0 = Instant::now();
     let ru_words: Vec<String> = dict::get(Lang::Ru).iter().map(|(w, _)| w.to_string()).collect();
     let en_words: Vec<String> = dict::get(Lang::En).iter().map(|(w, _)| w.to_string()).collect();
@@ -978,4 +1022,30 @@ fn typist_sweep() {
     if hard_fail > 0 {
         panic!("typist_sweep core FP gates failed: {hard_fail}");
     }
+}
+
+/// Dump every wrong-layout typing of ranked words (all cases) as TSV
+/// `typed\tgot\texpected` to `SWEEP_DUMP` for cross-version diffs.
+#[test]
+#[ignore]
+fn typist_sweep_dump_layout() {
+    let path = std::env::var("SWEEP_DUMP").unwrap_or_else(|_| "/tmp/layout_dump.tsv".into());
+    let mut rows: Vec<String> = Vec::new();
+    let mut e = Engine::new(opts());
+    for src in [Lang::Ru, Lang::En] {
+        for (w, _) in dict::get(src).iter() {
+            if !w.chars().all(|c| c.is_alphabetic()) || layout::detect_script(w) != Some(src) {
+                continue;
+            }
+            for v in case_variants(w) {
+                let typed = layout::convert(&v, src);
+                if layout::detect_script(&typed) != Some(src.other()) {
+                    continue;
+                }
+                let got = decide(&mut e, &typed);
+                rows.push(format!("{typed}\t{got}\t{v}"));
+            }
+        }
+    }
+    std::fs::write(&path, rows.join("\n")).unwrap();
 }

@@ -86,10 +86,17 @@ fn engine() -> Engine {
 }
 
 fn out_text(e: &Engine, token: &str) -> Option<String> {
-    match e.decide(token) {
+    let r = match e.decide(token) {
         Decision::Convert { text, .. } => Some(text),
         Decision::Keep(_) => None,
+    };
+    if let Ok(p) = std::env::var("EVAL_DUMP") {
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+            let _ = writeln!(f, "{token}\t{}", r.clone().unwrap_or_default());
+        }
     }
+    r
 }
 
 /// Frequent words of each length, evenly spread over the ranks.

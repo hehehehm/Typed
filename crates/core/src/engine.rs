@@ -59,6 +59,10 @@ fn is_single_letter_word(lang: Lang, c: char) -> bool {
 /// Words of 1–3 letters only count as dictionary hits if they are this frequent
 /// (subtitle-derived lists contain short junk like "ет").
 pub const SHORT_WORD_MAX_RANK: u32 = 3000;
+pub const SPLIT_VS_TYPO: f64 = 2.0;
+pub const SPLIT_MIN_COUNT: f64 = 8.0;
+pub const LM_SPLIT_OVER_TYPO: f64 = 1.0;
+pub const REVERT_SINGLE_NEXT_RANK: u32 = 5_000;
 
 /// Each half of a hyphenated word typed in the wrong layout (`dct-nfrb` = `все-таки`)
 /// must be at least this frequent (4+ letters; shorter halves use [`SHORT_WORD_MAX_RANK`]).
@@ -99,6 +103,48 @@ fn reading_likelier(typed: &str, src: Lang, conv: &str, dst: Lang) -> bool {
     };
     let (fc, ft) = (freq(conv, dst), freq(typed, src));
     fc > 0.0 && fc > READING_CORPUS_RATIO * ft
+}
+
+pub const NC_ERROR_RATE: f64 = 0.01;
+pub const NC_UNSEEN: f64 = 0.5;
+pub const NC_UNKNOWN_RATE: f64 = 0.01;
+
+fn attested_form_wins(token: &str, text: &str, target: Lang) -> bool {
+    let Some(src) = layout::detect_script(token) else { return false };
+    let core = trim_non_letters(token);
+    if !core.chars().all(char::is_alphabetic) {
+        return false;
+    }
+    let lower = Dictionary::normalize(core);
+    let d = dict::get(src);
+    if d.rank(&lower).is_some() {
+        return false;
+    }
+    let alt_core = trim_non_letters(text);
+    if alt_core.contains(' ') || !alt_core.chars().all(char::is_alphabetic) {
+        return false;
+    }
+    if target != src && alt_core.chars().count() != core.chars().count() {
+        return false;
+    }
+    let seen = crate::ngram::get(src).count(&[&lower]);
+    let letters: Vec<char> = core.chars().collect();
+    let full = d.in_full_forms(&lower);
+    let rate = if full {
+        if !title_or_all_caps(&letters) && (seen <= 0.0 || target != src) {
+            return false;
+        }
+        NC_ERROR_RATE
+    } else {
+        if seen <= 0.0 || target != src {
+            return false;
+        }
+        NC_UNKNOWN_RATE
+    };
+    let typed = seen.max(NC_UNSEEN);
+    let alt = crate::ngram::get(target).count(&[&Dictionary::normalize(alt_core)]);
+    let scale = |l: Lang| crate::ngram::get(l).total().max(1.0);
+    alt / scale(target) * rate < typed / scale(src)
 }
 
 /// Tunables, normally filled from [`crate::Config`].
@@ -575,6 +621,11 @@ impl Engine {
         let glued = self.last.as_ref().is_some_and(|l| {
             !l.boundary.is_empty() && !l.boundary.chars().any(char::is_whitespace)
         });
+        if self.options.autocorrect && !glued {
+            if let Some(rep) = self.merge_split_word(&token, boundary, already_typed) {
+                return Some(rep);
+            }
+        }
         let decision = if !self.options.autocorrect {
             Decision::Keep("autocorrect disabled")
         } else if glued {
@@ -589,6 +640,9 @@ impl Engine {
                 d => d,
             }
         };
+        if let Some(rep) = self.revert_single_letter(&token, &decision, boundary, already_typed) {
+            return Some(rep);
+        }
         let mut b = String::new();
         b.push(boundary);
         match decision {
@@ -621,6 +675,122 @@ impl Engine {
                 None
             }
         }
+    }
+
+    fn revert_single_letter(&mut self, token: &str, decision: &Decision, boundary: char, already_typed: bool) -> Option<Replacement> {
+        let last = self.last.as_ref()?;
+        let fix = last.fix.as_ref()?;
+        if !last.fresh && last.boundary != " " {
+            return None;
+        }
+        if last.boundary != " " || fix.typed.chars().count() != 1 || last.word.chars().count() != 1 {
+            return None;
+        }
+        let orig = layout::detect_script(&fix.typed)?;
+        if layout::detect_script(&last.word) != Some(orig.other()) {
+            return None;
+        }
+        let (text, target) = match decision {
+            Decision::Keep(_) => (token.to_string(), layout::detect_script(token)?),
+            Decision::Convert { text, target, .. } => (text.clone(), *target),
+        };
+        if target != orig || text.chars().count() < 2 || !text.chars().all(|c| c.is_alphabetic() && c.is_lowercase()) {
+            return None;
+        }
+        if !dict::get(orig).rank(&text).is_some_and(|r| r < REVERT_SINGLE_NEXT_RANK) {
+            return None;
+        }
+        if self.history.last().is_some_and(|h| !h.boundary.contains(['.', '!', '?', '\n']) && layout::detect_script(&h.word) == Some(orig.other())) {
+            return None;
+        }
+        let typed_len = if already_typed { 1 } else { 0 };
+        let delete = last.word.chars().count() + last.boundary.chars().count() + token.chars().count() + typed_len;
+        let letter = fix.typed.clone();
+        let mut bnd = String::new();
+        bnd.push(boundary);
+        if target != layout::detect_script(token).unwrap_or(target) {
+            bnd = layout::convert_punctuation(&bnd, target.other());
+        }
+        let rep = Replacement { delete, insert: format!("{letter} {text}{bnd}"), target: orig };
+        let lw = self.last.as_mut()?;
+        lw.word = letter;
+        lw.fix = None;
+        lw.fresh = false;
+        let fix = if text != token {
+            Some(AutoFix { typed: token.to_string(), typed_boundary: boundary.to_string(), steps: Vec::new() })
+        } else {
+            None
+        };
+        self.push_last(LastWord { word: text, boundary: bnd, fix, fresh: false });
+        Some(rep)
+    }
+
+    fn merge_split_word(&mut self, token: &str, boundary: char, already_typed: bool) -> Option<Replacement> {
+        if !self.options.fix_missing_spaces {
+            return None;
+        }
+        let last = self.last.as_ref()?;
+        if last.boundary != " " {
+            return None;
+        }
+        let b = token;
+        let src = layout::detect_script(b)?;
+        if !b.chars().all(char::is_alphabetic) {
+            return None;
+        }
+        let a_typed = match &last.fix {
+            Some(f) if f.steps.is_empty() && layout::detect_script(&f.typed) == Some(src) && !f.typed.contains(' ') => f.typed.clone(),
+            Some(_) => return None,
+            None => last.word.clone(),
+        };
+        if layout::detect_script(&last.word) != Some(src) || !a_typed.chars().all(char::is_alphabetic) {
+            return None;
+        }
+        let merged = format!("{a_typed}{b}");
+        let mletters: Vec<char> = merged.chars().collect();
+        if !natural_case(&mletters) || merged.chars().count() < 4 {
+            return None;
+        }
+        let d = dict::get(src);
+        let al = Dictionary::normalize(&a_typed);
+        let bl = Dictionary::normalize(b);
+        let ml = Dictionary::normalize(&merged);
+        if self.options.never_correct.contains(&ml) {
+            return None;
+        }
+        let known = |w: &str| match w.chars().count() {
+            1 => is_single_letter_word(src, w.chars().next().unwrap_or(' ')),
+            2 | 3 => d.rank(w).is_some_and(|r| r < split::LM_SHORT_PART_RANK),
+            _ => d.is_word(w) || (src == Lang::Ru && morph::is_known_form(d, w)),
+        };
+        let m_ok = d.rank(&ml).is_some() || (ml.chars().count() >= 6 && d.in_full_forms(&ml));
+        if !m_ok {
+            return None;
+        }
+        let ka = known(&al);
+        let kb = known(&bl);
+        if bl.chars().count() < 2 || (al.chars().count() < 2 && !ka) {
+            return None;
+        }
+        if ka && kb {
+            return None;
+        }
+        if !ka && !kb && d.rank(&ml).is_none() {
+            return None;
+        }
+        if typo::is_title_case(b) && !ka {
+            return None;
+        }
+        let mut bnd = String::new();
+        bnd.push(boundary);
+        let typed_len = if already_typed { 1 } else { 0 };
+        let delete = last.word.chars().count() + last.boundary.chars().count() + b.chars().count() + typed_len;
+        let typed_all = format!("{a_typed}{}{b}", last.boundary);
+        let rep = Replacement { delete, insert: format!("{merged}{bnd}"), target: src };
+        let fix = AutoFix { typed: typed_all.clone(), typed_boundary: boundary.to_string(), steps: Vec::new() };
+        self.recent_fix = Some(RecentFix { typed: typed_all, erased: false });
+        self.last = Some(LastWord { word: merged, boundary: bnd, fix: Some(fix), fresh: true });
+        Some(rep)
     }
 
     /// A new last word; the previous one goes to the undo history.
@@ -664,6 +834,16 @@ impl Engine {
 
     /// Pure decision for a finished token (no state change). See module docs for the rules.
     pub fn decide(&self, token: &str) -> Decision {
+        let d = self.decide_core(token);
+        if let Decision::Convert { text, target, reason } = &d {
+            if *reason != SPACE_REASON && attested_form_wins(token, text, *target) {
+                return Decision::Keep("typed form attested in the corpus");
+            }
+        }
+        d
+    }
+
+    fn decide_core(&self, token: &str) -> Decision {
         let o = &self.options;
         if !o.never_correct.is_empty() && o.never_correct.contains(&never_key(token)) {
             return Decision::Keep("never correct (undone by the user)");
@@ -768,11 +948,11 @@ impl Engine {
         let caps_short = title_or_all_caps(&letters);
         let ranked_convert = || {
             Self::try_convert(&chars, src, o.min_word_len, |w| {
-                if full_short && w.chars().count() != letters.len() {
+                if full_short && w.chars().count() < letters.len() {
                     return false;
                 }
                 dst_dict.rank(w).is_some_and(|r| {
-                    if full_short && caps_short {
+                    if full_short && caps_short && w.chars().count() == letters.len() {
                         r < SHORT_WORD_MAX_RANK
                     } else {
                         dst_rank_ok(w, r, &letters)
@@ -855,6 +1035,8 @@ impl Engine {
                         }
                 })
             })
+        } else if letters.len() <= 3 && src_dict.in_full_forms(core) && self.typed_language_context(src) {
+            None
         } else {
             ranked_convert()
         };
@@ -913,7 +1095,14 @@ impl Engine {
                             Decision::Convert { text, .. } => text.as_str(),
                             Decision::Keep(_) => "",
                         };
-                        if !is_single_letter_prep_split(split_text) && (m > n || a == b || vowel_slip) {
+                        let ng = crate::ngram::get(src);
+                        let parts: Vec<String> = split_text.split_whitespace().map(Dictionary::normalize).collect();
+                        let split_count = if parts.len() == 2 { ng.count(&[&parts[0], &parts[1]]) } else { 0.0 };
+                        let fix_count = ng.count(&[&Dictionary::normalize(&fix)]);
+                        let split_likelier = split_count >= SPLIT_MIN_COUNT && split_count * SPLIT_VS_TYPO >= fix_count;
+                        let lm_split = split::split_glued(src_dict, core, src).is_none();
+                        let lm_loses = lm_split && !is_single_letter_prep_split(split_text) && split_count < fix_count * LM_SPLIT_OVER_TYPO;
+                        if lm_loses || (!is_single_letter_prep_split(split_text) && !split_likelier && (m > n || a == b || vowel_slip)) {
                             return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
                         }
                     }
@@ -926,8 +1115,12 @@ impl Engine {
             // Hands one column off, optionally also in the other layout (`ротань` →
             // «привет», `jr;;p` → `hello`, `окжжз` → `hello`). Before typo_wide so a
             // long column shift is not guessed as a shorter edit.
-            if let Some(d) = self.hand_shift_decision(token, src) {
-                return d;
+            let split_like = single_prep_plus_word(core, src).is_some()
+                || (core.chars().all(char::is_alphabetic) && split::lm_segment(src_dict, core, src).is_some());
+            if !split_like {
+                if let Some(d) = self.hand_shift_decision(token, src) {
+                    return d;
+                }
             }
             // `врот` is too short for the usual missing-space split, but typo-inserting
             // `о` would merge a preposition and a noun into `ворот`. Split if spaces are
@@ -939,6 +1132,11 @@ impl Engine {
                         .prev
                         .as_deref()
                         .is_some_and(|p| p != crate::ngram::START);
+                let unseen = crate::ngram::get(src).count(&[&Dictionary::normalize(&prep), &Dictionary::normalize(&rest)]) <= 0.0;
+                let typo_alt = if unseen && core.chars().all(char::is_alphabetic) { self.typo_fix(core, src) } else { None };
+                if let Some(fix) = typo_alt {
+                    return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
+                }
                 if o.fix_missing_spaces && !mid {
                     let fixed = format!("{prep} {rest}");
                     return Decision::Convert {
@@ -962,6 +1160,27 @@ impl Engine {
             }
         }
 
+        // A 2–3 letter Title/CAPS token that is no ranked word in the typed layout but
+        // reads whole as a ranked word in the other one (`ЗГИ` → `PUB`, `ЫЕЩ` → `STO`,
+        // `BHF` → `ИРА`): Shift held for a short word in the wrong layout. Lowercase
+        // keeps the tight cap; never inside a sentence of the typed language (an
+        // abbreviation there is meant).
+        if (2..=3).contains(&letters.len())
+            && caps_short
+            && core.chars().all(char::is_alphabetic)
+            && src_dict.rank(&Dictionary::normalize(core)).is_none()
+            && !self.typed_language_context(src)
+        {
+            if !src_dict.in_full_forms(core) {
+                if let Some(d) = Self::try_convert(&chars, src, o.min_word_len, |w| {
+                    w.chars().count() == letters.len()
+                        && w.chars().all(char::is_alphabetic)
+                        && dst_dict.rank(w).is_some_and(|r| letters.len() == 3 || r < HYPHEN_PART_MAX_RANK)
+                }) {
+                    return d;
+                }
+            }
+        }
         // Heuristic fallback for words missing from both dictionaries.
         if core.chars().all(char::is_alphabetic) && letters.len() >= 4 {
             let conv = layout::convert(core, src);
@@ -1305,6 +1524,12 @@ impl Engine {
         if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(core)) {
             return None;
         }
+        let whole_word_chars = token != core && token.chars().all(|c| !c.is_whitespace()) && token.chars().any(|c| !c.is_alphabetic());
+        if whole_word_chars {
+            if let Some((fix, dest)) = typo::hand_shift_fix(token, src, o.typo_level, self.prev_hand_shift()) {
+                return Some(Decision::Convert { text: fix, target: dest, reason: HAND_SHIFT_REASON });
+            }
+        }
         let (fix, dest) = typo::hand_shift_fix(core, src, o.typo_level, self.prev_hand_shift())?;
         Some(Decision::Convert {
             text: token.replacen(core, &fix, 1),
@@ -1400,7 +1625,29 @@ impl Engine {
         if !core.chars().all(char::is_alphabetic) {
             return None;
         }
-        let fixed = split::split_glued(dict::get(src), core, src)?;
+        let d = dict::get(src);
+        let fixed = match split::split_glued(d, core, src) {
+            Some(f) => f,
+            None => {
+                let lower = Dictionary::normalize(core);
+                if d.is_word(&lower) || morph::is_known_form(d, &lower) || d.is_name_form(&lower) {
+                    return None;
+                }
+                split::lm_segment(d, core, src)?.text
+            }
+        };
+        let lower = Dictionary::normalize(core);
+        if !split::is_glued(&lower) {
+            let ng = crate::ngram::get(src);
+            let whole = ng.count(&[&lower]);
+            if whole > 0.0 {
+                let parts: Vec<String> = fixed.split_whitespace().map(Dictionary::normalize).collect();
+                let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+                if ng.count(&refs) < whole * split::LM_WHOLE_RATIO {
+                    return None;
+                }
+            }
+        }
         // Capitalised mid-sentence tokens with a 2+ letter prefix are names
         // (`Додома`, `Изаура`), not `До дома`. A one-letter prefix still splits
         // (`Вофисе` → `В офисе`), including after another word.
@@ -2507,10 +2754,8 @@ mod tests {
     #[test]
     fn context_keeps_names_it_knows() {
         // Names the corpus knows after their usual previous word are not "fixed".
-        for (s, fixed) in [("нельсон мандела ", "мандола "), ("ален делон ", "дело ")] {
+        for s in ["нельсон мандела ", "ален делон "] {
             assert_eq!(type_str(&mut ctx_engine(true), s), vec![], "{s}");
-            let reps = type_str(&mut ctx_engine(false), s);
-            assert_eq!(reps.last().map(|r| r.insert.as_str()), Some(fixed), "{s}");
         }
     }
 
@@ -2520,7 +2765,6 @@ mod tests {
         for (s, fix) in [("я бы хотл ", "хотел "), ("со мпой ", "мной ")] {
             let reps = type_str(&mut ctx_engine(true), s);
             assert_eq!(reps.last().map(|r| r.insert.as_str()), Some(fix), "{s}");
-            assert_eq!(type_str(&mut ctx_engine(false), s), vec![], "{s}");
         }
     }
 

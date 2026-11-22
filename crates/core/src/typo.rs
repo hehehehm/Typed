@@ -302,7 +302,122 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
     }
     // After the first-letter-keeping search: an extra neighbour key at the start of a
     // short unknown word (`лдва` → `два`). Cautious stays on the strict rules only.
-    leading_neighbour_insert(d, word, lang, assume_unknown).filter(|f| !ngram::veto(ctx, word, f, lang))
+    leading_neighbour_insert(d, word, lang, assume_unknown)
+        .filter(|f| !ngram::veto(ctx, word, f, lang))
+        .or_else(|| channel_fix(d, word, lang, assume_unknown).filter(|f| !ngram::veto(ctx, word, f, lang)))
+}
+
+pub const CHANNEL_MIN_LEN: usize = 4;
+pub const CHANNEL_MARGIN: f64 = 1.5;
+pub const CHANNEL_CROWD: f64 = 10.0;
+pub const NC_RIVAL_UNSEEN: f64 = 0.5;
+pub const CHANNEL_MIN_COUNT: f64 = 2.0;
+pub const CHANNEL_SHORT_RANK: u32 = 10_000;
+
+fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
+    let chars: Vec<char> = word.chars().collect();
+    let n = chars.len();
+    if n < CHANNEL_MIN_LEN || !chars.iter().all(|c| c.is_alphabetic()) {
+        return None;
+    }
+    let lower = Dictionary::normalize(word);
+    if !assume_unknown && (d.is_word(&lower) || (lang == Lang::Ru && morph::is_known_form(d, &lower)) || d.is_name_form(&lower)) {
+        return None;
+    }
+    let w: Vec<char> = lower.chars().collect();
+    if w.len() != n {
+        return None;
+    }
+    let alphabet: Vec<char> = match lang {
+        Lang::En => EN_ALPHABET.chars().collect(),
+        Lang::Ru => RU_ALPHABET.chars().collect(),
+    };
+    let g = ngram::get(lang);
+    let total = g.total().max(1.0);
+    let mut best: std::collections::HashMap<String, (f64, bool)> = std::collections::HashMap::new();
+    let mut offer = |cand: Vec<char>, p: f64| {
+        let c: String = cand.iter().collect();
+        let m = cand.len();
+        let eligible = match d.rank_exact(&c) {
+            Some(r) => !(m < 3 || (m <= 4 && r >= CHANNEL_SHORT_RANK)),
+            None => {
+                if m < 4 || !d.in_full_forms(&c) {
+                    return;
+                }
+                false
+            }
+        };
+        let cnt = g.count(&[&c]);
+        let eligible = eligible && cnt >= CHANNEL_MIN_COUNT;
+        let score = cnt.max(NC_RIVAL_UNSEEN) / total * p;
+        let e = best.entry(c).or_insert((0.0, false));
+        if score > e.0 {
+            e.0 = score;
+        }
+        e.1 |= eligible;
+    };
+    for i in 1..n {
+        let mut v = w.clone();
+        let extra = v.remove(i);
+        let doubled = w[i - 1] == extra || (i + 1 < n && w[i + 1] == extra);
+        let near = adjacent_keys(extra, w[i - 1], lang) || (i + 1 < n && adjacent_keys(extra, w[i + 1], lang));
+        if doubled || near {
+            offer(v, 1.0);
+        }
+        if i + 1 < n && w[i] != w[i + 1] {
+            let mut v = w.clone();
+            v.swap(i, i + 1);
+            offer(v, 1.0);
+        }
+        for &c in &alphabet {
+            if c != w[i] && adjacent_keys(c, w[i], lang) {
+                let mut v = w.clone();
+                v[i] = c;
+                offer(v, 1.0);
+            }
+        }
+    }
+    for i in 1..=n {
+        for &c in &alphabet {
+            let mut v = w.clone();
+            v.insert(i, c);
+            let doubled = w[i - 1] == c || (i < n && w[i] == c);
+            offer(v, if doubled { 1.0 } else { 0.4 });
+        }
+    }
+    let mut ranked: Vec<(String, f64, bool)> = best.into_iter().map(|(k, (v, e))| (k, v, e)).collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.cmp(&b.0)));
+    if lang == Lang::En {
+        ranked.retain(|(c, _, _)| {
+            let cc: Vec<char> = c.chars().collect();
+            let last_only = cc.len() == w.len() && cc[..cc.len() - 1] == w[..w.len() - 1];
+            !en_end_letter_only(&lower, c) && !last_only
+        });
+    }
+    let (top, s1, ok) = ranked.first()?.clone();
+    if !ok {
+        return None;
+    }
+    let s2 = ranked.get(1).map_or(0.0, |x| x.1);
+    if ranked.iter().filter(|x| x.1 * CHANNEL_CROWD >= s1).count() > 2 {
+        return None;
+    }
+    if lang == Lang::Ru {
+        let tc: Vec<char> = top.chars().collect();
+        let rival_form = ranked.iter().skip(1).any(|(c, _, _)| {
+            let cc: Vec<char> = c.chars().collect();
+            let common = tc.iter().zip(&cc).take_while(|(a, b)| a == b).count();
+            common + 2 >= tc.len().max(cc.len())
+        });
+        if rival_form {
+            return None;
+        }
+    }
+    let margin: f64 = std::env::var("LK_CM").ok().and_then(|v| v.parse().ok()).unwrap_or(CHANNEL_MARGIN);
+    if s1 < s2 * margin {
+        return None;
+    }
+    Some(match_case(word, &top))
 }
 
 /// `-ить` / `-еть` written for `-ит` / `-ет` (`услышить` → `услышит`): the typed form is in
@@ -1208,9 +1323,9 @@ pub const HAND_SHIFT_MIN_LEN: usize = 4;
 /// 4-letter hand-shift targets must be at least this frequent.
 const HAND_SHIFT_SHORT_RANK: u32 = 5_000;
 /// Longer ranked targets may be this rare.
-const HAND_SHIFT_RANK: u32 = 20_000;
 /// An unranked full-form / curated word is accepted only from this length.
 const HAND_SHIFT_WORD_LEN: usize = 6;
+const HAND_SHIFT_TIE_RATIO: f64 = 4.0;
 
 /// A whole-token home-row misplacement: every key is one column left or right
 /// of what was meant, optionally also read in the other layout.
@@ -1281,6 +1396,15 @@ pub(crate) fn hand_shift_fix(
         let h = &hits[0];
         return Some((match_case(word, &h.text), h.dest));
     }
+    if hits.len() > 1 {
+        let score = |h: &Hit| crate::ngram::get(h.dest).count(&[&Dictionary::normalize(&h.text)]) / crate::ngram::get(h.dest).total().max(1.0);
+        let mut scored: Vec<(f64, usize)> = hits.iter().enumerate().map(|(i, h)| (score(h), i)).collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        if scored[0].0 > 0.0 && scored[0].0 >= scored[1].0 * HAND_SHIFT_TIE_RATIO {
+            let h = &hits[scored[0].1];
+            return Some((match_case(word, &h.text), h.dest));
+        }
+    }
     None
 }
 
@@ -1297,9 +1421,9 @@ fn hand_shift_target_ok(cand: &str, dest: Lang, _typed_n: usize) -> bool {
     }
     let d = dict::get(dest);
     if let Some(r) = d.rank(cand) {
-        return if n <= 4 { r < HAND_SHIFT_SHORT_RANK } else { r < HAND_SHIFT_RANK };
+        return if n <= 4 { r < HAND_SHIFT_SHORT_RANK } else { true };
     }
-    n >= HAND_SHIFT_WORD_LEN && d.is_word(cand)
+    (n >= HAND_SHIFT_WORD_LEN && d.is_word(cand)) || (dest == Lang::Ru && n >= 5 && crate::morph::is_mat_form(cand))
 }
 
 /// Which (direction, destination layout) takes `typed` to `fixed`, if unique.
