@@ -12,8 +12,9 @@
 //! did not depend on its context (`ln((seen + ½) / (expected + ½))`), so a pair never seen
 //! after a rare word means nothing, after a frequent one it counts against the word.
 
-use crate::dict::{key_bytes, Dictionary};
+use crate::dict::{from_key_bytes, key_bytes, Dictionary};
 use crate::layout::Lang;
+use fst::Streamer;
 use std::sync::OnceLock;
 
 static EN_NGRAMS: &[u8] = include_bytes!("../data/en_ngrams.fst");
@@ -83,6 +84,36 @@ impl Ngrams {
     /// Total tokens counted.
     pub fn total(&self) -> f64 {
         self.total
+    }
+
+    /// Walk every n-gram in the model. Special keys (`<s>`, the total sentinel) are
+    /// skipped. Each item is the list of normalised words and the approximate count.
+    pub fn visit(&self, mut f: impl FnMut(&[String], f64)) {
+        let Some(map) = &self.map else { return };
+        let mut stream = map.stream();
+        while let Some((k, v)) = stream.next() {
+            if k == [0x02] {
+                continue;
+            }
+            let mut parts: Vec<String> = Vec::new();
+            let mut ok = true;
+            for chunk in k.split(|&b| b == b' ') {
+                if chunk == [0x01] {
+                    parts.push("<s>".into());
+                    continue;
+                }
+                match from_key_bytes(chunk) {
+                    Some(w) if !w.is_empty() => parts.push(w),
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok && !parts.is_empty() {
+                f(&parts, crate::ngram::dequantise(v));
+            }
+        }
     }
 }
 

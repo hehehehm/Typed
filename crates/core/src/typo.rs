@@ -416,6 +416,8 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
     // when `minute` exists), but wins only when [`tail_ok`].
     let can_win = |r: u32, cand: &str| r < TAIL_RANK || tail_ok(&lower, cand);
     let mut pick = Pick::new(&lower);
+    let mut direct_pick = Pick::new(&lower);
+    let mut saw_len_change = false;
     for cand in edits1(&lower, &alphabet) {
         if cand.chars().count() < MIN_LEN - 1 {
             continue;
@@ -434,7 +436,9 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
             continue;
         }
         // Never change just the ending of a form: `удаляю` / `удалю`, `файлами` / `файлам`.
-        if lang == Lang::Ru && morph::only_ending_differs(&lower_s, &cand) {
+        // A same-row neighbour-key slip in the ending is still a typo (`услушу` →
+        // `услугу`: ш↔г), not two case forms of one word (`файлами` / `файлам`).
+        if lang == Lang::Ru && morph::only_ending_differs(&lower_s, &cand) && !is_direct_neighbour_subst(&lower, &cand, lang) {
             continue;
         }
         if lang == Lang::En && (en_affix_only(&lower_s, &cand) || en_end_letter_only(&lower_s, &cand)) {
@@ -446,6 +450,15 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
             // as SWAP_BONUS times more frequent (`компьютре` → `компьютер`, not `компьютере`).
             let ok = can_win(r, &cand);
             let r = if is_swap(&lower, &cand) { r / SWAP_BONUS } else { r };
+            // Neighbour-key substitutions and neighbour transpositions beat
+            // sound-alike or far substitutions when both exist (`услушу` → `услугу`,
+            // not `услышу`).
+            if cand.chars().count() != lower.len() {
+                saw_len_change = true;
+            }
+            if is_direct_neighbour_subst(&lower, &cand, lang) {
+                direct_pick.offer(r, cand.clone(), ok);
+            }
             pick.offer(r, cand, ok);
         }
     }
@@ -552,8 +565,28 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
             return full_winner(&lower, found).map(|w| match_case(word, &w));
         }
     }
-    let w = pick.winner()?;
-    Some(match_case(word, &w))
+    let same_suffix_seen = pick.same.best.is_some();
+    let w = pick.winner();
+    // A unique same-row neighbour substitution beats a suffix-keeping diagonal
+    // or sound-alike substitution (`услушу` → `услугу`, not `услышу`), but does
+    // not override an insertion, deletion or transposition.
+    if let Some(direct) = direct_pick.winner() {
+        let subst = |cand: &str| {
+            let cv: Vec<char> = cand.chars().collect();
+            cv.len() == lower.len() && cv.iter().zip(&lower).filter(|(a, b)| *a != *b).count() == 1
+        };
+        if let Some(cur) = &w {
+            if subst(cur) && !is_direct_neighbour_subst(&lower, cur, lang) {
+                return Some(match_case(word, &direct));
+            }
+        } else if !same_suffix_seen && !saw_len_change {
+            // No suffix-keeping candidate: the unique same-row neighbour slip sat
+            // in the other-ending bucket and was blocked by a runner-up there.
+            // Do not steal a missing-letter fix (`програма` → `программа`).
+            return Some(match_case(word, &direct));
+        }
+    }
+    Some(match_case(word, &w?))
 }
 
 /// A frequent word (rank under [`TAIL_RANK`]) two slips away makes a rare one-slip fix
@@ -928,6 +961,40 @@ pub(crate) fn adjacent_keys_raw(a: char, b: char, lang: Lang) -> bool {
         },
         _ => false,
     }
+}
+
+/// 1 = orthogonal (same row or column, sharing a side); 2 = diagonal (sharing a corner).
+pub(crate) fn key_adjacency(a: char, b: char, lang: Lang) -> Option<u8> {
+    if !adjacent_keys_raw(a, b, lang) {
+        return None;
+    }
+    let ((ra, ca), (rb, cb)) = (key_pos(a, lang)?, key_pos(b, lang)?);
+    let (dr, dc) = ((rb - ra).abs(), (cb - ca).abs());
+    match (dr, dc) {
+        (0, 1) | (1, 0) => Some(1),
+        (1, 1) => Some(2),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_direct_neighbour_subst(typed: &[char], cand: &str, lang: Lang) -> bool {
+    let cv: Vec<char> = cand.chars().collect();
+    if cv.len() != typed.len() {
+        return false;
+    }
+    let diff: Vec<usize> = (0..cv.len()).filter(|&i| cv[i] != typed[i]).collect();
+    matches!(diff.as_slice(), [i] if key_adjacency(typed[*i], cv[*i], lang) == Some(1))
+}
+
+/// Same-length typo that changes exactly one letter to a neighbouring key.
+#[allow(dead_code)]
+pub(crate) fn is_neighbour_subst(typed: &[char], cand: &str, lang: Lang) -> bool {
+    let cv: Vec<char> = cand.chars().collect();
+    if cv.len() != typed.len() {
+        return false;
+    }
+    let diff: Vec<usize> = (0..cv.len()).filter(|&i| cv[i] != typed[i]).collect();
+    matches!(diff.as_slice(), [i] if adjacent_keys(typed[*i], cv[*i], lang))
 }
 
 /// `cand` is not a same-length one-letter substitution of `typed`, or the two letters
@@ -1574,6 +1641,19 @@ mod tests {
         assert_eq!(hand_shift_fix("рот", Lang::Ru, Level::Normal, None), None);
         assert_eq!(hand_shift_which("ротань", "привет"), Some((-1, Lang::Ru)));
         assert_eq!(hand_shift_which("jr;;p", "hello"), Some((-1, Lang::En)));
+    }
+
+
+    #[test]
+    fn neighbour_subst_beats_non_neighbour() {
+        // ш↔г are neighbours on ЙЦУКЕН; у↔ы is only a vowel/sound-alike slip.
+        assert_eq!(suggest("услушу", Lang::Ru).as_deref(), Some("услугу"));
+        assert_eq!(suggest_level("услушу", Lang::Ru, Level::Aggressive).as_deref(), Some("услугу"));
+        assert_eq!(suggest_level("услушу", Lang::Ru, Level::Normal).as_deref(), Some("услугу"));
+        // A unique same-row neighbour substitution is a strict one-edit fix, so
+        // Cautious applies it too.
+        assert_eq!(suggest_level("услушу", Lang::Ru, Level::Cautious).as_deref(), Some("услугу"));
+        assert_eq!(suggest("Услушу", Lang::Ru).as_deref(), Some("Услугу"));
     }
 
 }

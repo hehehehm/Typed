@@ -1,0 +1,59 @@
+# typist_real_failures.txt
+# category<TAB>typed<TAB>expected
+# Deterministic regression cases. Must be 100% at typo Level::Normal with fix_typos on.
+
+hyphen	все-атки	все-таки
+hyphen	Все-атки	Все-таки
+hyphen	ВСЕ-АТКИ	ВСЕ-ТАКИ
+hyphen	все-такии	все-таки
+hyphen	как-от	как-то
+hyphen	кто-от	кто-то
+hyphen	где-нибудть	где-нибудь
+hyphen	из-заа	из-за
+hyphen	по-моемуу	по-моему
+hyphen	все-таки	все-таки
+hyphen	кто-то	кто-то
+hyphen	из-за	из-за
+hyphen	по-моему	по-моему
+hyphen	кое-как	кое-как
+hyphen	кое-как.	кое-как.
+hyphen	во-первых	во-первых
+hyphen	по-новому	по-новому
+hyphen	когда-нибудь	когда-нибудь
+
+ambiguous	услушу	услугу
+ambiguous	Услушу	Услугу
+ambiguous	УСЛУШУ	УСЛУГУ
+
+space	в рот	в рот
+space	врот	в рот
+space	В РОТ	В РОТ
+space	ВРОТ	В РОТ
+space	ЕБАНЫЙ В РОТ	ЕБАНЫЙ В РОТ
+space	ЕБАНЫЙ ВРОТ	ЕБАНЫЙ В РОТ
+space	ебаный в рот	ебаный в рот
+space	отебе	о тебе
+space	отсуда	отсюда
+space	вофисе	в офисе
+
+mat	ЗАЕБАЛСЯ	ЗАЕБАЛСЯ
+mat	заебался	заебался
+mat	ЕБАНЫЙ	ЕБАНЫЙ
+mat	ебаный	ебаный
+mat	отъебись	отъебись
+mat	пиздец	пиздец
+
+perm	ядл	для
+perm	ент	нет
+
+known	тллюминатора	иллюминатора
+known	тиллюминатора	иллюминатора
+known	ротань	привет
+known	загран	загран
+known	жлементы	элементы
+known	клапвишь	клавиш
+known	компьютре	компьютер
+known	пирвет	привет
+
+layout	AJY	ФОН
+layout	Ajy	Фон

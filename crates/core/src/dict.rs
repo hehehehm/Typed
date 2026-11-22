@@ -11,6 +11,7 @@
 //! "is this a real word" ([`Dictionary::is_word`]); ranks and fix targets stay with the lists.
 
 use crate::layout::Lang;
+use fst::Streamer;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -80,6 +81,22 @@ pub fn key_bytes(word: &str) -> Option<Vec<u8>> {
             _ => None,
         })
         .collect()
+}
+
+/// Inverse of [`key_bytes`]: reconstruct a normalised word from FST key bytes.
+pub fn from_key_bytes(bytes: &[u8]) -> Option<String> {
+    let mut s = String::with_capacity(bytes.len());
+    for &b in bytes {
+        let c = if (b'a'..=b'z').contains(&b) {
+            b as char
+        } else if (0xE0..=0xFF).contains(&b) {
+            char::from_u32('а' as u32 + (b - 0xE0) as u32)?
+        } else {
+            return None;
+        };
+        s.push(c);
+    }
+    Some(s)
 }
 
 impl Dictionary {
@@ -222,6 +239,17 @@ impl Dictionary {
     /// All words with their ranks (normalised form).
     pub fn iter(&self) -> impl Iterator<Item = (&str, u32)> {
         self.ranks.iter().map(|(w, &r)| (w.as_str(), r))
+    }
+
+    /// Visit every form in the full-form FST (normalised letters, `ё` folded to `е`).
+    pub fn visit_full_forms(&self, mut f: impl FnMut(&str)) {
+        let Some(set) = &self.known else { return };
+        let mut stream = set.stream();
+        while let Some(k) = stream.next() {
+            if let Some(w) = from_key_bytes(k) {
+                f(&w);
+            }
+        }
     }
 
     /// Rank of an already normalised word (no case folding, no allocation).

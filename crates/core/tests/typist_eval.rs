@@ -1,5 +1,5 @@
 //! Typist testers: a seeded, engine-level keystroke simulation of two typist
-//! personas (no GUI, no hooks, no LLM). Run with:
+//! personas — torpyga, gramotey, zlodey — (no GUI, no hooks, no LLM). Run with:
 //!
 //! ```text
 //! EVAL_SEED=76 EVAL_N=5000 EVAL_OUT=/tmp/typist.md \
@@ -9,7 +9,7 @@
 //! Env: `EVAL_SEED` (default 76), `EVAL_N` (phrases at Normal, default 5000),
 //! `EVAL_N_OTHER` (Cautious/Aggressive, default 1000), `EVAL_LEVEL`
 //! (`normal` / `cautious` / `aggressive` / `all`, default `all`),
-//! `EVAL_PERSONA` (`torpyga` / `gramotey` / `all`), `EVAL_OUT` (markdown
+//! `EVAL_PERSONA` (`torpyga` / `gramotey` / `zlodey` / `all`), `EVAL_OUT` (markdown
 //! and/or JSON path). Options follow [`Config::engine_options`] (typos and
 //! missing-space fixes forced on; `undo_on_backspace` as in a new config).
 use layout_keeper_core::{
@@ -28,7 +28,7 @@ const PHYS_ROWS: [&str; 4] = [
     "asdfghjkl;'",
     "zxcvbnm,./",
 ];
-const SPACE_NEIGHBOURS: &[char] = &['c', 'v', 'b', 'n', 'm'];
+const SPACE_NEIGHBOURS: &[char] = &['c', 'v', 'b', 'n', 'm', ',', '.', 'x'];
 
 const US_SHIFT: &[(char, char)] = &[
     ('`', '~'),
@@ -250,8 +250,31 @@ const GRAMOTEY: Profile = Profile {
     mix: Mix { ru: 0.18, en: 0.17, chat: 0.65 },
 };
 
+/// Angry fast typist: caps, mat, dropped spaces, doubled letters, sticky shift.
+const ZLODEY: Profile = Profile {
+    name: "zlodey",
+    rates: Rates {
+        sub: 0.050,
+        ins: 0.020,
+        omit: 0.020,
+        double: 0.040,
+        transp: 0.018,
+        wrong_layout: 0.08,
+        mid_switch: 0.03,
+        hand_shift: 0.010,
+        miss_space: 0.08,
+        space_nb: 0.030,
+        stuck_shift: 0.040,
+        caps: 0.080,
+        spelling: 0.10,
+        self_fix: 0.08,
+        undo_retype: 0.04,
+    },
+    mix: Mix { ru: 0.35, en: 0.10, chat: 0.55 },
+};
+
 fn profiles() -> Vec<Profile> {
-    vec![TORPYGA, GRAMOTEY]
+    vec![TORPYGA, GRAMOTEY, ZLODEY]
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +517,45 @@ fn perturb(mut actions: Vec<Action>, rates: Rates, rng: &mut Rng) -> Vec<Action>
                 out.push(other.clone());
                 i += 1;
             }
+        }
+    }
+    out
+}
+
+
+/// Treat hyphenated words as typo targets: errors land in either letter segment,
+/// not on the hyphen itself.
+fn perturb_hyphen_aware(form: &str, actions: Vec<Action>, rates: Rates, rng: &mut Rng) -> Vec<Action> {
+    if !form.contains('-') {
+        return perturb(actions, rates, rng);
+    }
+    let mut segs: Vec<Vec<Action>> = vec![Vec::new()];
+    for a in actions {
+        let hyphen = matches!(a, Action::Key { phys: '-', .. } | Action::Exact('-'));
+        if hyphen {
+            segs.push(vec![a]);
+            segs.push(Vec::new());
+        } else {
+            segs.last_mut().unwrap().push(a);
+        }
+    }
+    let letter_idx: Vec<usize> = segs
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.iter().any(|a| matches!(a, Action::Key { .. })))
+        .map(|(i, _)| i)
+        .collect();
+    let typo_at = if !letter_idx.is_empty() && rng.chance(0.65) {
+        Some(*rng.pick(&letter_idx))
+    } else {
+        None
+    };
+    let mut out = Vec::new();
+    for (i, seg) in segs.into_iter().enumerate() {
+        if typo_at == Some(i) {
+            out.extend(perturb(seg, rates, rng));
+        } else {
+            out.extend(seg);
         }
     }
     out
@@ -752,7 +814,7 @@ fn play_form(
     };
     // Keep a clean whole-hand shift so the engine can recover it; other slips
     // are applied on unshifted words as before.
-    let plan = if shifted { plan } else { perturb(plan, rates, rng) };
+    let plan = if shifted { plan } else { perturb_hyphen_aware(&form, plan, rates, rng) };
     let plan = self_fix(plan, typist, form, rates.self_fix, rng);
     exec_actions(e, out, &plan, typist)
 }
@@ -1154,8 +1216,8 @@ fn typist_eval_smoke() {
     let corpus = Corpus::load();
     assert!(!corpus.chat.is_empty() && !corpus.ru.is_empty() && !corpus.en.is_empty());
     let (md, json) = run_suite(20, 0, 1, &[typo::Level::Normal], &profiles(), &corpus);
-    assert!(md.contains("torpyga") && md.contains("gramotey"), "{md}");
-    assert!(json["runs"].as_array().map(|a| a.len()).unwrap_or(0) == 2);
+    assert!(md.contains("torpyga") && md.contains("gramotey") && md.contains("zlodey"), "{md}");
+    assert!(json["runs"].as_array().map(|a| a.len()).unwrap_or(0) == 3);
 }
 
 #[test]

@@ -268,11 +268,152 @@ pub fn only_ending_differs(a: &str, b: &str) -> bool {
 /// `word` (any case) is a Russian dictionary word or a plausible form of one: the typed
 /// word must not be "fixed". Needs one sibling with a telling ending (`оценить` for
 /// `оцени`) or two with short ones; any stem of 3+ letters.
+/// Productive morphology of Russian obscenities (mat). These forms are real words of
+/// the language and must never be typo-corrected into a nearby dictionary word
+/// (`заебался` is not `забрался`). Built from a stem, an optional verbal prefix,
+/// an inflectional ending and an optional reflexive postfix — not a word list.
+const MAT_STEMS: &[&str] = &[
+    "еб", "еба", "ебн", "ебуч", "ебл", "ебан",
+    "бляд", "бля", "блят",
+    "хуй", "хуя", "хуе", "хуи", "хуйн", "хуев",
+    "пизд", "пизж",
+    "сук", "суч",
+    "муд", "мудак", "мудо",
+    "гандон", "гондон",
+    "пидор", "пидар", "пидр", "пидарас", "пидорас",
+    "хер", "херо", "херов",
+    "жоп", "говн", "срак",
+];
+
+const MAT_PREFIXES: &[&str] = &[
+    "недо", "пере", "раз", "рас", "под", "при", "про", "изо", "ото", "обо", "без",
+    "из", "ис", "от", "за", "вы", "на", "до", "во", "со", "об", "по", "у", "с", "в", "о",
+    "",
+];
+
+/// Endings that occur on mat stems but are missing from the regular paradigms
+/// (colloquial participles with one н, nouns in -ец/-ня/-ак, etc.).
+const MAT_EXTRA_ENDS: &[&str] = &[
+    "аный", "аная", "аное", "аные", "аных", "аным", "аными", "аном", "аную",
+    "еный", "еная", "еное", "еные",
+    "ть", "ти", "чь", "ться", "тись",
+    "ец", "ца", "цу", "цом", "це",
+    "ня", "ни", "не", "ню", "ней", "нею", "ней",
+    "ак", "ака", "аки", "аку", "аком", "аков", "аками",
+    "ин", "ина", "ины", "ине", "ину",
+    "ло", "ла", "лы",
+    "ота", "оты", "оте",
+    "ись", "ища", "ище", "ищи",
+    "уч", "учий", "учая", "учка",
+    "ный", "ная", "ное", "ные",
+    "ывать", "ываю", "ываешь", "ывает", "ываем", "ываете", "ывают",
+    "ывал", "ывала", "ывало", "ывали", "ывай", "ывайте", "ывая",
+    "ивать", "иваю", "иваешь", "ивает", "иваем", "иваете", "ивают",
+    "ивал", "ивала", "ивало", "ивали", "ивай",
+];
+
+fn mat_ending_ok(end: &str) -> bool {
+    end.is_empty() || is_ending(end) || MAT_EXTRA_ENDS.contains(&end)
+}
+
+/// `word` (any case; `ё` folded) is a productive mat form: optional prefix, a mat
+/// stem, an inflectional ending, optional `-ся`/`-сь`. A hard or soft sign may sit
+/// between the prefix and the stem (`отъебись`).
+pub fn is_mat_form(word: &str) -> bool {
+    let w = Dictionary::normalize(word);
+    if w.chars().count() < 3 || !w.chars().all(|c| matches!(c, 'а'..='я' | 'ё') || c == 'ъ' || c == 'ь') {
+        return false;
+    }
+    let bases = [
+        w.as_str(),
+        w.strip_suffix("ся").unwrap_or(w.as_str()),
+        w.strip_suffix("сь").unwrap_or(w.as_str()),
+    ];
+    for base in bases {
+        for prefix in MAT_PREFIXES {
+            let Some(mut rest) = base.strip_prefix(prefix) else { continue };
+            if rest.starts_with('ъ') || rest.starts_with('ь') {
+                rest = &rest[rest.chars().next().unwrap().len_utf8()..];
+            }
+            if rest.is_empty() {
+                continue;
+            }
+            if mat_stem_with_ending(rest) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn mat_stem_with_ending(rest: &str) -> bool {
+    for stem in MAT_STEMS {
+        if let Some(end) = rest.strip_prefix(stem) {
+            if !mat_ending_ok(end) {
+                continue;
+            }
+            // Two-letter stems (`еб`) plus a one-letter ending invent ordinary
+            // words (`отебе` ≠ от+еб+е). Empty or 2+ letter endings are real
+            // (`заеб`, `заебал`). Longer stems (`бляд`, `хуй`) take any ending.
+            let stem_n = stem.chars().count();
+            let end_n = end.chars().count();
+            if stem_n <= 2 && end_n == 1 {
+                continue;
+            }
+            return true;
+        }
+    }
+    false
+}
+
+/// Productive expansion of prefix × stem × ending × reflexive for evals and
+/// audits. Includes both empty and typical endings (regular paradigms + extras).
+pub fn mat_forms() -> Vec<String> {
+    let mut ends: Vec<&str> = all_endings().iter().copied().collect();
+    ends.extend_from_slice(MAT_EXTRA_ENDS);
+    ends.sort_unstable();
+    ends.dedup();
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for prefix in MAT_PREFIXES {
+        for stem in MAT_STEMS {
+            for end in &ends {
+                for refl in ["", "ся", "сь"] {
+                    if !refl.is_empty() && end.is_empty() {
+                        continue;
+                    }
+                    if stem.chars().count() <= 2 && end.chars().count() == 1 {
+                        continue;
+                    }
+                    // Hard sign after a prefix ending in a consonant, when the
+                    // stem starts with a vowel (`отъебался`).
+                    let signs: &[&str] = if !prefix.is_empty()
+                        && !"аеёиоуыэюя".contains(prefix.chars().last().unwrap_or(' '))
+                        && "аеёиоуыэюя".contains(stem.chars().next().unwrap_or(' '))
+                    {
+                        &["", "ъ"]
+                    } else {
+                        &[""]
+                    };
+                    for s in signs {
+                        let w = format!("{prefix}{s}{stem}{end}{refl}");
+                        if w.chars().count() >= 3 && seen.insert(w.clone()) {
+                            out.push(w);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn is_known_form(d: &Dictionary, word: &str) -> bool {
     let w = Dictionary::normalize(word);
     d.is_word(&w)
         || d.is_word(&format!("{w}ся"))
         || d.is_word(&format!("{w}сь"))
+        || is_mat_form(&w)
         || evidence_any(d, &w).is_some_and(|(n, _, _)| n >= 2)
 }
 
@@ -460,6 +601,44 @@ mod tests {
         assert!(ok("системный", "ситстемрым", "системным"));
         // системой may be a noun: no adjective form from it.
         assert!(!ok("системой", "ситстемрым", "системым"));
+    }
+
+    #[test]
+    fn mat_forms_are_known_and_not_ordinary_words() {
+        let d = dict::get(Lang::Ru);
+        for w in [
+            "заебался",
+            "ЗАЕБАЛСЯ",
+            "ебаный",
+            "ЕБАНЫЙ",
+            "отъебись",
+            "охуеть",
+            "нахуя",
+            "похуй",
+            "пиздец",
+            "блядь",
+            "блять",
+            "сука",
+            "мудак",
+            "гандон",
+            "пидор",
+            "выебывается",
+            "заебись",
+            "распидорасило",
+        ] {
+            assert!(is_mat_form(w), "mat form {w}");
+            assert!(is_known_form(d, w), "known {w}");
+        }
+        // Ordinary words that only share letters with a stem must not be tagged.
+        for w in ["забрался", "собрался", "мудрый", "мудрость", "хлеб", "небо", "характер"] {
+            assert!(!is_mat_form(w), "false mat {w}");
+        }
+        let generated = mat_forms();
+        assert!(generated.len() > 10_000, "productive expansion too small: {}", generated.len());
+        assert!(generated.iter().any(|w| w == "заебался"), "заебался must be generated");
+        for w in generated.iter().filter(|w| w.chars().count() >= 4).take(200) {
+            assert!(is_mat_form(w), "generated form not recognised: {w}");
+        }
     }
 }
 

@@ -36,6 +36,7 @@ use crate::buffer::WordBuffer;
 use crate::dict::{self, Dictionary};
 use crate::filename;
 use crate::layout::{self, Lang};
+use crate::morph;
 use crate::ngram::Context;
 use crate::split;
 use crate::typo;
@@ -270,6 +271,27 @@ fn looks_like_url_or_email(t: &str) -> bool {
 fn natural_case(letters: &[char]) -> bool {
     let up = letters.iter().filter(|c| c.is_uppercase()).count();
     up == 0 || up == letters.len() || (up == 1 && letters[0].is_uppercase())
+}
+
+/// All-caps or Capitalised (not lowercase). Short wrong-layout words in this
+/// casing may convert into a ranked word past [`SHORT_WORD_MAX_RANK`]; lowercase
+/// keeps the tight cap so `ajy` is not a new switch.
+fn title_or_all_caps(letters: &[char]) -> bool {
+    if letters.is_empty() {
+        return false;
+    }
+    let up = letters.iter().filter(|c| c.is_uppercase()).count();
+    up == letters.len() || (up == 1 && letters[0].is_uppercase())
+}
+
+/// Destination-word frequency check used by layout conversion. 4+ letters: any
+/// rank. 2–3 letters: under [`SHORT_WORD_MAX_RANK`], or any rank when the typist
+/// used Title/CAPS (`AJY` → `ФОН`; lowercase `ajy` stays).
+fn dst_rank_ok(w: &str, r: u32, letters: &[char]) -> bool {
+    let n = w.chars().count();
+    n > 3
+        || r < SHORT_WORD_MAX_RANK
+        || (n == 3 && r < HYPHEN_PART_MAX_RANK && title_or_all_caps(letters))
 }
 
 /// The letters without the ones at either end that are signs on the other layout
@@ -684,7 +706,17 @@ impl Engine {
                     let conv_word = is_single_letter_word(dst, lower(conv_letters[0]));
                     // A lone letter that is a word in only one language goes there:
                     // d → в, z → я, ф → a, ш → i; real ones (a, I; в, и, я) stay.
-                    if conv_word && !typed_word {
+                    let ctx = self.left_context(src);
+                    let lc = core.to_lowercase();
+                    let ok_ctx = |p: &str| {
+                        p != crate::ngram::START
+                            && p.chars().count() >= 2
+                            && (dict::get(src).contains(p)
+                                || crate::ngram::get(src).count(&[p, &lc]) > 0.0)
+                    };
+                    let multi_ctx = ctx.prev.as_deref().is_some_and(ok_ctx)
+                        || ctx.prev2.as_deref().is_some_and(ok_ctx);
+                    if conv_word && !typed_word && !multi_ctx {
                         return Decision::Convert { text: converted, target: dst, reason: SINGLE_WORD_REASON };
                     }
                     // Neither is a word (q/й, x/ч): follow the app's assigned language.
@@ -700,10 +732,18 @@ impl Engine {
             // pass as «тё» = «те» (её is the one real ё word here).
             let chars: Vec<char> = token.chars().collect();
             let dst_dict = dict::get(src.other());
+            let all_caps_word = chars.len() >= 3
+                && chars.iter().all(|c| layout::convert_char(*c, src).is_alphabetic());
             if let Some(d) = Self::try_convert(&chars, src, o.min_word_len, |w| {
                 let lower = w.to_lowercase();
-                (!lower.contains('ё') || lower == "её")
-                    && dst_dict.rank(w).is_some_and(|r| r < SIGN_WORD_MAX_RANK)
+                if lower.contains('ё') && lower != "её" {
+                    return false;
+                }
+                let wletters: Vec<char> = w.chars().collect();
+                let whole_caps = all_caps_word
+                    && wletters.len() == chars.len()
+                    && title_or_all_caps(&wletters);
+                dst_dict.rank(w).is_some_and(|r| whole_caps || r < SIGN_WORD_MAX_RANK)
             }) {
                 return d;
             }
@@ -712,15 +752,31 @@ impl Engine {
         if !natural_case(edge_signs_trimmed(&letters, src)) {
             return Decision::Keep("unnatural casing (password-like)");
         }
+        // Productive mat forms are valid words: never typo-fix or flip them into
+        // an English look-alike (`всукы` ↛ `ders`, `ЗАЕБАЛСЯ` stays).
+        if src == Lang::Ru && morph::is_mat_form(core) {
+            return Decision::Keep("known mat form");
+        }
         let dst = src.other();
         let src_dict = dict::get(src);
         let dst_dict = dict::get(dst);
 
         let chars: Vec<char> = token.chars().collect();
 
+        let full_short = letters.len() == 3 && src_dict.in_full_forms(core);
+        let caps_short = title_or_all_caps(&letters);
         let ranked_convert = || {
             Self::try_convert(&chars, src, o.min_word_len, |w| {
-                dst_dict.rank(w).is_some_and(|r| w.chars().count() > 3 || r < SHORT_WORD_MAX_RANK)
+                if full_short && w.chars().count() != letters.len() {
+                    return false;
+                }
+                dst_dict.rank(w).is_some_and(|r| {
+                    if full_short && caps_short {
+                        r < SHORT_WORD_MAX_RANK
+                    } else {
+                        dst_rank_ok(w, r, &letters)
+                    }
+                })
             })
         };
         // Passed the casing guard only because of a shifted sign at the edge
@@ -790,7 +846,7 @@ impl Engine {
             Self::try_convert(&chars, src, o.min_word_len, |w| {
                 let whole = w.chars().count() == letters.len();
                 dst_dict.rank(w).is_some_and(|r| {
-                    (w.chars().count() > 3 || r < SHORT_WORD_MAX_RANK)
+                    dst_rank_ok(w, r, &letters)
                         && if whole {
                             r < FULL_FORM_YIELD_RANK || reading_likelier(core, src, w, dst)
                         } else {
@@ -849,7 +905,14 @@ impl Engine {
                             let v = |c: char| "аеёиоуыэюяAEIOUaeiou".contains(c.to_lowercase().next().unwrap_or(c));
                             n == m && diff.len() == 1 && v(x[diff[0]]) && v(y[diff[0]])
                         };
-                        if m > n || a == b || vowel_slip {
+                        // A typo that inserts letters and merges a single-letter
+                        // preposition with the next word (`врот` → `ворот` instead of
+                        // `в рот`) is never preferred over the split.
+                        let split_text = match &d {
+                            Decision::Convert { text, .. } => text.as_str(),
+                            Decision::Keep(_) => "",
+                        };
+                        if !is_single_letter_prep_split(split_text) && (m > n || a == b || vowel_slip) {
                             return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
                         }
                     }
@@ -865,10 +928,31 @@ impl Engine {
             if let Some(d) = self.hand_shift_decision(token, src) {
                 return d;
             }
-            if core.chars().all(char::is_alphabetic) {
+            // `врот` is too short for the usual missing-space split, but typo-inserting
+            // `о` would merge a preposition and a noun into `ворот`. Split if spaces are
+            // on, otherwise leave the token alone.
+            if let Some((prep, rest)) = single_prep_plus_word(core, src) {
+                let mid = typo::is_title_case(core)
+                    && self
+                        .left_context(src)
+                        .prev
+                        .as_deref()
+                        .is_some_and(|p| p != crate::ngram::START);
+                if o.fix_missing_spaces && !mid {
+                    let fixed = format!("{prep} {rest}");
+                    return Decision::Convert {
+                        text: token.replacen(core, &fixed, 1),
+                        target: src,
+                        reason: SPACE_REASON,
+                    };
+                }
+            } else if core.chars().all(char::is_alphabetic) {
                 if let Some(fix) = self.typo_fix(core, src) {
                     return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
                 }
+            }
+            if let Some(d) = self.hyphen_typo_decision(token, src) {
+                return d;
             }
             // Wrong layout and a typo at once: the other-layout reading is one or two
             // slips from a word there (`xnjj` → `что`).
@@ -1093,6 +1177,97 @@ impl Engine {
         None
     }
 
+    /// A typo in one half of a hyphenated word (`все-атки` → `все-таки`), only with
+    /// `fix_typos` at Normal/Aggressive. Already-valid hyphenated words are left alone.
+    fn hyphen_typo_decision(&self, token: &str, src: Lang) -> Option<Decision> {
+        let o = &self.options;
+        if !o.fix_typos || o.typo_level == typo::Level::Cautious {
+            return None;
+        }
+        let core = trim_non_letters(token);
+        if !core.contains('-') || !core.chars().all(|c| c.is_alphabetic() || c == '-') {
+            return None;
+        }
+        let (a, b) = core.split_once('-')?;
+        if a.is_empty() || b.is_empty() || b.contains('-') {
+            return None;
+        }
+        if !a.chars().all(char::is_alphabetic) || !b.chars().all(char::is_alphabetic) {
+            return None;
+        }
+        // Already a known hyphenated word, or a word + hyphen particle: leave alone.
+        if hyphen_keep(a, b, src) {
+            return None;
+        }
+        let mut accepted: Vec<(String, String)> = Vec::new();
+        let push = |acc: &mut Vec<(String, String)>, fa: String, fb: String| {
+            if (fa != a || fb != b) && hyphen_accept(&fa, &fb, src) && !acc.iter().any(|(x, y)| *x == fa && *y == fb)
+            {
+                acc.push((fa, fb));
+            }
+        };
+        if let Some(p) = particle_typo(b) {
+            push(&mut accepted, a.to_string(), typo::match_case(b, p));
+        }
+        // typo_fix an already-known half only via particle_typo (`как-от` → `как-то`);
+        // running assume_unknown on `за` would invent `из-же` from `из-за`.
+        if !dict::get(src).is_word(b) {
+            if let Some(fix) = self.typo_fix_segment(b, src, true) {
+                push(&mut accepted, a.to_string(), typo::match_case(b, &fix));
+            }
+            for fix in doubled_letter_drops(b) {
+                push(&mut accepted, a.to_string(), typo::match_case(b, &fix));
+            }
+        }
+        let b_norm = Dictionary::normalize(b);
+        let b_valid_word = dict::get(src).is_word(b) && !(src == Lang::Ru && HYPHEN_PARTICLES.contains(&b_norm.as_str()));
+        let skip_left_stem = b_valid_word && is_plausible_compound_stem(a, src);
+        if !dict::get(src).is_word(a) {
+            if let Some(fix) = self.typo_fix_segment(a, src, true) {
+                if !skip_left_stem || hyphen_whole_known(&fix, b, src) {
+                    push(&mut accepted, typo::match_case(a, &fix), b.to_string());
+                }
+                if let Some(p) = particle_typo(b) {
+                    push(&mut accepted, typo::match_case(a, &fix), typo::match_case(b, p));
+                }
+            }
+            for fix in doubled_letter_drops(a) {
+                if !skip_left_stem
+                    || hyphen_whole_known(&fix, b, src)
+                    || dict::get(src).rank(&fix).is_some_and(|r| r < HYPHEN_PART_MAX_RANK)
+                {
+                    push(&mut accepted, typo::match_case(a, &fix), b.to_string());
+                }
+            }
+        }
+        if accepted.len() > 1 {
+            accepted.retain(|(fa, fb)| hyphen_keep(fa, fb, src));
+        }
+        if accepted.len() != 1 {
+            return None;
+        }
+        let (fa, fb) = accepted.pop()?;
+        let fixed = format!("{fa}-{fb}");
+        Some(Decision::Convert {
+            text: token.replacen(core, &fixed, 1),
+            target: src,
+            reason: TYPO_REASON,
+        })
+    }
+
+    fn typo_fix_segment(&self, part: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
+        let o = &self.options;
+        if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(part)) {
+            return None;
+        }
+        let ctx = self.left_context(lang);
+        if assume_unknown {
+            typo::suggest_as_unknown_ctx(dict::get(lang), part, lang, o.typo_level, &ctx)
+        } else {
+            typo::suggest_ctx(part, lang, o.typo_level, &ctx)
+        }
+    }
+
     /// Typo fix of `core` at the configured level, unless the user undid one for it.
     fn typo_fix(&self, core: &str, lang: Lang) -> Option<String> {
         let o = &self.options;
@@ -1304,6 +1479,186 @@ impl Engine {
     }
 }
 
+/// Single-letter Russian prepositions / conjunctions / pronouns that start a
+/// missing-space split (`в рот`, `с ним`). A typo fix must not merge these back.
+const SINGLE_LETTER_PREPS: &[char] = &['в', 'с', 'к', 'у', 'о', 'и', 'а', 'я'];
+
+fn is_single_letter_prep_split(text: &str) -> bool {
+    let mut parts = text.split_whitespace();
+    let Some(prep) = parts.next() else { return false };
+    if parts.next().is_none() {
+        return false;
+    }
+    let p = Dictionary::normalize(prep);
+    let mut cs = p.chars();
+    matches!(cs.next(), Some(c) if SINGLE_LETTER_PREPS.contains(&c)) && cs.next().is_none()
+}
+
+/// `врот` = preposition `в` + known word `рот`. The whole token must itself not be a word
+/// (`встал`, `итак` stay).
+fn single_prep_plus_word(core: &str, lang: Lang) -> Option<(String, String)> {
+    if lang != Lang::Ru {
+        return None;
+    }
+    let lower = Dictionary::normalize(core);
+    let mut cs = lower.chars();
+    let first = cs.next()?;
+    if !SINGLE_LETTER_PREPS.contains(&first) {
+        return None;
+    }
+    let rest: String = cs.collect();
+    // 2-letter rests collide with short typos (`ядл` is `для`, not `я дл`).
+    if rest.chars().count() < 3 {
+        return None;
+    }
+    let d = dict::get(lang);
+    if d.is_word(&lower) || morph::is_known_form(d, &lower) {
+        return None;
+    }
+    let rest_ok = if rest.chars().count() < 5 {
+        d.rank(&rest).is_some_and(|r| r < HYPHEN_PART_MAX_RANK)
+    } else {
+        d.is_word(&rest) || morph::is_known_form(d, &rest)
+    };
+    if rest_ok {
+        // Preserve the typed casing of each half.
+        let n = core.chars().next()?.len_utf8();
+        return Some((core[..n].to_string(), core[n..].to_string()));
+    }
+    None
+}
+
+fn hyphen_part_ok(w: &str, lang: Lang, after: bool) -> bool {
+    let d = dict::get(lang);
+    let lower = Dictionary::normalize(w);
+    (after && lang == Lang::Ru && HYPHEN_PARTICLES.contains(&lower.as_str()))
+        || d.rank(&lower).is_some_and(|r| {
+            r < if lower.chars().count() <= 3 { SHORT_WORD_MAX_RANK } else { HYPHEN_PART_MAX_RANK }
+        })
+        || (lower.chars().count() >= FULL_FORM_CONVERT_MIN_LEN && d.in_full_forms(&lower))
+}
+
+fn hyphen_whole_known(a: &str, b: &str, lang: Lang) -> bool {
+    let d = dict::get(lang);
+    let whole = format!("{}-{}", Dictionary::normalize(a), Dictionary::normalize(b));
+    d.contains(&whole) || d.in_full_forms(&whole)
+}
+
+fn hyphen_keep(a: &str, b: &str, lang: Lang) -> bool {
+    if hyphen_whole_known(a, b, lang) {
+        return true;
+    }
+    let nb = Dictionary::normalize(b);
+    hyphen_part_ok(a, lang, false) && lang == Lang::Ru && HYPHEN_PARTICLES.contains(&nb.as_str())
+}
+
+fn is_plausible_compound_stem(a: &str, lang: Lang) -> bool {
+    let d = dict::get(lang);
+    let la = Dictionary::normalize(a);
+    let len = la.chars().count();
+    let max_unseen = if lang == Lang::Ru && len >= 5 && la.ends_with(['о', 'е']) { 1 } else { 0 };
+    len >= 4
+        && d.unseen_bigrams(&la) <= max_unseen
+        && ((lang == Lang::Ru && la.ends_with(['о', 'е'])) || morph::looks_derived(d, &la))
+}
+
+fn hyphen_accept(a: &str, b: &str, lang: Lang) -> bool {
+    hyphen_keep(a, b, lang)
+        || (hyphen_part_ok(a, lang, false) && hyphen_part_ok(b, lang, true))
+}
+
+fn particle_typo(typed: &str) -> Option<&'static str> {
+    let lower = Dictionary::normalize(typed);
+    if HYPHEN_PARTICLES.contains(&lower.as_str()) {
+        return None;
+    }
+    let d = dict::get(Lang::Ru);
+    let known = d.is_word(&lower);
+    let drops = doubled_letter_drops(&lower);
+    let hits: Vec<&'static str> = HYPHEN_PARTICLES
+        .iter()
+        .copied()
+        .filter(|p| {
+            if !is_close_typo(&lower, p) {
+                return false;
+            }
+            // `как` is a word one deletion from the particle `ка`; do not chop it.
+            // Same-length slips (`от` → `то`) and rare doubled-letter slips (`тоо` → `то`) stay.
+            if known && lower.chars().count() != p.chars().count() {
+                let rare_double = drops.iter().any(|x| x == p)
+                    && d.rank(&lower).is_none_or(|r| r >= SHORT_WORD_MAX_RANK);
+                if !rare_double {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+    (hits.len() == 1).then(|| hits[0])
+}
+
+fn is_close_typo(a: &str, b: &str) -> bool {
+    let (av, bv): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if av == bv {
+        return false;
+    }
+    let mut asort = av.clone();
+    asort.sort_unstable();
+    let mut bsort = bv.clone();
+    bsort.sort_unstable();
+    if asort == bsort && av.len() <= 6 {
+        return true;
+    }
+    if av.len() == bv.len() {
+        let diff: Vec<usize> = (0..av.len()).filter(|&i| av[i] != bv[i]).collect();
+        if diff.len() != 1 {
+            return false;
+        }
+        // Two-letter particles: only a neighbour-key slip, not an arbitrary letter.
+        if av.len() <= 2 {
+            return typo::adjacent_keys(av[diff[0]], bv[diff[0]], Lang::Ru);
+        }
+        return true;
+    }
+    if av.len() + 1 == bv.len() {
+        return is_char_subseq(&av, &bv);
+    }
+    if bv.len() + 1 == av.len() {
+        return is_char_subseq(&bv, &av);
+    }
+    false
+}
+
+fn doubled_letter_drops(s: &str) -> Vec<String> {
+    let cs: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        if cs[i] == cs[i + 1] {
+            let mut t = cs.clone();
+            t.remove(i);
+            let w: String = t.into_iter().collect();
+            if !out.iter().any(|x| x == &w) {
+                out.push(w);
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn is_char_subseq(short: &[char], long: &[char]) -> bool {
+    let mut i = 0;
+    for &c in long {
+        if i < short.len() && short[i] == c {
+            i += 1;
+        }
+    }
+    i == short.len()
+}
+
 /// A command-line flag (`-D`, `--oneline`): do not typo-fix or convert the layout.
 fn is_cli_flag(token: &str) -> bool {
     token.starts_with('-')
@@ -1391,6 +1746,98 @@ mod tests {
         for w in ["well-known", "up-to", "e-mail", "x-ray", "кто-то", "все-таки", "гы-гы", "цу-цу", "туц-туц", "rnj-nj-nj"] {
             assert_eq!(conv(w), None, "{w}");
         }
+    }
+
+    fn typo_fix_at(level: typo::Level, w: &str) -> Option<String> {
+        let e = Engine::new(EngineOptions { fix_typos: true, typo_level: level, ..Default::default() });
+        match e.decide(w) {
+            Decision::Convert { text, .. } => Some(text),
+            Decision::Keep(_) => None,
+        }
+    }
+
+    #[test]
+    fn hyphenated_typos_are_fixed() {
+        let fix = |w: &str| typo_fix_at(typo::Level::Normal, w);
+        assert_eq!(fix("все-атки").as_deref(), Some("все-таки"));
+        assert_eq!(fix("Все-атки").as_deref(), Some("Все-таки"));
+        assert_eq!(fix("ВСЕ-АТКИ").as_deref(), Some("ВСЕ-ТАКИ"));
+        assert_eq!(fix("все-такии").as_deref(), Some("все-таки"));
+        assert_eq!(fix("как-от").as_deref(), Some("как-то"));
+        assert_eq!(fix("кто-от").as_deref(), Some("кто-то"));
+        assert_eq!(fix("где-нибудть").as_deref(), Some("где-нибудь"));
+        assert_eq!(fix("из-заа").as_deref(), Some("из-за"));
+        assert_eq!(fix("по-моемуу").as_deref(), Some("по-моему"));
+        assert_eq!(fix("все-тоо").as_deref(), Some("все-то"));
+        assert_eq!(fix("яркко-голубом").as_deref(), Some("ярко-голубом"));
+        // Already valid hyphenated words stay.
+        for w in ["все-таки", "всё-таки", "кто-то", "из-за", "по-моему", "как-нибудь", "дай-ка", "кое-как", "во-первых", "по-новому", "когда-нибудь", "кошко-мальчик", "Кошко-мальчик", "КОШКО-МАЛЬЧИК", "красно-белый", "нейро-сеть", "Нейро-сеть", "НЕЙРО-СЕТЬ"] {
+            assert_eq!(fix(w), None, "must keep {w}");
+        }
+        // Only with typo fixes at Normal/Aggressive.
+        assert_eq!(typo_fix_at(typo::Level::Cautious, "все-атки"), None);
+        let off = Engine::new(EngineOptions { fix_typos: false, typo_level: typo::Level::Normal, ..Default::default() });
+        assert!(matches!(off.decide("все-атки"), Decision::Keep(_)));
+    }
+
+    #[test]
+    fn preposition_plus_word_is_not_merged() {
+        // Missing space after a one-letter preposition must split, not grow into a word.
+        assert_eq!(field_after(typo::Level::Normal, "врот"), "в рот");
+        assert_eq!(field_after(typo::Level::Aggressive, "врот"), "в рот");
+        assert_eq!(field_after(typo::Level::Normal, "ВРОТ"), "В РОТ");
+        // Typed with a space: never merge.
+        assert_eq!(field_after(typo::Level::Normal, "в рот"), "в рот");
+        assert_eq!(field_after(typo::Level::Normal, "В РОТ"), "В РОТ");
+        assert_eq!(field_after(typo::Level::Normal, "ЕБАНЫЙ В РОТ"), "ЕБАНЫЙ В РОТ");
+        assert_eq!(field_after(typo::Level::Normal, "ЕБАНЫЙ ВРОТ"), "ЕБАНЫЙ В РОТ");
+        assert_eq!(field_after(typo::Level::Normal, "ебаный в рот"), "ебаный в рот");
+        // Existing splits of longer function words still beat a typo-insert merge.
+        assert_eq!(field_after(typo::Level::Normal, "отебе"), "о тебе");
+        // Longer preposition + typo that restores a letter still wins (`отсуда` → `отсюда`).
+        assert_eq!(field_after(typo::Level::Normal, "отсуда"), "отсюда");
+    }
+
+    #[test]
+    fn caps_short_wrong_layout_converts() {
+        // `фон` ranks past SHORT_WORD_MAX_RANK, so lowercase `ajy` must stay (do not
+        // make short lowercase switching more aggressive). Title/CAPS still convert.
+        assert_eq!(layout::convert("AJY", Lang::En), "ФОН");
+        assert_eq!(layout::convert("Ajy", Lang::En), "Фон");
+        assert_eq!(layout::convert("ajy", Lang::En), "фон");
+        assert_eq!(conv("AJY").as_deref(), Some("ФОН"));
+        assert_eq!(conv("Ajy").as_deref(), Some("Фон"));
+        assert_eq!(conv("ajy"), None, "lowercase short switch is unchanged");
+        assert_eq!(field_after(typo::Level::Normal, "AJY"), "ФОН");
+        // Other direction: 3-letter English word typed caps on RU (`НЩГ` = `YOU`).
+        assert_eq!(layout::convert("YOU", Lang::En), "НЩГ");
+        assert_eq!(conv("НЩГ").as_deref(), Some("YOU"));
+        assert_eq!(conv("Нщг").as_deref(), Some("You"));
+        // `you` is frequent, so lowercase `нщг` already converted before this change.
+        // Known words in the typed layout are not dragged over, even in caps.
+        assert_eq!(conv("ВСЕ"), None);
+        assert_eq!(conv("THE"), None);
+        assert_eq!(conv("VS"), None);
+        assert_eq!(conv("ОК"), None);
+        assert_eq!(conv("МГУ"), None);
+        assert_eq!(conv("FP"), None);
+        assert_eq!(conv("СЗ"), None);
+        assert_eq!(conv("F{{").as_deref(), Some("АХХ"));
+        assert_eq!(conv("J<}").as_deref(), Some("ОБЪ"));
+        assert_eq!(field_after(typo::Level::Normal, "that he d"), "that he d");
+    }
+
+    #[test]
+    fn caps_mat_is_not_corrected() {
+
+        for level in [typo::Level::Normal, typo::Level::Aggressive] {
+            assert_eq!(field_after(level, "ЗАЕБАЛСЯ"), "ЗАЕБАЛСЯ", "{level:?}");
+            assert_eq!(field_after(level, "заебался"), "заебался", "{level:?}");
+            assert_eq!(field_after(level, "ЕБАНЫЙ"), "ЕБАНЫЙ", "{level:?}");
+        }
+        // Neighbour typo still fixed in caps-unrelated words.
+        assert_eq!(field_after(typo::Level::Normal, "услушу"), "услугу");
+        assert_eq!(field_after(typo::Level::Normal, "УСЛУШУ"), "УСЛУГУ");
     }
 
     #[test]
@@ -1730,6 +2177,9 @@ mod tests {
         assert_eq!(type_str(&mut e, "й ")[0].insert, "q ");
         assert!(type_str(&mut e, "в ").is_empty());
         assert_eq!(type_str(&mut e, "ф ")[0].insert, "a ");
+        // Inside an English sentence with 1-letter "i", "d" stays "d".
+        let mut e2 = Engine::new(EngineOptions { fix_typos: true, ..Default::default() });
+        assert!(type_str(&mut e2, "that i d ").is_empty());
     }
 
     #[test]
