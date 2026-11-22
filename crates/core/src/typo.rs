@@ -334,7 +334,7 @@ pub fn dedupe_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) 
         let mut v = w.clone();
         v.remove(i);
         let c: String = v.iter().collect();
-        if c.chars().count() >= 3 && d.rank_exact(&c).is_some() {
+        if c.chars().count() >= 3 && d.rank_exact(&c).is_some_and(|r| r < DEDUPE_MAX_RANK) {
             if found.as_ref().is_some_and(|f| *f != c) {
                 return None;
             }
@@ -351,6 +351,7 @@ pub fn dedupe_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) 
 }
 
 const DEDUPE_SEEN_RATIO: f64 = 100.0;
+const DEDUPE_MAX_RANK: u32 = 20_000;
 
 pub fn is_dedupe_of(typed: &str, fix: &str) -> bool {
     let a: Vec<char> = Dictionary::normalize(typed).chars().collect();
@@ -368,6 +369,8 @@ pub const CHANNEL_SHORT_RANK: u32 = 10_000;
 const CHANNEL_W_NEAR_EXTRA: f64 = 0.2;
 const CHANNEL_END_RIVAL: f64 = 1.5;
 const CHANNEL_SEEN_RATIO: f64 = 100.0;
+const CHANNEL_SHORT_LEN: usize = 5;
+const CHANNEL_SHORT_MARGIN: f64 = 4.0;
 const CHANNEL_W_SUBST: f64 = 0.25;
 const CHANNEL_W_OMIT: f64 = 1.0;
 
@@ -482,6 +485,7 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
         }
     }
     let margin: f64 = std::env::var("LK_CM").ok().and_then(|v| v.parse().ok()).unwrap_or(CHANNEL_MARGIN);
+    let margin = if n <= CHANNEL_SHORT_LEN { margin * CHANNEL_SHORT_MARGIN } else { margin };
     if s1 < s2 * margin {
         return None;
     }
