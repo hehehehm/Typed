@@ -492,7 +492,7 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
             return None;
         }
     }
-    let margin: f64 = std::env::var("LK_CM").ok().and_then(|v| v.parse().ok()).unwrap_or(CHANNEL_MARGIN);
+    let margin: f64 = CHANNEL_MARGIN;
     let margin = if n <= CHANNEL_SHORT_LEN { margin * CHANNEL_SHORT_MARGIN } else { margin };
     if s1 < s2 * margin {
         return None;

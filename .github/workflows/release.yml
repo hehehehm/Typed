@@ -11,7 +11,15 @@ permissions:
   contents: write
 
 jobs:
+  no-comments:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No comments in code
+        run: python3 scripts/check_no_comments.py
+
   windows:
+    needs: [no-comments]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +48,7 @@ jobs:
           path: dist/Typed-Setup-*.exe
 
   macos:
+    needs: [no-comments]
     runs-on: macos-latest   # Apple Silicon
     steps:
       - uses: actions/checkout@v4

@@ -1,0 +1,13 @@
+name: No comments
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  no-comments:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No comments in code
+        run: python3 scripts/check_no_comments.py

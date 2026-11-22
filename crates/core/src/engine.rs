@@ -775,6 +775,9 @@ impl Engine {
         if ka && kb {
             return None;
         }
+        if kb && bl.chars().count() <= 2 {
+            return None;
+        }
         if !ka && !kb && d.rank(&ml).is_none() {
             return None;
         }

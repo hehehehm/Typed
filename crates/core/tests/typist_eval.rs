@@ -1092,7 +1092,7 @@ fn score_to_json(persona: &str, level: &str, s: &Score) -> serde_json::Value {
     }
     let tops = |k: Kind| -> Vec<serde_json::Value> {
         let empty = BTreeMap::new();
-        top_n(s.groups.get(&k).unwrap_or(&empty), 30)
+        top_n(s.groups.get(&k).unwrap_or(&empty), if std::env::var("EVAL_ALL").is_ok() { usize::MAX } else { 30 })
             .into_iter()
             .map(|(c, line)| serde_json::json!({ "n": c, "feedback": line }))
             .collect()
