@@ -380,7 +380,7 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
     if n < CHANNEL_MIN_LEN || !chars.iter().all(|c| c.is_alphabetic()) {
         return None;
     }
-    if chars[0].is_uppercase() {
+    if chars[0].is_uppercase() && !chars.iter().all(|c| c.is_uppercase()) {
         return None;
     }
     let lower = Dictionary::normalize(word);
