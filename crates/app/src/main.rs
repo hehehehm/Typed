@@ -1,25 +1,6 @@
-//! Typed (type daemon) desktop daemon + CLI.
-//!
-//! ```text
-//! typed [run]                 start the background daemon (default)
-//! typed gui                 settings window (edits config.json) + encrypted vault tab
-//! typed vault status          whether vault.bin exists (never prints secrets)
-//! typed status                config path, settings, focused app and layout now
-//! typed set-app <id> <en|ru>  remember a layout for an app
-//! typed remove-app <id>       forget an app
-//! typed list-apps             show remembered apps
-//! typed convert <text…>       print text re-typed in the other layout (offline helper)
-//! typed check <word>          show the autocorrect decision for a word
-//! typed config-path           print the config file path
-//! typed admin-task on|off     (Windows, as administrator) register / delete the
-//!                                     «Typed» sign-in task used by «Запуск администратором»
-//! ```
-//! Logging: `RUST_LOG=debug typed` (typed text itself is never logged).
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-/// NVIDIA Optimus / AMD PowerXpress: use the integrated / low-power GPU.
-/// These must stay 0. Exporting 1 would force the discrete GPU.
 #[cfg(windows)]
 #[no_mangle]
 #[used]
@@ -29,7 +10,6 @@ pub static NvOptimusEnablement: u32 = 0;
 #[no_mangle]
 #[used]
 pub static AmdPowerXpressRequestHighPerformance: u32 = 0;
-
 
 mod app_id;
 mod app_catalog;
@@ -87,8 +67,6 @@ fn on_off(s: &str) -> Result<bool, String> {
 }
 
 fn default_cmd() -> &'static str {
-    // Double-clicking Typed.app launches layout-keeper-bin with no argv. That must
-    // open the window, not a headless daemon (which would also hide itself from the Dock).
     #[cfg(target_os = "macos")]
     {
         if std::env::current_exe()
@@ -113,7 +91,6 @@ fn real_main() -> Result<(), String> {
     match cmd {
         "run" => {
             let (cfg, path) = load()?;
-            // «Запуск администратором»: a normal instance hands over to the elevated task.
             #[cfg(windows)]
             if cfg.run_as_admin && platform::win_admin::hand_over_to_task(&args) {
                 return Ok(());
@@ -260,7 +237,6 @@ fn prepare_windows_console() {
         Some("gui") | Some("settings")
     );
     if gui {
-        // Start Menu / Explorer must not leave an empty Windows Terminal tab.
         unsafe {
             FreeConsole();
         }
@@ -268,7 +244,6 @@ fn prepare_windows_console() {
     }
     unsafe {
         if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
-            // Daemon launched from Explorer, VBS, or the settings window: stay silent.
             return;
         }
     }

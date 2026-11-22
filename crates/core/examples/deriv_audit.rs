@@ -1,6 +1,3 @@
-//! `cargo run --release --example deriv_audit -- [normal|aggressive]`: the correction_eval
-//! unknown-word proxy (every 97th Russian full form outside the ranked list), split by
-//! whether `morph::derivation` analyses the word, with the fixes still made.
 use fst::{IntoStreamer, Streamer};
 use layout_keeper_core::{dict, dict::Dictionary, layout, morph, typo, Lang};
 fn main() {
@@ -9,7 +6,6 @@ fn main() {
     let d = dict::get(lang);
     let ranked = dict::ranked_only(lang);
     let set = fst::Set::new(dict::full_forms_fst(lang)).unwrap();
-    // `STEP=n`: every n-th full form (97 = the correction_eval proxy).
     let step: usize = std::env::var("STEP").ok().and_then(|v| v.parse().ok()).unwrap_or(97);
     let mut s = set.into_stream();
     let (mut k, mut n, mut der, mut fp, mut fp_der) = (0usize, 0, 0, 0, 0);

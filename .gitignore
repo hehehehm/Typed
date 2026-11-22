@@ -1,21 +1,17 @@
-# Сборка
 target/
 dist/
 **/*.rs.bk
 
-# Готовые установщики и архивы
 *.exe
 *.dmg
 *.msi
 *.zip
 *.tar.gz
 
-# Данные пользователя (на всякий случай: обычно они в %APPDATA%\typed)
 vault.bin
 typed.chk
 config.json
 
-# Системный мусор
 .DS_Store
 Thumbs.db
 desktop.ini
@@ -24,7 +20,5 @@ desktop.ini
 .vscode/
 target-base/
 
-# UI/UX visual-regression baselines and local shot dumps (PNG).
-# Generate with TYPED_UI_UX_UPDATE_BASELINE=1; do not commit the binaries.
 ui-ux-baseline/
 ui-ux-shots/

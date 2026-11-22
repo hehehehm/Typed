@@ -1,12 +1,3 @@
-//! "Сейф" tab of the settings window: encrypted logins/cards and user-gesture autofill.
-//!
-//! * The vault is decrypted only in this process's memory after the master password is entered;
-//!   it is locked (key + entries zeroized on drop) on window close, by the "Заблокировать"
-//!   button, and after `vault_idle_minutes` without input in this window.
-//! * Filling is done by *this* GUI process: it minimizes itself, waits for the previous app to
-//!   regain focus, checks that the focused app is not Typed (and is the app shown as
-//!   target), then types via the platform injection API (SendInput / XTest / CGEvent).
-//!   No IPC with the daemon, no clipboard, no network, nothing secret is logged.
 
 use crate::platform;
 use crate::ui_style as st;
@@ -17,10 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use zeroize::{Zeroize, Zeroizing};
 
-/// The section colour (lime square on the home screen).
 const ACCENT: egui::Color32 = st::SEAFOAM;
 
-/// Group heading: small muted caption + count, inset like the rows; `+` on the right.
 fn heading_row(ui: &mut egui::Ui, caption: &str, count: usize, tip: &str, clicked: &mut bool) {
     let t = st::cur(ui);
     ui.add_space(st::PAD);
@@ -37,12 +26,10 @@ fn heading_row(ui: &mut egui::Ui, caption: &str, count: usize, tip: &str, clicke
     ui.add_space(st::GAP);
 }
 
-/// Hairline between entries of a group.
 fn entry_rule(ui: &mut egui::Ui) {
     st::sep(ui);
 }
 
-/// One entry inside a group: 8 px above and below.
 fn entry<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(0.0, st::PAD))
@@ -96,7 +83,6 @@ impl VaultUi {
         self.vault.is_some()
     }
 
-    /// Screenshot / layout tests: a vault at `path`, optionally already open.
     #[cfg(test)]
     pub(crate) fn for_test(path: PathBuf, vault: Option<Vault>) -> Self {
         let mut v = Self::new();
@@ -105,12 +91,10 @@ impl VaultUi {
         v
     }
 
-    /// Number of saved entries while open (logins + cards); `None` while locked.
     pub fn entry_count(&self) -> Option<usize> {
         self.vault.as_ref().map(|v| v.data.logins.len() + v.data.cards.len())
     }
 
-    /// One-word state for the home square and the section header.
     pub fn state_text(&self) -> &'static str {
         if self.vault.is_some() {
             "открыт"
@@ -121,7 +105,6 @@ impl VaultUi {
         }
     }
 
-    /// Drop the decrypted vault and any secret edit buffers (all zeroize on drop).
     pub fn lock(&mut self) {
         self.vault = None;
         self.edit = Edit::None;
@@ -131,7 +114,6 @@ impl VaultUi {
         wipe(&mut self.pw2);
     }
 
-    /// Called every frame (even when the tab is hidden) to enforce the idle timeout.
     pub fn tick(&mut self, ctx: &egui::Context, idle_minutes: u32) {
         let active = ctx.input(|i| !i.events.is_empty() || i.pointer.is_moving());
         if active {
@@ -156,8 +138,6 @@ impl VaultUi {
         }
     }
 
-    /// Hide to the tray, then type into whatever app regains focus — only if it is not
-    /// Typed and matches the target app the user saw in the window.
     fn fill(&mut self, ctx: &egui::Context, target: Option<String>, text: Zeroizing<String>) {
         if text.is_empty() {
             self.msg = "Поле пустое — нечего подставлять.".into();
@@ -244,13 +224,10 @@ impl VaultUi {
     fn show_locked(&mut self, ui: &mut egui::Ui) {
         let exists = self.path.exists();
         let mut go = false;
-        // Same card as the dictionary / programs add row: group + GAP, hug content,
-        // top-aligned, no vertical stretch or centring.
         st::group(ui, |ui| {
             egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::GAP)).show(ui, |ui| {
                 let w = ui.available_width();
                 if exists {
-                    // horizontal() shrinks to the row; button first at natural width.
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = st::PAD;
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -320,7 +297,6 @@ impl VaultUi {
             return;
         }
 
-        // ---- logins
         let mut add_login = false;
         let n_logins = self.vault.as_ref().map_or(0, |v| v.data.logins.len());
         heading_row(ui, "Логины", n_logins, "Добавить логин", &mut add_login);
@@ -413,7 +389,6 @@ impl VaultUi {
             }
         }
 
-        // ---- cards
         let n = self.vault.as_ref().unwrap().data.cards.len();
         let mut add_card = false;
         heading_row(ui, "Карты", n, "Добавить карту", &mut add_card);
@@ -568,7 +543,7 @@ impl VaultUi {
         let Some(save) = done else { return };
         let edit = std::mem::replace(&mut self.edit, Edit::None);
         if !save {
-            return; // `edit` drops here and zeroizes
+            return;
         }
         let v = self.vault.as_mut().unwrap();
         match edit {

@@ -1,5 +1,4 @@
 #!/bin/bash
-# Build on macOS using only Rust and Apple's command-line tools.
 set -euo pipefail
 
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
@@ -10,7 +9,6 @@ command -v cargo >/dev/null 2>&1 || fail 'cargo is missing. Install Rust from ht
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
-# Limit the lookup to [workspace.package]; do not read dependency versions.
 VERSION="$(awk '
     /^\[workspace\.package\][[:space:]]*$/ { in_package = 1; next }
     /^\[/ { in_package = 0 }
@@ -27,7 +25,6 @@ BIN="$REPO_ROOT/target/release/typed"
 DIST="$REPO_ROOT/dist"
 APP="$DIST/Typed.app"
 mkdir -p "$DIST"
-# Remove only the previously generated app bundle, not user configuration.
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/layout-keeper-bin"
@@ -71,8 +68,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Sign the nested binary first, then the bundle. An extra unsigned file in MacOS/
-# (the old bash wrapper) made `codesign` fail with "code object is not signed at all".
 if codesign --force --sign - "$APP/Contents/MacOS/layout-keeper-bin" \
         && codesign --force --sign - "$APP"
 then

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""All OpenCorpora word forms via the pymorphy3 Russian dictionary -> oc_forms.txt."""
+
 import pymorphy3, re
 m = pymorphy3.MorphAnalyzer()
 d = m.dictionary

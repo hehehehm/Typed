@@ -1,6 +1,3 @@
-//! Settings window (`typed gui`). A separate process that only edits the same
-//! `config.json` the daemon watches; the daemon picks changes up within ~1 s.
-//! The keyboard hook is never touched from here.
 
 use crate::brand::{APP_NAME, WINDOW_TITLE};
 use crate::platform;
@@ -15,7 +12,6 @@ use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Default, Clone)]
 struct Focus {
-    /// Last focused app that is not this settings window.
     app: Option<String>,
     layout: Option<Lang>,
 }
@@ -38,20 +34,15 @@ pub(crate) fn is_self(app: &str) -> bool {
         .is_some_and(|p| p == a)
 }
 
-/// Shortest gap between frames while the window is hidden or minimized.
 const IDLE_FRAME: Duration = Duration::from_millis(250);
-/// How long the inline «Удалено · Вернуть» toast stays after a delete.
 const UNDO_DELETE_FOR: Duration = Duration::from_secs(4);
 
-/// A just-deleted program or exception, restorable from the toast.
 enum PendingDelete {
     Program { id: String, lang: Lang },
     Exception { id: String },
 }
 
-/// Home window: five squares in one short row.
 const HOME_INNER: [f32; 2] = [512.0, 192.0];
-/// Section window: settings (and other tabs) fit this height without scrolling.
 const SECTION_INNER: [f32; 2] = [512.0, if cfg!(windows) { 536.0 } else { 496.0 }];
 
 pub(crate) fn hide_window(ctx: &egui::Context) {
@@ -81,42 +72,28 @@ struct App {
     capturing_hotkey: Option<HotkeySlot>,
     word_draft: String,
     icons: IconCache,
-    /// Grow the window to `SECTION_INNER` the next time a non-home tab is shown.
     grow_for_section: bool,
-    /// How much the last frame's content was wider than the window (should stay 0).
     content_overflow: f32,
     tray: Option<crate::tray::TrayHandle>,
-    /// When true, the close button / tray "Выход" actually quits instead of hiding.
     allow_close: bool,
-    /// False after hide-to-tray. The close button clears `minimized`, so we cannot
-    /// use that flag to detect a hidden window — it would keep repainting forever.
     ui_visible: bool,
-    /// Dock icon / reopen hook applied once after the native window exists.
     chrome_ready: bool,
-    /// Throttle for frames while hidden or minimized (see `IDLE_FRAME`).
     last_idle_frame: Instant,
     idle_frames: u64,
     welcome_open: bool,
     welcome_dont_show: bool,
-    /// Last deleted program/exception, shown as «Удалено · Вернуть» for a few seconds.
     pending_delete: Option<(PendingDelete, Instant)>,
-    /// Focus the add-app field once after opening the Apps tab or switching pane.
     app_draft_focus: bool,
     logo_textures: [Option<egui::TextureHandle>; 5],
     logo_fade_textures: [Option<egui::TextureHandle>; 3],
     sea_textures: [Option<egui::TextureHandle>; 2],
-    /// «Запуск администратором» being switched: (wanted value, helper result when done).
     #[cfg_attr(not(windows), allow(dead_code))]
     admin_job: Option<(bool, AdminJobResult)>,
-    /// Last check whether the daemon runs as administrator, and when it was made.
     #[cfg_attr(not(windows), allow(dead_code))]
     daemon_admin: (Option<bool>, bool, Option<Instant>),
-    /// Installed / running apps for autocomplete and path tooltips.
     catalog: crate::app_catalog::AppCatalog,
-    /// Autocomplete dropdown under the add-app field is visible.
     suggest_open: bool,
     suggest_sel: usize,
-    /// After a pick, hide suggestions until the draft changes.
     suggest_lock: Option<String>,
 }
 
@@ -159,7 +136,6 @@ enum SuggestKey {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum Tab {
-    /// Five identical squares in one row.
     Home,
     Apps,
     Words,
@@ -269,7 +245,6 @@ impl App {
         true
     }
 
-
     fn known_app_entries(&self) -> Vec<crate::app_catalog::AppEntry> {
         use crate::app_catalog::AppEntry;
         let mut v = Vec::with_capacity(self.cfg.apps.len() + self.cfg.exception_apps.len());
@@ -282,8 +257,6 @@ impl App {
         v
     }
 
-    /// Consume suggestion keys *before* the text field is drawn, so Tab/Enter
-    /// are not stolen by focus movement or the field itself.
     fn consume_suggest_key(&mut self, ctx: &egui::Context) -> Option<SuggestKey> {
         if !self.suggest_open {
             return None;
@@ -304,7 +277,6 @@ impl App {
         None
     }
 
-    /// Keyboard + popup for the add-app field. `Submit` means accept a suggestion and add it.
     fn app_suggest(&mut self, ui: &mut egui::Ui, field: &egui::Response, accent: egui::Color32, key: Option<SuggestKey>) -> SuggestPick {
         let draft = self.app_draft.trim().to_string();
         if self.suggest_lock.as_deref() == Some(draft.as_str()) {
@@ -440,8 +412,6 @@ impl App {
         let mut changed = false;
         let suggest_key = self.consume_suggest_key(ui.ctx());
 
-        // Программы | Исключения at the top of the section; each pane has its own
-        // add button and the header count follows the open pane.
         let n_prog = self.cfg.apps.len();
         let n_exc = self.cfg.exception_apps.len();
         let prog = format!("Программы  {n_prog}");
@@ -481,7 +451,6 @@ impl App {
                             r.request_focus();
                         }
                         field_resp = Some(r);
-                        // EN/RU here only picks the layout for the next add; it must not submit.
                         let _ = st::segment_strip(
                             ui,
                             &mut self.app_mode,
@@ -770,7 +739,6 @@ impl App {
                 }
                 let shown = presets.iter().find(|p| p.0 == current).map(|p| p.1.to_string()).unwrap_or_else(|| current.to_string());
                 if slot == HotkeySlot::Undo {
-                    // A click on the keycap starts capture immediately; Esc cancels.
                     let r = st::keycaps(ui, &shown, max, false, accent)
                         .on_hover_text("Нажмите, затем новую клавишу. Esc — отмена");
                     if r.clicked() {
@@ -851,7 +819,6 @@ impl App {
             ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = st::MARGIN;
-                // QR on a white plate with a quiet zone, readable in both themes.
                 let (plate, _) = ui.allocate_exact_size(egui::vec2(side + st::PAD, side + st::PAD), egui::Sense::hover());
                 ui.painter().rect_filled(plate, st::RADIUS_SM, egui::Color32::WHITE);
                 ui.painter().rect_stroke(plate.shrink(0.5), st::RADIUS_SM, st::hair(t.line));
@@ -878,7 +845,6 @@ impl App {
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut changed = false;
 
-        // I. Correction.
         let typo_opts = [
             (TypoLevel::Cautious, level_name(TypoLevel::Cautious), "1 ошибка от 4 букв, 2 от 8, только частые"),
             (TypoLevel::Normal, level_name(TypoLevel::Normal), "1 от 3, 2 от 5, 3 от 9; раскладка + опечатка"),
@@ -907,7 +873,6 @@ impl App {
         });
         self.cfg.typo_level = typo;
 
-        // II. Keys.
         ui.add_space(st::MARGIN);
         st::group(ui, |ui| {
             self.hotkey_picker(
@@ -953,7 +918,6 @@ impl App {
             });
         }
 
-        // III. Look.
         ui.add_space(st::MARGIN);
         st::group(ui, |ui| {
             changed |= st::toggle_row(ui, &mut self.cfg.light_theme, "Светлая тема", "", accent);
@@ -966,7 +930,6 @@ impl App {
             }
         });
 
-        // IV. About.
         ui.add_space(st::MARGIN);
         st::group(ui, |ui| {
             st::line_row(
@@ -990,7 +953,6 @@ impl App {
         }
     }
 
-    /// «Запуск администратором» (Windows): see `platform::win_admin`.
     #[cfg(windows)]
     fn admin_section(&mut self, ui: &mut egui::Ui) {
         use crate::platform::win_admin;
@@ -1163,7 +1125,6 @@ impl App {
         }
     }
 
-    /// The live number a section stands for (none = draw its glyph).
     fn section_count(&self, tab: Tab) -> Option<usize> {
         match tab {
             Tab::Apps => Some(self.cfg.apps.len()),
@@ -1173,9 +1134,6 @@ impl App {
         }
     }
 
-    /// Home: five identical neutral cards in one row. Each card holds one coloured
-    /// circle with the section glyph; the live number sits small in the top-right
-    /// corner; the caption is centred under the card.
     fn home(&mut self, ui: &mut egui::Ui) {
         let t = st::cur(ui);
         let full = ui.available_width();
@@ -1211,7 +1169,6 @@ impl App {
                 let ng = st::line_galley(ui, &n.to_string(), caption_font.clone(), t.muted_strong, s / 2.0);
                 p.galley(egui::pos2(r.right() - st::PAD - ng.size().x, r.top() + st::PAD), ng, t.muted_strong);
             } else if tab == Tab::Settings && !self.cfg.autocorrect {
-                // Micro-state: a hollow dot = Автоисправление off.
                 p.circle_stroke(egui::pos2(r.right() - st::PAD - 3.0, r.top() + st::PAD + 3.0), 3.0, st::hair(t.muted));
             }
             let lg = st::line_galley(ui, tab.title(), caption_font.clone(), t.ink, s + g - st::GAP);
@@ -1235,20 +1192,16 @@ impl App {
         }
     }
 
-    /// Section header, 48 px: back chevron · colour dot · title · count, and on the
-    /// right five small dots to jump between sections (the current one ringed).
     fn header(&mut self, ui: &mut egui::Ui) {
         let tab = self.tab;
         let t = st::cur(ui);
         let rect = ui.max_rect();
-        // A thin crop of the same photograph (the water, aligned to the top).
         let sea = self.sea_texture(ui.ctx());
         st::paint_photo(ui, rect, &sea, 0.0, egui::Color32::WHITE);
         let p = ui.painter().clone();
         let mut target = None;
         let cy = rect.center().y;
 
-        // Navigation, right: 5 × 32 px hit targets; visual dots stay small.
         let cell = st::HIT;
         let nav_w = cell * SECTIONS.len() as f32;
         let nav_left = rect.right() - st::MARGIN - nav_w + st::GAP;
@@ -1277,12 +1230,8 @@ impl App {
             }
         }
 
-        // Title block: dot · title · count, truncated before the navigation.
-        // On the exceptions pane the title and count follow that list; the home
-        // square still uses `section_count` (programs only).
         let (title, title_count) = self.header_title_and_count();
         let plate_left = back.right() + st::PAD;
-        // Left inset to the dot matches right inset from the title/count (PAD).
         let dot_c = egui::pos2(plate_left + st::PAD + 6.0, cy);
         let tx = dot_c.x + 6.0 + st::PAD;
         let max_w = (nav_left - st::PAD - tx).max(st::HIT);
@@ -1317,7 +1266,6 @@ impl App {
         );
         ui.interact(title_rect, ui.id().with("title"), egui::Sense::hover()).on_hover_text(self.section_tooltip(tab));
 
-        // Back is registered last so its 32×32 hit wins over the title plate at min width.
         let r = ui.interact(back, ui.id().with("back"), egui::Sense::click());
         if r.hovered() {
             p.rect_filled(back.shrink(2.0), st::RADIUS_SM, t.surface_hover);
@@ -1328,14 +1276,12 @@ impl App {
             target = Some(Tab::Home);
         }
 
-        // Bottom hairline.
         p.rect_filled(egui::Rect::from_min_size(egui::pos2(rect.left(), rect.bottom() - st::HAIR), egui::vec2(rect.width(), st::HAIR)), 0.0, t.line);
         if let Some(t) = target {
             self.go(t);
         }
     }
 
-    /// «Логотип»: five marks to pick for the window, tray and welcome picture.
     fn wallpaper_row(&mut self, ui: &mut egui::Ui) -> bool {
         let t = st::cur(ui);
         let mut changed = false;
@@ -1346,8 +1292,6 @@ impl App {
             },
             |ui| {
                 ui.spacing_mut().item_spacing.x = st::PAD;
-                // Actions sit in a right-to-left row, so walk ALL backwards
-                // and the default (beach) lands on the left.
                 for &style in LogoStyle::ALL.iter().rev() {
                     if self.wallpaper_tile(ui, style, st::U * 7.0) {
                         changed = true;
@@ -1381,8 +1325,6 @@ impl App {
         false
     }
 
-    /// Welcome: the name, the chosen logo as a large rounded picture, the
-    /// five marks to pick in a group, and a footer.
     fn welcome_panel(&mut self, ui: &mut egui::Ui) {
         let t = st::cur(ui);
         let full = ui.max_rect();
@@ -1441,8 +1383,6 @@ impl App {
         }
     }
 
-    /// Hotkey capture and Esc-to-home. Lives in `draw` so the headless UX
-    /// tester (which calls `draw` directly) sees the same path as the window.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let capturing = self.capturing_hotkey.is_some();
         if let Some(slot) = self.capturing_hotkey {
@@ -1603,16 +1543,10 @@ impl App {
         self.qr.clear();
         crate::tray::clear_repaint_ctx();
         self.vault.lock();
-        // Windows (since 0.3.69): the settings process exits on every close / minimize
-        // and the daemon (with the tray icon) keeps running; the tray's «Выход» stops both.
-        // That 1–2 MB process without a GPU is the daemon (hooks, engine, tray) and is required.
-        // macOS / Linux: the window is the app (macOS) or there is no tray (Linux), so
-        // quitting it stops the key handling too, as before.
         #[cfg(not(windows))]
         crate::platform::stop_daemon();
     }
 
-    /// Timed repaint only while a toast or unlocked-vault idle lock actually needs it.
     fn visible_repaint_delay(&self) -> Option<std::time::Duration> {
         if let Some((_, at)) = &self.pending_delete {
             let left = UNDO_DELETE_FOR.saturating_sub(at.elapsed());
@@ -1660,8 +1594,6 @@ fn level_name(l: TypoLevel) -> &'static str {
         TypoLevel::Aggressive => "Смело",
     }
 }
-
-
 
 fn lang_name(l: Lang) -> &'static str {
     match l {
@@ -1714,17 +1646,12 @@ impl eframe::App for App {
             self.vault.lock();
         }
         let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
-        // Windows: minimizing quits the settings process like the close button does
-        // (the daemon's tray icon / summon hotkey start it again).
         if cfg!(windows) && minimized && !self.allow_close {
             self.allow_close = true;
             self.vault.lock();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        // Only on the transition: a hidden window can keep reporting `minimized`, and
-        // re-sending the hide commands every frame woke eframe again and again (≈6% CPU
-        // while minimized, 0% while open).
         if can_hide && minimized && self.ui_visible {
             self.icons.evict();
             hide_window(ctx);
@@ -1741,13 +1668,6 @@ impl eframe::App for App {
             self.ui_visible = true;
         }
         if !self.ui_visible || (minimized && !(want_vault || want_show)) {
-            // Minimized to the taskbar (no tray) is idle too: nothing to paint, so no
-            // timed repaint; restoring the window sends its own events.
-            // Hidden to the tray: do not paint or resize. A 200ms repaint here was
-            // leaking gigabytes of GPU memory on Windows while the window was invisible.
-            // Something can still wake eframe in a loop while the window is hidden or
-            // minimized (Windows keeps sending events; eframe paints on each). Whatever the
-            // source, cap idle frames at 4 per second so it stays near 0% CPU / GPU.
             let since = self.last_idle_frame.elapsed();
             if since < IDLE_FRAME {
                 std::thread::sleep(IDLE_FRAME - since);
@@ -1757,15 +1677,12 @@ impl eframe::App for App {
             if self.idle_frames % 240 == 0 {
                 log::debug!("hidden GUI woke {} times", self.idle_frames);
             }
-            // An unlocked vault still needs its idle lock: one cheap wake a minute.
             self.vault.tick(ctx, self.cfg.vault_idle_minutes);
             if self.vault.is_unlocked() {
                 ctx.request_repaint_after(Duration::from_secs(60));
             }
             return;
         }
-        // No periodic repaint: the window is event-driven. A 200 ms loop here kept a
-        // discrete NVIDIA GPU at ~14% / ~80 °C with the settings window merely open.
         if let Some(d) = self.visible_repaint_delay() {
             ctx.request_repaint_after(d);
         }
@@ -1777,8 +1694,6 @@ impl eframe::App for App {
 }
 
 pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
-    // Windows (since 0.3.69): a hidden settings window is never kept — the tray lives in
-    // the daemon. `gui --hidden` (older shortcuts) only makes sure the daemon runs.
     #[cfg(windows)]
     if start_hidden {
         return platform::ensure_daemon_running();
@@ -1786,8 +1701,6 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
     #[cfg(windows)]
     let _gui_mutex = {
         let mut guard = None;
-        // A settings process that is just exiting (window closed a moment ago) still holds
-        // the lock for a few milliseconds: wait for it instead of asking it to show itself.
         for attempt in 0..20 {
             match platform::acquire_gui_mutex() {
                 Ok(Some(g)) => {
@@ -1814,7 +1727,6 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         }
         guard
     };
-    // A fresh settings process answers its own launch: stale requests are not needed.
     #[cfg(windows)]
     {
         let _ = platform::take_show_gui_request();
@@ -1853,8 +1765,6 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
     let cfg = Config::load_or_create(&path).map_err(|e| format!("cannot load config {}: {e}", path.display()))?;
     let focus = Arc::new(Mutex::new(Focus::default()));
     {
-        // Poll the focused window off the UI thread; skip our own window so the
-        // "assign current app" buttons target the app the user came from.
         let focus = focus.clone();
         let watch = path.clone();
         std::thread::spawn(move || {
@@ -1919,7 +1829,6 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         suggest_open: false,
         suggest_sel: 0,
         suggest_lock: None,
-        // Windows: the tray icon belongs to the daemon (see `tray`).
         tray: if cfg!(windows) { None } else { crate::tray::start(logo_index) },
         allow_close: false,
         ui_visible: !start_hidden,
@@ -1946,13 +1855,9 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         }
         #[cfg(target_os = "macos")]
         {
-            // Empty IconData = "use the OS default". If we omit the icon entirely,
-            // eframe injects its own white-e-on-black mark and overwrites Typed.icns.
             vp.with_icon(egui::IconData::default())
         }
     };
-    // glow (as in 0.3.80): wgpu LowPower + vsync Fifo hung the Windows GUI
-    // ("Не отвечает", 0% CPU) after the first home-screen frame.
     let opts = eframe::NativeOptions {
         viewport,
         vsync: true,
@@ -1969,7 +1874,6 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())
 }
-
 
 fn read_captured_hotkey(ctx: &egui::Context) -> Option<Hotkey> {
     ctx.input(|i| {
@@ -2067,7 +1971,6 @@ fn hotkey_from_egui(key: egui::Key, m: egui::Modifiers) -> Option<Hotkey> {
     hk.is_safe().then_some(hk)
 }
 
-/// Black-on-white QR code with a 2-module quiet zone, one pixel per module.
 fn qr_image(text: &str) -> egui::ColorImage {
     use qrcodegen::{QrCode, QrCodeEcc};
     let qr = QrCode::encode_text(text, QrCodeEcc::Medium).expect("address fits in a QR code");
@@ -2101,7 +2004,6 @@ mod qr_tests {
         }
     }
 }
-
 
 #[cfg(test)]
 mod idle_repaint_tests {

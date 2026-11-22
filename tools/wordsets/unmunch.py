@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Minimal Hunspell affix expander (PFX/SFX, cross products, one continuation level).
-usage: unmunch.py ru|en <file.dic> <file.aff> <out.txt>"""
+
 import re, sys
 def load_aff(path):
-    rules={}  # flag -> (kind, cross, [(strip, add, cond_re)])
+    rules={}
     cur=None
     for line in open(path, encoding='utf-8', errors='replace'):
         p=line.split('#')[0].split() if not line.startswith('#') else []
@@ -38,7 +37,7 @@ def expand(dic, aff):
                         nw=(w[:len(w)-len(strip)] if strip else w)+add
                         out.add(nw); 
                         if cross: sfx.append(nw)
-                        for f2 in cont:   # one level of continuation
+                        for f2 in cont:
                             r2=rules.get(f2)
                             if r2 and r2[0]=='SFX':
                                 for s2,a2,rx2,_ in r2[2]:
@@ -48,7 +47,6 @@ def expand(dic, aff):
                     if rx.search(w) and (not strip or w.startswith(strip)):
                         nw=add+w[len(strip):]; out.add(nw)
                         if cross: pfx.append((add,strip))
-        # cross products
         for f in flags:
             r=rules.get(f)
             if r and r[0]=='PFX' and r[1]:

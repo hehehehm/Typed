@@ -24,7 +24,6 @@ fn icon_frame(ui: &mut egui::Ui) -> (egui::Rect, egui::Response, egui::Stroke) {
     (rect, response, egui::Stroke::new(1.3, color))
 }
 
-/// Trash-can button instead of the word «Удалить».
 pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response, stroke) = icon_frame(ui);
     let p = ui.painter();
@@ -38,7 +37,6 @@ pub fn delete_icon_button(ui: &mut egui::Ui) -> egui::Response {
     response.on_hover_text("Удалить")
 }
 
-/// Pencil button instead of the word «Изменить».
 pub fn edit_icon_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response, stroke) = icon_frame(ui);
     let p = ui.painter();
@@ -52,7 +50,6 @@ pub fn edit_icon_button(ui: &mut egui::Ui) -> egui::Response {
     response.on_hover_text("Изменить")
 }
 
-/// Eye button to show / hide a password.
 pub fn eye_icon_button(ui: &mut egui::Ui, revealed: bool) -> egui::Response {
     let (rect, response, stroke) = icon_frame(ui);
     let p = ui.painter();
@@ -75,18 +72,13 @@ pub fn eye_icon_button(ui: &mut egui::Ui, revealed: bool) -> egui::Response {
     response.on_hover_text(if revealed { "Скрыть" } else { "Показать" })
 }
 
-/// Texture cache keyed by app id. `None` in `map` / `cpu` = extraction failed, use the placeholder.
-/// Extraction never runs on the UI thread: a background worker does it and sends the pixels back.
 pub struct IconCache {
     map: HashMap<String, Option<egui::TextureHandle>>,
-    /// Finished CPU images (including failed extracts). Survives `evict`.
     cpu: HashMap<String, Option<egui::ColorImage>>,
-    /// Colour images waiting to be uploaded on first `show` (shots / tests).
     pending: HashMap<String, egui::ColorImage>,
     inflight: HashSet<String>,
     tx: Sender<String>,
     rx: Receiver<(String, Option<egui::ColorImage>)>,
-    /// Per-cache extract override (tests). Not global, so parallel tests do not clash.
     #[cfg(test)]
     extract: std::sync::Arc<std::sync::Mutex<Option<ExtractFn>>>,
 }
@@ -123,13 +115,11 @@ impl Default for IconCache {
 }
 
 impl IconCache {
-    /// Preload a generated icon so headless screenshots do not show letter marks.
     #[cfg(test)]
     pub fn preload_mock(&mut self, id: &str) {
         self.pending.insert(id.to_string(), mock_icon(id));
     }
 
-    /// Make this cache's worker call `f` instead of `load_rgba` (other caches are unchanged).
     #[cfg(test)]
     pub fn set_extract(&self, f: Option<ExtractFn>) {
         if let Ok(mut g) = self.extract.lock() {
@@ -147,7 +137,6 @@ impl IconCache {
         got
     }
 
-    /// Upload any finished extracts; request a repaint if new icons arrived.
     pub fn poll(&mut self, ctx: &egui::Context) {
         if self.drain() {
             ctx.request_repaint();
@@ -178,7 +167,6 @@ impl IconCache {
         None
     }
 
-    /// Draw the icon (or placeholder) for `id`.
     pub fn show(&mut self, ui: &mut egui::Ui, id: &str) -> egui::Response {
         use crate::ui_style as st;
         let (cell, resp) = ui.allocate_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE), egui::Sense::hover());
@@ -196,7 +184,6 @@ impl IconCache {
         resp
     }
 
-    /// Drop GPU textures (the window is being closed). CPU images stay cached.
     pub fn evict(&mut self) {
         self.map.clear();
     }
@@ -205,7 +192,6 @@ impl IconCache {
 fn icon_worker_loop(req_rx: Receiver<String>, res_tx: Sender<(String, Option<egui::ColorImage>)>, extract: impl Fn(&str) -> Option<egui::ColorImage>) {
     #[cfg(windows)]
     unsafe {
-        // SHGetFileInfo / ExtractIconEx want an STA apartment.
         let _ = windows_sys::Win32::System::Com::CoInitializeEx(
             std::ptr::null_mut(),
             windows_sys::Win32::System::Com::COINIT_APARTMENTTHREADED as u32,
@@ -242,7 +228,6 @@ fn icon_worker(
     });
 }
 
-/// A stable, colourful 32×32 mark derived from the id (for shots and tests).
 #[cfg(test)]
 pub fn mock_icon(id: &str) -> egui::ColorImage {
     const S: usize = 32;
@@ -315,7 +300,6 @@ fn disk_save(id: &str, img: &egui::ColorImage) {
     let mut buf = Vec::with_capacity(8 + img.width() * img.height() * 4);
     buf.extend_from_slice(&(img.width() as u32).to_le_bytes());
     buf.extend_from_slice(&(img.height() as u32).to_le_bytes());
-    // ColorImage pixels are Color32
     for p in &img.pixels {
         buf.extend_from_slice(&p.to_array());
     }
@@ -368,7 +352,6 @@ mod win {
         if crate::app_id::has_path(id) {
             return Some(id.to_string());
         }
-        // Bare exe name: try PATH, then give up (letter mark until the app is seen again).
         let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
         let mut buf = [0u16; 1024];
         unsafe {
@@ -385,7 +368,7 @@ mod win {
         bi.bmiHeader = BITMAPINFOHEADER {
             biSize: size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: w,
-            biHeight: -h, // top-down
+            biHeight: -h,
             biPlanes: 1,
             biBitCount: 32,
             biCompression: BI_RGB,
@@ -413,7 +396,7 @@ mod win {
                         let has_alpha = px.chunks(4).any(|p| p[3] != 0);
                         let mask = if has_alpha || ii.hbmMask.is_null() { None } else { bits(dc, ii.hbmMask, w, h) };
                         for (i, p) in px.chunks_mut(4).enumerate() {
-                            p.swap(0, 2); // BGRA → RGBA
+                            p.swap(0, 2);
                             if !has_alpha {
                                 let transparent = mask.as_ref().is_some_and(|m| m[i * 4] != 0);
                                 p[3] = if transparent { 0 } else { 255 };
@@ -437,7 +420,6 @@ mod win {
     pub unsafe fn extract(path: &str) -> Option<egui::ColorImage> {
         let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
 
-        // Prefer a 32×32 icon (matches the list cell).
         let mut hicon: HICON = ptr::null_mut();
         let mut icon_id = 0u32;
         let n = PrivateExtractIconsW(wide.as_ptr(), 0, 32, 32, &mut hicon, &mut icon_id, 1, 0);
@@ -492,7 +474,6 @@ mod tests {
         assert_eq!(img.width(), 32);
         assert_eq!(img.height(), 32);
         assert!(img.pixels.iter().all(|p| p.a() == 255));
-        // Different apps get different colours.
         assert_ne!(mock_icon("firefox.exe").pixels[16 * 32 + 16], mock_icon("chrome.exe").pixels[16 * 32 + 16]);
     }
 

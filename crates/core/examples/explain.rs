@@ -1,5 +1,3 @@
-//! `cargo run --release --example explain -- word ...`: typo suggestions per level
-//! (`AS_UNKNOWN=1`: treat real words as unknown, like the FP audit).
 use layout_keeper_core::{dict, layout, typo};
 fn main() {
     let unknown = std::env::var_os("AS_UNKNOWN").is_some();

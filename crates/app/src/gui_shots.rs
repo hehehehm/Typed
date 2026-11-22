@@ -1,11 +1,3 @@
-//! Headless rendering of the settings window for layout tests and screenshots.
-//! egui is run without a window; its meshes are rasterized on the CPU (premultiplied
-//! alpha, gamma-space blending like egui_glow), so no GPU or display is needed.
-//!
-//! * `every_screen_fits_the_window` (always runs): every screen at the minimum and the
-//!   default width, light and dark, never asks for more width than the window has.
-//! * `render_ui_screenshots` (`--ignored`): writes PNGs to `$TYPED_UI_SHOTS`
-//!   (default `/tmp/typed-ui-shots`).
 
 use super::*;
 use eframe::egui::{self, epaint, Color32, Event, ImageData, Pos2, Rect, Shape, TextureId};
@@ -37,7 +29,6 @@ pub(super) fn sample_cfg() -> Config {
     c
 }
 
-
 fn many_exceptions_cfg(n: usize) -> Config {
     let mut c = sample_cfg();
     c.exception_apps.clear();
@@ -61,7 +52,6 @@ pub(super) fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
     app_with_icons(cfg, tab, light, true)
 }
 
-/// Like `app_with`, but skip mock preloads so icon extraction goes through the real async path.
 pub(super) fn app_with_no_icon_preload(cfg: Config, tab: Tab, light: bool) -> App {
     app_with_icons(cfg, tab, light, false)
 }
@@ -138,14 +128,11 @@ struct Shot {
     app: App,
     focus: Focus,
     size: egui::Vec2,
-    /// macOS preview: ⌃⌥⇧⌘ keycaps and Inter standing in for SF.
     mac: bool,
 }
 
 pub(super) const INTER: &str = "/usr/share/fonts/truetype/sand-box/google/Inter/Inter-VariableFont_opsz,wght.ttf";
 
-
-/// A vault file on disk, still locked — the password + «Открыть» row.
 pub(super) fn locked_vault_ui() -> crate::vault_ui::VaultUi {
     use layout_keeper_core::vault::Vault;
     let dir = tmp_dir();
@@ -254,8 +241,6 @@ fn shots(with_vault: bool) -> Vec<Shot> {
     v
 }
 
-/// Runs a few frames (egui settles sizes over two passes) and returns the final output.
-/// 1× raster at the window's logical size (~512 px wide), as on a 100% Windows display.
 fn native_shots() -> Vec<Shot> {
     let sec_sz = egui::vec2(512.0, 496.0);
     let mut v = Vec::new();
@@ -372,7 +357,6 @@ fn sample(img: &egui::ColorImage, u: f32, v: f32) -> [f32; 4] {
     }
     o
 }
-
 
 pub(super) fn merge_textures(textures: &mut HashMap<TextureId, egui::ColorImage>, out: &egui::FullOutput) {
     for (id, delta) in &out.textures_delta.set {
@@ -500,7 +484,6 @@ fn render_ui_screenshots() {
         write_png(&dir.join(format!("{}.png", shot.name)), w, h, &buf);
         println!("{} overflow={}", shot.name, shot.app.content_overflow);
     }
-    // Native 1× (~512 px wide), matching a 100% Windows window.
     for mut shot in native_shots() {
         let ppp = 1.0;
         let (ctx, out, tex) = run(&mut shot, ppp);

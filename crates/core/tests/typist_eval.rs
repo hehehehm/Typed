@@ -1,17 +1,3 @@
-//! Typist testers: a seeded, engine-level keystroke simulation of two typist
-//! personas — torpyga, gramotey, zlodey — (no GUI, no hooks, no LLM). Run with:
-//!
-//! ```text
-//! EVAL_SEED=76 EVAL_N=5000 EVAL_OUT=/tmp/typist.md \
-//!   cargo test --release -p layout_keeper_core --test typist_eval -- --ignored --nocapture
-//! ```
-//!
-//! Env: `EVAL_SEED` (default 76), `EVAL_N` (phrases at Normal, default 5000),
-//! `EVAL_N_OTHER` (Cautious/Aggressive, default 1000), `EVAL_LEVEL`
-//! (`normal` / `cautious` / `aggressive` / `all`, default `all`),
-//! `EVAL_PERSONA` (`torpyga` / `gramotey` / `zlodey` / `all`), `EVAL_OUT` (markdown
-//! and/or JSON path). Options follow [`Config::engine_options`] (typos and
-//! missing-space fixes forced on; `undo_on_backspace` as in a new config).
 use layout_keeper_core::{
     layout::{self, Lang},
     typo, Config, Engine, EngineOptions, Key, Replacement,
@@ -54,10 +40,6 @@ const US_SHIFT: &[(char, char)] = &[
     ('\\', '|'),
 ];
 
-// ---------------------------------------------------------------------------
-// RNG (same LCG family as context_eval / correction_eval)
-// ---------------------------------------------------------------------------
-
 struct Rng(u64);
 
 impl Rng {
@@ -92,10 +74,6 @@ fn seed_of(base: u64, persona: &str, level: typo::Level) -> u64 {
         typo::Level::Aggressive => 3,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Physical keyboard
-// ---------------------------------------------------------------------------
 
 fn unshift(us: char) -> (char, bool) {
     if us.is_ascii_uppercase() {
@@ -204,7 +182,6 @@ struct Profile {
     mix: Mix,
 }
 
-/// Fast typist: many layout misses and neighbour slips, little jargon.
 const TORPYGA: Profile = Profile {
     name: "torpyga",
     rates: Rates {
@@ -227,7 +204,6 @@ const TORPYGA: Profile = Profile {
     mix: Mix { ru: 0.70, en: 0.25, chat: 0.05 },
 };
 
-/// Careful typist: few slips, lots of code / terms / nicks / mixed language (FP hunt).
 const GRAMOTEY: Profile = Profile {
     name: "gramotey",
     rates: Rates {
@@ -250,7 +226,6 @@ const GRAMOTEY: Profile = Profile {
     mix: Mix { ru: 0.18, en: 0.17, chat: 0.65 },
 };
 
-/// Angry fast typist: caps, mat, dropped spaces, doubled letters, sticky shift.
 const ZLODEY: Profile = Profile {
     name: "zlodey",
     rates: Rates {
@@ -277,10 +252,6 @@ fn profiles() -> Vec<Profile> {
     vec![TORPYGA, GRAMOTEY, ZLODEY]
 }
 
-// ---------------------------------------------------------------------------
-// Corpora
-// ---------------------------------------------------------------------------
-
 fn load_lines(path: &str) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return vec![];
@@ -289,7 +260,6 @@ fn load_lines(path: &str) -> Vec<String> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty() && !s.starts_with('#'))
         .map(|s| {
-            // Keep typist phrases short enough that thousands finish in well under a minute.
             if s.chars().count() <= 200 {
                 s.to_string()
             } else {
@@ -328,7 +298,6 @@ struct Corpus {
     ru: Vec<String>,
     en: Vec<String>,
     chat: Vec<String>,
-    /// lower(correct) -> wrong form
     spelling_right_to_wrong: BTreeMap<String, String>,
 }
 
@@ -381,16 +350,10 @@ fn match_case(sample: &str, word: &str) -> String {
     word.to_string()
 }
 
-// ---------------------------------------------------------------------------
-// Keystroke plan
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug)]
 enum Action {
     Switch(Lang),
-    /// Physical unshifted key and whether Shift is held.
     Key { phys: char, shift: bool },
-    /// A character with no physical mapping (em dash, guillemets, …).
     Exact(char),
     Backspace,
 }
@@ -455,7 +418,6 @@ fn plan_keys(
     }
     actions
 }
-
 
 fn shift_actions(actions: &[Action], dir: i32) -> Option<Vec<Action>> {
     let mut out = Vec::with_capacity(actions.len());
@@ -522,9 +484,6 @@ fn perturb(mut actions: Vec<Action>, rates: Rates, rng: &mut Rng) -> Vec<Action>
     out
 }
 
-
-/// Treat hyphenated words as typo targets: errors land in either letter segment,
-/// not on the hyphen itself.
 fn perturb_hyphen_aware(form: &str, actions: Vec<Action>, rates: Rates, rng: &mut Rng) -> Vec<Action> {
     if !form.contains('-') {
         return perturb(actions, rates, rng);
@@ -621,7 +580,6 @@ fn self_fix(actions: Vec<Action>, start: Lang, target: &str, p: f64, rng: &mut R
     }
     let Some(i) = cut else { return actions };
     prefix.push(Action::Backspace);
-    // After the typo, type the rest of `target` in the intended script of `target`.
     let mut layout = layout::detect_script(target).unwrap_or(start);
     for ch in want.into_iter().skip(i) {
         if let Some((phys, shift)) = locate(layout, ch) {
@@ -700,10 +658,6 @@ fn plan_correct(word: &str, layout: Lang) -> Vec<Action> {
     actions
 }
 
-// ---------------------------------------------------------------------------
-// Scoring
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum Kind {
     Ok,
@@ -762,7 +716,6 @@ struct Score {
     counts: BTreeMap<Kind, u32>,
     words: u32,
     phrases: u32,
-    /// group key -> (count, example)
     groups: BTreeMap<Kind, BTreeMap<String, (u32, String)>>,
 }
 
@@ -781,7 +734,6 @@ impl Score {
         self.counts.get(&k).copied().unwrap_or(0)
     }
 }
-
 
 fn maybe_spell(word: &str, map: &BTreeMap<String, String>, p: f64, rng: &mut Rng) -> String {
     if let Some(wrong) = map.get(&word.to_lowercase()) {
@@ -812,8 +764,6 @@ fn play_form(
     } else {
         (plan, false)
     };
-    // Keep a clean whole-hand shift so the engine can recover it; other slips
-    // are applied on unshifted words as before.
     let plan = if shifted { plan } else { perturb_hyphen_aware(&form, plan, rates, rng) };
     let plan = self_fix(plan, typist, form, rates.self_fix, rng);
     exec_actions(e, out, &plan, typist)
@@ -871,7 +821,6 @@ fn type_phrase(
         .unwrap_or("");
     let mut layout = intended_layout_for(first_word, Lang::En);
     e.options.preferred_lang = Some(layout);
-    // Once a word is hand-shifted, later words in the phrase often stay that way.
     let mut pending_shift: Option<i32> = None;
 
     let mut i = 0;
@@ -939,7 +888,6 @@ fn type_phrase(
             } else {
                 None
             };
-            // Mid-word layout switches already mangle the token; don't also column-shift.
             let col_shift = if mid {
                 pending_shift = None;
                 None
@@ -1211,8 +1159,6 @@ fn typist_main(n_normal: usize, n_other: usize) {
 
 #[test]
 fn typist_eval_smoke() {
-    // Tiny seeded run so `cargo test` compiles and exercises the harness.
-    // Does not fail on false-positive counts.
     let corpus = Corpus::load();
     assert!(!corpus.chat.is_empty() && !corpus.ru.is_empty() && !corpus.en.is_empty());
     let (md, json) = run_suite(20, 0, 1, &[typo::Level::Normal], &profiles(), &corpus);
@@ -1232,7 +1178,6 @@ fn physical_neighbours_include_first_letter_keys() {
     assert!(g.contains(&'f') && g.contains(&'h') && g.contains(&'t') && g.contains(&'b'), "{g:?}");
     assert_eq!(produce(Lang::Ru, 'g', false), 'п');
     assert_eq!(produce(Lang::En, 'g', false), 'g');
-    // и and т are neighbours on ЙЦУКЕН (physical b / n).
     assert!(neighbours('b').contains(&'n'));
     assert_eq!(produce(Lang::Ru, 'b', false), 'и');
     assert_eq!(produce(Lang::Ru, 'n', false), 'т');

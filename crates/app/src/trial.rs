@@ -1,14 +1,9 @@
-//! Local 30-day tester window, counted from the moment this binary was compiled.
-//! This is not a secure license: anyone with the sources or a hex editor can
-//! remove the check. It stops a casual tester from keeping one build forever
-//! and notices an obvious system-clock rollback.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const TRIAL_DAYS: u64 = 30;
 const TRIAL_SECS: u64 = TRIAL_DAYS * 24 * 60 * 60;
-/// Allow a bit of NTP / timezone slop before treating a backwards clock as tampering.
 const SKEW_SECS: u64 = 12 * 60 * 60;
 
 const EXPIRED_RU: &str =

@@ -1,10 +1,3 @@
-//! Before/after audit of the full-form sets (`dict::set_full_forms_enabled`).
-//! `cargo run --release -p layout_keeper_core --example wordset_audit -- <ru_full.txt> <en_full.txt>`
-//! (hermitdave FrequencyWords `*_full.txt`: "word count" lines; not bundled.)
-//! 1. Real-looking rare words (frequency list ranks 40k+, count >= 5) must not be "fixed".
-//! 2. Synthetic typos of ranked words (neighbour-key slip or swap) should still be fixed.
-//! 3. Engine: rare correct words must not be converted to the other layout; frequent
-//!    words typed in the wrong layout must still be converted.
 use layout_keeper_core::{dict::{self, Dictionary}, engine::{Decision, Engine, EngineOptions}, layout::{self, Lang}, typo};
 
 const ROWS_EN: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];

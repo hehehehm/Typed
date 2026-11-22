@@ -1,4 +1,3 @@
-//! `cargo run --release --example decide -- token ...`: engine decision + ranks.
 use layout_keeper_core::{dict, layout, typo, Config, Decision, Engine};
 fn main() {
     let mut o = Config::default().engine_options();

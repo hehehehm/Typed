@@ -1,6 +1,3 @@
-//! `cargo run --release --example layout_audit -- <out_dir>`: every real word of the RU and EN
-//! full-form sets and frequency lists through `Engine::decide` (typo fixing on, Normal): how
-//! many get layout-converted. Writes `<out_dir>/{ru,en}_{full,ranked}.tsv` (word, result, reason).
 use layout_keeper_core::{dict, engine::Decision, layout, layout::Lang, Engine, EngineOptions};
 use std::io::Write;
 fn main() {

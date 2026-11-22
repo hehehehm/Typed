@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""Count word uni/bi/trigrams for Typed's context model.
 
-Usage: count.py <lang ru|en> <out_dir> <tatoeba_sentences.tsv.bz2> [wiki_pages_articles.xml.bz2 [max_wiki_tokens]]
-
-* Tatoeba sentences (CC BY 2.0 FR): every sentence whose id % 50 == 0 is HELD OUT (written to
-  heldout.txt for the evaluation, never counted).
-* A Wikipedia articles dump part (CC BY-SA 4.0), crude markup stripping, up to max tokens.
-Tokens: lowercase letter runs (ё → е) of the language's alphabet. Vocabulary: the ranked
-list + extras of Typed (crates/core/data/{lang}.txt, {lang}_extra.txt) plus any corpus token
-seen >= OOV_MIN times (names, code-ish words: lets the engine see that the TYPED word fits).
-Sentence start is `<s>`; anything else (digits, other script, out-of-vocabulary token,
-sentence end) breaks the context. Output: ngrams.tsv with `w1 [w2 [w3]]\tcount`, pruned.
-"""
 import bz2, re, sys, os, collections
 
 OOV_MIN = 30
@@ -82,7 +70,6 @@ raw = collections.Counter()
 seqs_path = os.path.join(out_dir, 'seqs.tmp')
 os.makedirs(out_dir, exist_ok=True)
 held = open(os.path.join(out_dir, 'heldout.txt'), 'w', encoding='utf-8')
-# Pass 1: token counts (for the out-of-vocabulary list) and the token stream to disk.
 with open(seqs_path, 'w', encoding='utf-8') as seqs:
     srcs = [sentences_tatoeba(held)] + ([sentences_wiki()] if wiki else [])
     for src in srcs:
@@ -94,7 +81,7 @@ with open(seqs_path, 'w', encoding='utf-8') as seqs:
                     continue
                 if not letters_re.match(t.lower()):
                     if run: seqs.write(' '.join(run) + '\n'); run = []
-                    run = ['|']  # a break, not a sentence start
+                    run = ['|']
                     continue
                 w = norm(t)
                 raw[w] += 1

@@ -1,15 +1,3 @@
-//! «Запуск администратором» (Windows, since 0.3.67).
-//!
-//! Windows does not let a normal process switch the layout of, or type into, windows of
-//! apps running as administrator (UIPI). With the setting on, a Task Scheduler task
-//! «Typed» starts the daemon with the highest rights at sign-in, without a UAC prompt.
-//! Creating or deleting that task needs administrator rights once: the settings window
-//! starts `typed admin-task on|off` through the "runas" verb (one UAC prompt).
-//!
-//! Any non-elevated `typed run` (the startup-folder shortcut, the settings window
-//! starting a missing daemon) hands over to the task while the setting is on, so there is
-//! still exactly one daemon (its mutex guards the rest). The task passes `--from-task`,
-//! which never hands over again, so a task that could not elevate cannot loop.
 
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -26,14 +14,11 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
-/// Task Scheduler task name.
 pub const TASK_NAME: &str = "Typed";
 
-/// Our process image: `typed.exe`, or `layout-keeper.exe` before 0.3.68.
 pub fn is_typed_exe_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("typed.exe") || name.eq_ignore_ascii_case("layout-keeper.exe")
 }
-/// Argument the task passes to `run`: never hand over to the task again.
 pub const FROM_TASK_ARG: &str = "--from-task";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -65,13 +50,10 @@ fn token_elevated(process: HANDLE) -> Result<bool, u32> {
     }
 }
 
-/// This process runs with administrator rights.
 pub fn is_elevated() -> bool {
     token_elevated(unsafe { GetCurrentProcess() }).unwrap_or(false)
 }
 
-/// Is another `typed.exe` (the daemon) elevated? `None` when none runs.
-/// From a normal process an elevated one's token cannot even be opened: that counts as yes.
 pub fn other_instance_elevated() -> Option<bool> {
     let me = unsafe { GetCurrentProcessId() };
     let mut any = None;
@@ -129,7 +111,6 @@ pub fn task_exists() -> bool {
     schtasks(&["/Query", "/TN", TASK_NAME]).is_ok()
 }
 
-/// Program the task starts (`<Command>` of its XML), `None` without a task.
 pub fn task_command() -> Option<String> {
     let out = Command::new("schtasks.exe")
         .args(["/Query", "/TN", TASK_NAME, "/XML"])
@@ -143,7 +124,6 @@ pub fn task_command() -> Option<String> {
     command_from_xml(&decode(&out.stdout))
 }
 
-/// schtasks prints the XML as UTF-16 or as 8-bit text depending on the console.
 fn decode(b: &[u8]) -> String {
     let zeros = b.iter().filter(|&&c| c == 0).count();
     if b.len() >= 2 && zeros * 3 > b.len() {
@@ -161,19 +141,15 @@ fn command_from_xml(xml: &str) -> Option<String> {
     Some(c.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\""))
 }
 
-/// The task exists and starts this very program (not the pre-0.3.68 `layout-keeper.exe`
-/// or another copy).
 pub fn task_points_here() -> bool {
     let (Some(cmd), Ok(exe)) = (task_command(), std::env::current_exe()) else { return false };
     cmd.eq_ignore_ascii_case(&exe.display().to_string())
 }
 
-/// Start the elevated daemon through the task (no UAC prompt).
 pub fn run_task() -> Result<(), String> {
     schtasks(&["/Run", "/TN", TASK_NAME])
 }
 
-/// Stop the daemon the task started (a normal process cannot end an elevated one itself).
 pub fn end_task() {
     let _ = schtasks(&["/End", "/TN", TASK_NAME]);
 }
@@ -182,8 +158,6 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// `DOMAIN\user` of this process (the settings window passes its own to the helper, so
-/// over-the-shoulder admin credentials still register the task for the signed-in user).
 pub fn current_user() -> String {
     let user = std::env::var("USERNAME").unwrap_or_default();
     match std::env::var("USERDOMAIN") {
@@ -194,8 +168,6 @@ pub fn current_user() -> String {
 
 fn task_xml(exe: &str, dir: &str, user: &str) -> String {
     let (exe, dir, user) = (xml_escape(exe), xml_escape(dir), xml_escape(user));
-    // ExecutionTimeLimit PT0S: the daemon runs for days; the schtasks default would end
-    // it after 72 hours. Battery settings off: a laptop must not lose it unplugged.
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -230,13 +202,11 @@ fn task_xml(exe: &str, dir: &str, user: &str) -> String {
     )
 }
 
-/// Register the task for `user` (needs administrator rights).
 pub fn create_task(user: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().map(|p| p.display().to_string()).unwrap_or_default();
     let xml = task_xml(&exe.display().to_string(), &dir, user);
     let path = std::env::temp_dir().join(format!("typed-task-{}.xml", std::process::id()));
-    // UTF-16 LE with a BOM: what schtasks /XML reads reliably.
     let mut bytes = vec![0xFF, 0xFE];
     for u in xml.encode_utf16() {
         bytes.extend_from_slice(&u.to_le_bytes());
@@ -255,14 +225,11 @@ pub fn delete_task() -> Result<(), String> {
     schtasks(&["/Delete", "/TN", TASK_NAME, "/F"])
 }
 
-/// A normal `typed run` with the setting on: start the task instead and report
-/// `true` (the caller exits). Never from the task itself, never when already elevated.
 pub fn hand_over_to_task(args: &[String]) -> bool {
     if args.iter().any(|a| a == FROM_TASK_ARG) || is_elevated() || !task_exists() {
         return false;
     }
     if !task_points_here() {
-        // E.g. still `layout-keeper.exe` after the 0.3.68 rename: that file is gone.
         log::warn!("run_as_admin: the «{TASK_NAME}» task starts another program; running without administrator rights");
         return false;
     }
@@ -278,13 +245,6 @@ pub fn hand_over_to_task(args: &[String]) -> bool {
     }
 }
 
-/// `typed admin-task on|off|refresh|needs-refresh [--user DOMAIN\name] [--keep <pid>]`:
-/// on (elevated) — register the task, stop every other Typed process except `--keep` (the
-/// settings window) and start the elevated daemon through the task; off (elevated) —
-/// delete the task; refresh (elevated, used by the installer) — if the task exists,
-/// re-register it for this program and start it; needs-refresh (no rights needed) —
-/// succeeds only when the task exists but starts another program.
-/// The daemon already running keeps its rights until it is restarted (sign-in).
 pub fn helper_main(args: &[String]) -> Result<(), String> {
     let on = match args.get(1).map(String::as_str) {
         Some("on") => true,
@@ -314,8 +274,6 @@ pub fn helper_main(args: &[String]) -> Result<(), String> {
     }
 }
 
-/// Run the helper with administrator rights (one UAC prompt) and wait for it.
-/// `Err("cancelled")` when the user said no.
 pub fn run_helper_elevated(on: bool) -> Result<(), String> {
     if is_elevated() {
         let args: Vec<String> = ["admin-task", if on { "on" } else { "off" }, "--user", &current_user(), "--keep", &std::process::id().to_string()]

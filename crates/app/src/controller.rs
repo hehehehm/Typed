@@ -1,9 +1,3 @@
-//! Platform-independent glue between OS events and the core engine:
-//! per-app layout memory, auto-learning, exceptions, autocorrect and the manual hotkey.
-//!
-//! Platform adapters call [`Controller::tick`] periodically with the focused app and the
-//! active layout, and [`Controller::on_input`] for each key; they execute the returned
-//! [`Command`]s. Nothing here touches the OS, so it is unit-tested on any machine.
 
 use crate::app_id::is_hidden_app;
 use layout_keeper_core::{Config, Engine, Hotkey, HotkeyCode, Key, Lang, Replacement};
@@ -14,24 +8,15 @@ use std::time::{Duration, Instant, SystemTime};
 pub enum Input {
     Key { key: Key, modifiers: bool },
     Hotkey,
-    /// Undo the last autocorrection and never correct that word again.
     Undo,
-    /// Open or focus the settings / vault window. Works even in exception apps.
     Summon,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Make `Lang` the active layout for the focused app.
     SwitchLayout(Lang),
-    /// Erase `delete` chars, type `insert`, activate `target`, then report success.
-    /// Fail safe: if erasing or
-    /// typing cannot be done completely, the adapter must not start it at all.
     Replace(Replacement),
-    /// Bring the settings / vault window to the front (or start it).
     SummonGui,
-    /// Hotkey with no known word: convert the selection (or the word left of the caret)
-    /// via copy / paste. The adapter reports the new layout with `replace_succeeded`.
     ConvertSelection,
 }
 
@@ -41,9 +26,7 @@ pub struct Controller {
     engine: Engine,
     app: Option<String>,
     layout: Option<Lang>,
-    /// Layout we asked for ourselves — its change notification must not be "learned".
     expected: Option<(Lang, Instant)>,
-    /// An adapter has not yet acknowledged the queued word replacement.
     replacement_pending: bool,
     config_mtime: Option<SystemTime>,
     last_reload_check: Instant,
@@ -92,9 +75,6 @@ impl Controller {
         self.config.undo_on_backspace
     }
 
-    /// The configured immediate-undo combo, or the legacy `undo_hotkey` when it is a
-    /// different one (old configs that saved Ctrl+Alt+Z). Bare Backspace is not a
-    /// swallowed hotkey: it goes through [`Key::Backspace`].
     pub fn matches_undo_combo(&self, code: HotkeyCode, ctrl: bool, alt: bool, shift: bool, meta: bool) -> bool {
         if !self.undo_enabled() {
             return false;
@@ -103,8 +83,6 @@ impl Controller {
         hit(self.undo_key()) || (self.undo_hotkey() != self.undo_key() && hit(self.undo_hotkey()))
     }
 
-    /// Save what the engine learned from undos (`never_correct`, `never_typo_fix`,
-    /// `undone_once`).
     fn save_learned(&mut self) {
         let events = self.engine.take_learned();
         let mut changed = false;
@@ -126,22 +104,16 @@ impl Controller {
     }
 
     fn active_is_exception(&self) -> bool {
-        // Typed's own window (vault master password, dictionary field) is never autocorrected.
         self.app.as_deref().is_some_and(|a| is_own_app(a) || self.config.is_exception(a))
     }
 
     fn learn(&mut self, app: &str, lang: Lang) {
-        // Exceptions disable autocorrect only; layout memory still applies.
         if !self.config.learns_layouts() {
             return;
         }
-        // Installers, temp unpackers and OS shell hosts should not accumulate.
         if is_hidden_app(app) {
             return;
         }
-        // Sticky defaults: an assigned layout is never overwritten by a keyboard switch.
-        // Only `set-app` / the GUI change an existing assignment.
-        // If we now have a full path for a name that was stored as a bare exe, keep the path.
         if self.config.layout_for(app).is_some() {
             if self.config.prefer_app_path(app) {
                 self.save();
@@ -173,7 +145,6 @@ impl Controller {
         }
     }
 
-    /// Pick up edits made by `layout-keeper set-app` or by hand while running.
     fn maybe_reload(&mut self) {
         if self.last_reload_check.elapsed() < Duration::from_secs(1) {
             return;
@@ -205,7 +176,6 @@ impl Controller {
         self.engine.options.preferred_lang = self.app.as_deref().and_then(|a| self.config.layout_for(a));
     }
 
-    /// Periodic state report from the adapter.
     pub fn tick(&mut self, app: Option<&str>, layout: Option<Lang>) -> Vec<Command> {
         self.maybe_reload();
         if let Some((_, t)) = self.expected {
@@ -216,7 +186,6 @@ impl Controller {
         let mut out = Vec::new();
         let app_changed = app != self.app.as_deref();
         if app_changed {
-            // Leaving an app we had no memory for: remember the layout the user left it on.
             if let (Some(prev), Some(l)) = (self.app.clone(), self.layout) {
                 if self.config.layout_for(&prev).is_none() {
                     self.learn(&prev, l);
@@ -234,7 +203,6 @@ impl Controller {
                     self.launches_dirty = true;
                 }
                 if let Some(want) = self.config.layout_for(a) {
-                    // Activation / per-window IME may overwrite even an already matching HKL.
                     log::debug!("focus: applying remembered layout {want}");
                     self.expected = Some((want, Instant::now()));
                     out.push(Command::SwitchLayout(want));
@@ -244,16 +212,12 @@ impl Controller {
         }
         if layout != self.layout {
             self.layout = layout;
-            // During the grace period all changes may be activation races or our own
-            // requests; never learn them as manual input.
             if self.expected.is_none() && !self.replacement_pending {
                 if let (Some(l), Some(a)) = (layout, self.app.clone()) {
                     self.learn(&a, l);
                 }
             }
         }
-        // Keep applying for the FULL grace period: a matching HKL can be transient
-        // after AttachThreadInput / ActivateKeyboardLayout, not an acknowledgement.
         if !self.replacement_pending {
             if let Some((want, _)) = self.expected {
                 out.push(Command::SwitchLayout(want));
@@ -269,7 +233,6 @@ impl Controller {
         if matches!(input, Input::Summon) {
             return vec![Command::SummonGui];
         }
-        // Exception list: never autocorrect or hotkey-convert in these apps.
         if self.active_is_exception() {
             self.engine.reset();
             return vec![];
@@ -279,7 +242,6 @@ impl Controller {
             Input::Hotkey => match self.engine.manual_convert(self.layout.unwrap_or(Lang::En)) {
                 Some(r) => Some(r),
                 None => {
-                    // Clicked or moved the caret since typing: work on the selection.
                     self.engine.reset();
                     return vec![Command::ConvertSelection];
                 }
@@ -297,14 +259,12 @@ impl Controller {
         }
     }
 
-    /// Start the layout grace period only after the adapter actually replaced the word.
     pub fn replace_succeeded(&mut self, lang: Lang) {
         self.replacement_pending = false;
         self.layout = Some(lang);
         self.expected = Some((lang, Instant::now()));
     }
 
-    /// Adapter reports that a Replace could not be performed; forget the word state.
     pub fn replace_failed(&mut self) {
         self.replacement_pending = false;
         self.engine.reset();
@@ -331,7 +291,6 @@ mod tests {
         let mut c = ctl();
         c.config.set_layout("telegram", Lang::Ru);
         assert_eq!(c.tick(Some("telegram"), Some(Lang::En)), vec![Command::SwitchLayout(Lang::Ru)]);
-        // Our own switch is not "learned" as a manual change.
         assert_eq!(c.tick(Some("telegram"), Some(Lang::Ru)), vec![Command::SwitchLayout(Lang::Ru)]);
         assert_eq!(c.config.layout_for("telegram"), Some(Lang::Ru));
         c.expected = Some((Lang::Ru, Instant::now() - Duration::from_secs(6)));
@@ -344,13 +303,11 @@ mod tests {
         c.tick(Some("code"), Some(Lang::En));
         c.tick(Some("code"), Some(Lang::Ru));
         assert_eq!(c.config.layout_for("code"), Some(Lang::Ru));
-        // Already assigned: a further manual switch does not overwrite it.
         c.tick(Some("code"), Some(Lang::En));
         assert_eq!(c.config.layout_for("code"), Some(Lang::Ru));
         c.tick(Some("firefox"), Some(Lang::En));
         c.tick(Some("slack"), Some(Lang::En));
         assert_eq!(c.config.layout_for("firefox"), Some(Lang::En));
-        // Back to code: switch to Ru.
         assert_eq!(c.tick(Some("code"), Some(Lang::En)), vec![Command::SwitchLayout(Lang::Ru)]);
     }
 
@@ -411,7 +368,6 @@ mod tests {
         c.config.set_layout("telegram", Lang::Ru);
         assert_eq!(c.tick(Some("telegram"), Some(Lang::Ru)), vec![Command::SwitchLayout(Lang::Ru)]);
         assert!(c.expected.is_some());
-        // Windows overwrites an initially matching layout after activation.
         assert_eq!(c.tick(Some("telegram"), Some(Lang::En)), vec![Command::SwitchLayout(Lang::Ru)]);
         assert_eq!(c.config.layout_for("telegram"), Some(Lang::Ru));
     }
@@ -423,14 +379,12 @@ mod tests {
         c.config.set_layout("telegram", Lang::Ru);
         c.config.set_layout(moba, Lang::En);
         assert_eq!(c.tick(Some("telegram"), Some(Lang::Ru)), vec![Command::SwitchLayout(Lang::Ru)]);
-        // Adapter reports the visible app, not the stale minimized Telegram HWND.
         assert_eq!(c.tick(Some(moba), Some(Lang::Ru)), vec![Command::SwitchLayout(Lang::En)]);
         assert_eq!(c.tick(Some(moba), Some(Lang::En)), vec![Command::SwitchLayout(Lang::En)]);
         assert!(c.config.is_exception(moba));
         assert!(typ(&mut c, "зуфсу ").is_empty());
         assert!(c.on_input(Input::Hotkey).is_empty());
         assert_eq!(c.tick(Some(moba), Some(Lang::Ru)), vec![Command::SwitchLayout(Lang::En)]);
-        // Leaving also cancels the old app's grace period.
         assert!(c.tick(Some("unassigned"), Some(Lang::Ru)).is_empty());
         assert!(c.expected.is_none());
     }
@@ -454,13 +408,10 @@ mod tests {
             assert_eq!(c.tick(Some("telegram"), Some(Lang::En)), vec![Command::SwitchLayout(Lang::Ru)]);
             c.tick(Some("telegram"), Some(Lang::Ru));
             c.expected = Some((Lang::Ru, Instant::now() - Duration::from_secs(6)));
-            // User temporarily switches to En inside the app: not forced back, not saved.
             assert!(c.tick(Some("telegram"), Some(Lang::En)).is_empty());
             assert_eq!(c.config.layout_for("telegram"), Some(Lang::Ru));
-            // Leaves on En: still not saved.
             c.tick(Some("firefox"), Some(Lang::En));
             assert_eq!(c.config.layout_for("telegram"), Some(Lang::Ru));
-            // Focus returns: default re-applied.
             assert_eq!(c.tick(Some("telegram"), Some(Lang::En)), vec![Command::SwitchLayout(Lang::Ru)]);
         }
     }
@@ -491,7 +442,6 @@ mod tests {
         let saved = Config::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved.never_correct, vec!["зуфсу".to_string()]);
         assert!(typ(&mut c, "зуфсу ").is_empty());
-        // Nothing to undo: no selection fallback, nothing happens.
         assert!(c.on_input(Input::Undo).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -511,8 +461,6 @@ mod tests {
         assert_eq!(cmds, vec![Command::Replace(Replacement { delete: 7, insert: "ghbdtn ".into(), target: Lang::En })]);
         c.replace_succeeded(Lang::En);
         typ(&mut c, "hello ");
-        // Since 0.3.72: the first Backspace undo is only noted, the second one of the
-        // same word saves it as never-correct.
         assert!(c.config.never_correct.is_empty());
         assert_eq!(c.config.undone_once, vec!["ghbdtn".to_string()]);
         typ(&mut c, "ghbdtn ");
@@ -533,7 +481,6 @@ mod tests {
         c.tick(Some("firefox"), Some(Lang::En));
         typ(&mut c, "ghbdtn ");
         c.replace_succeeded(Lang::Ru);
-        // The Backspace is a normal erase: no restore of the typed word.
         assert!(c.on_input(Input::Key { key: Key::Backspace, modifiers: false }).is_empty());
     }
 
@@ -544,10 +491,8 @@ mod tests {
         let cmds = typ(&mut c, "зуфсу ");
         assert_eq!(cmds, vec![Command::Replace(Replacement { delete: 6, insert: "peace ".into(), target: Lang::En })]);
         c.replace_succeeded(Lang::En);
-        // The resulting layout change is ours, not learned.
         c.tick(Some("firefox"), Some(Lang::En));
         assert_eq!(c.config.layout_for("firefox"), None);
-        // Hotkey undoes.
         let cmds = c.on_input(Input::Hotkey);
         assert_eq!(cmds, vec![Command::Replace(Replacement { delete: 6, insert: "зуфсу ".into(), target: Lang::Ru })]);
         c.replace_succeeded(Lang::Ru);
@@ -557,7 +502,6 @@ mod tests {
 
     #[test]
     fn holding_shift_does_not_flip_layout_before_replacement_succeeds() {
-        // Holding Shift may leave Replace queued in an adapter: no early switch or learning.
         let mut c = ctl();
         c.tick(Some("firefox"), Some(Lang::Ru));
         assert!(matches!(typ(&mut c, "зуфсу ").as_slice(), [Command::Replace(_)]));
@@ -612,11 +556,9 @@ mod tests {
         let mut c = ctl();
         c.tick(Some("firefox"), Some(Lang::En));
         assert_eq!(c.on_input(Input::Hotkey), vec![Command::ConvertSelection]);
-        // After a click the typed word is unknown too.
         typ(&mut c, "hello ");
         c.on_input(Input::Key { key: Key::Reset, modifiers: false });
         assert_eq!(c.on_input(Input::Hotkey), vec![Command::ConvertSelection]);
-        // Right after typing, the hotkey still flips the last word.
         typ(&mut c, "ghbdtn");
         assert!(matches!(c.on_input(Input::Hotkey).as_slice(), [Command::Replace(_)]));
     }
@@ -648,7 +590,6 @@ mod tests {
         assert_eq!(typ(&mut c, "d "), vec![Command::Replace(Replacement {
             delete: 2, insert: "в ".into(), target: Lang::Ru,
         })]);
-        // Assignment edits are used on every input, not the last OS-reported layout.
         c.config.set_layout("chat", Lang::En);
         assert!(typ(&mut c, "q ").is_empty());
         assert_eq!(typ(&mut c, "й ")[0], Command::Replace(Replacement {
@@ -670,7 +611,6 @@ mod tests {
         cfg.save(&path).unwrap();
         let mut c = Controller::new(cfg.clone(), Some(path.clone()));
         c.tick(Some("chat"), Some(Lang::En));
-        // Force a reload check without sleeping or depending on filesystem time precision.
         cfg.set_layout("chat", Lang::En);
         cfg.save(&path).unwrap();
         c.config_mtime = None;
@@ -725,8 +665,6 @@ mod tests {
 
 }
 
-/// Our own GUI: `typed.exe` (before 0.3.68 `layout-keeper.exe`) on Windows,
-/// `layout-keeper-bin` / `app.layoutkeeper` on macOS.
 fn is_own_app(app: &str) -> bool {
     let a = app.to_ascii_lowercase();
     a == "typed.exe" || a.ends_with("\\typed.exe") || a.ends_with("/typed") || a.ends_with("\\typed")

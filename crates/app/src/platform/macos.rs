@@ -1,14 +1,3 @@
-//! macOS adapter.
-//!
-//! * focused app: `NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier` (via the ObjC runtime);
-//! * layout: Text Input Sources (Carbon `TIS*`): the current keyboard input source's first language,
-//!   switching with `TISSelectInputSource` to an installed, selectable source whose language is
-//!   `en` / `ru` (no hard-coded source ids — "ABC", "U.S.", "Russian – PC" … all work);
-//! * keys: `CGEventTap` that can swallow Enter/Tab when a replacement is queued (needs **Input Monitoring** / Accessibility);
-//! * replacement: synthetic Delete key presses + `CGEventKeyboardSetUnicodeString` events
-//!   (needs **Accessibility**).
-//!
-//! Synthetic events are tagged in `kCGEventSourceUserData` so our own tap ignores them.
 
 #![allow(non_upper_case_globals, non_snake_case)]
 
@@ -114,7 +103,7 @@ const KC_DELETE: u16 = 51;
 const KC_KP_ENTER: u16 = 76;
 const KC_SHIFT_L: u16 = 56;
 const KC_SHIFT_R: u16 = 60;
-const KC_F15_PAUSE: u16 = 113; // F15 sits where Pause is on Apple extended keyboards
+const KC_F15_PAUSE: u16 = 113;
 
 fn cfstring_to_string(s: CFStringRef) -> Option<String> {
     if s.is_null() {
@@ -131,7 +120,6 @@ fn sel(name: &CStr) -> Sel {
     unsafe { sel_registerName(name.as_ptr()) }
 }
 
-/// `[obj sel]` returning an object.
 unsafe fn msg0(obj: Id, s: Sel) -> Id {
     let f: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
     f(obj, s)
@@ -187,8 +175,6 @@ pub fn open_accessibility_settings() {
         .spawn();
 }
 
-/// `setApplicationIconImage` draws the bitmap as-is, so we clip it to a macOS squircle
-/// first. The bundle `.icns` gets that mask from Dock automatically; a raw PNG does not.
 fn apply_macos_dock_mask(rgba: &mut [u8], w: usize, h: usize) {
     let wf = w as f32;
     let hf = h as f32;
@@ -233,7 +219,6 @@ fn png_with_dock_mask(png: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Replace the Dock / app switcher mark with the chosen logo, clipped to a squircle.
 pub fn set_dock_icon(png: &[u8]) {
     let masked = png_with_dock_mask(png);
     let bytes = masked.as_deref().unwrap_or(png);
@@ -268,7 +253,6 @@ unsafe extern "C" fn on_dock_reopen(_this: Id, _cmd: Sel, _app: Id, _has_visible
     1
 }
 
-/// Dock click / `open` of a running Typed: show the hidden window instead of doing nothing.
 pub fn install_dock_reopen_handler() {
     use std::sync::atomic::{AtomicBool, Ordering};
     static DONE: AtomicBool = AtomicBool::new(false);
@@ -313,7 +297,6 @@ fn nsdata_to_vec(data: Id) -> Option<Vec<u8>> {
     }
 }
 
-/// App icon RGBA for a bundle identifier (`com.google.chrome`, ...).
 pub fn app_icon_rgba(bundle_id: &str) -> Option<eframe::egui::ColorImage> {
     unsafe {
         let pool = objc_autoreleasePoolPush();
@@ -350,7 +333,7 @@ pub fn app_icon_rgba(bundle_id: &str) -> Option<eframe::egui::ColorImage> {
             }
             let dict_cls = objc_getClass(c"NSDictionary".as_ptr());
             let empty = msg0(dict_cls, sel(c"dictionary"));
-            const PNG: usize = 4; // NSBitmapImageFileTypePNG
+            const PNG: usize = 4;
             let conv: unsafe extern "C" fn(Id, Sel, usize, Id) -> Id =
                 std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             let png = conv(rep, sel(c"representationUsingType:properties:"), PNG, empty);
@@ -399,7 +382,6 @@ fn frontmost_bundle_id() -> Option<String> {
             let app = if ws.is_null() { std::ptr::null_mut() } else { msg0(ws, sel(c"frontmostApplication")) };
             if !app.is_null() {
                 let bid = msg0(app, sel(c"bundleIdentifier"));
-                // NSString is toll-free bridged with CFString.
                 out = cfstring_to_string(bid as CFStringRef);
             }
         }
@@ -408,8 +390,6 @@ fn frontmost_bundle_id() -> Option<String> {
     }
 }
 
-/// TIS/HIToolbox asserts it is called on the main dispatch queue (macOS 26+).
-/// The GUI focus poller runs off-thread, so hop there when needed.
 fn on_main<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
@@ -514,7 +494,6 @@ fn switch_to_on_main(lang: Lang) -> bool {
     }
 }
 
-/// US character of an ANSI virtual keycode (kVK_ANSI_*), unshifted.
 fn us_base(kc: u16) -> Option<char> {
     const T: &[(u16, char)] = &[
         (0, 'a'), (1, 's'), (2, 'd'), (3, 'f'), (4, 'h'), (5, 'g'), (6, 'z'), (7, 'x'), (8, 'c'), (9, 'v'),
@@ -565,7 +544,6 @@ fn launched_from_app_bundle() -> bool {
         .unwrap_or(false)
 }
 
-/// The tap could only be created listen-only: keys cannot be swallowed.
 static TAP_LISTEN_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn install_tap(mask: u64) -> CFMachPortRef {
@@ -599,8 +577,6 @@ fn install_tap(mask: u64) -> CFMachPortRef {
         if src.is_null() {
             return std::ptr::null_mut();
         }
-        // A CFRunLoopSource can live on only one loop. The GUI's eframe loop is the main
-        // one, so key callbacks must land there — not on this background tick thread.
         CFRunLoopAddSource(CFRunLoopGetMain(), src, kCFRunLoopCommonModes);
         CGEventTapEnable(tap, true);
         tap
@@ -661,7 +637,6 @@ fn handle_key(st: &mut State, kc: u16, flags: u64) -> bool {
                     Some(Lang::Ru) => layout::en_to_ru(us).unwrap_or(us),
                     _ => us,
                 };
-                // Option produces special characters on macOS: not word input.
                 let key = if flags & FLAG_ALT != 0 && flags & FLAG_CTRL == 0 { Key::Reset } else { Key::Char(c) };
                 Input::Key { key, modifiers: mods }
             }
@@ -669,8 +644,6 @@ fn handle_key(st: &mut State, kc: u16, flags: u64) -> bool {
         },
     };
     let mut cmds = st.ctl.on_input(input);
-    // A listen-only tap cannot swallow the Backspace that undid an autocorrection:
-    // it has already erased one boundary character.
     if kc == KC_DELETE && TAP_LISTEN_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
         for c in cmds.iter_mut() {
             if let Command::Replace(r) = c {
@@ -678,7 +651,6 @@ fn handle_key(st: &mut State, kc: u16, flags: u64) -> bool {
             }
         }
     }
-    // Enter/Tab that triggered a replacement, and a Backspace that undid one.
     let swallow = matches!(kc, KC_RETURN | KC_KP_ENTER | KC_TAB | KC_DELETE)
         && cmds.iter().any(|c| matches!(c, Command::Replace(_)));
     st.pending.extend(cmds);
@@ -754,7 +726,6 @@ unsafe extern "C" fn tap_cb(_p: CGEventTapProxy, ty: u32, ev: CGEventRef, _i: *m
     if swallow { std::ptr::null_mut() } else { ev }
 }
 
-/// Tap `kc` with `flags` held (Cmd+C, Option+Shift+Left), tagged with LK_MAGIC.
 unsafe fn post_chord(kc: u16, flags: u64) {
     for down in [true, false] {
         let e = CGEventCreateKeyboardEvent(std::ptr::null(), kc, down);
@@ -775,17 +746,16 @@ impl crate::selection::Keys for MacKeys {
         extern "C" {
             fn CGEventSourceFlagsState(state: i32) -> u64;
         }
-        // kCGEventSourceStateHIDSystemState = 1: the physical keyboard.
         unsafe { CGEventSourceFlagsState(1) & (FLAG_SHIFT | FLAG_CTRL | FLAG_ALT | FLAG_CMD) != 0 }
     }
     fn copy(&self) {
-        unsafe { post_chord(8, FLAG_CMD) } // kVK_ANSI_C
+        unsafe { post_chord(8, FLAG_CMD) }
     }
     fn paste(&self) {
-        unsafe { post_chord(9, FLAG_CMD) } // kVK_ANSI_V
+        unsafe { post_chord(9, FLAG_CMD) }
     }
     fn select_word_left(&self) {
-        unsafe { post_chord(123, FLAG_ALT | FLAG_SHIFT) } // kVK_LeftArrow
+        unsafe { post_chord(123, FLAG_ALT | FLAG_SHIFT) }
     }
     fn done(&self, target: Lang) {
         if switch_to(target) {
@@ -849,7 +819,6 @@ fn flush() {
                 other => rest.push(other),
             }
         }
-        // Shift alone must not block replace; Ctrl/Alt/Cmd still wait (injection).
         if st.flags & (FLAG_CTRL | FLAG_ALT | FLAG_CMD) == 0 {
             out.extend(rest);
         } else {
@@ -875,9 +844,6 @@ fn flush() {
                 true
             }
             Command::SummonGui => {
-                // GUI and the key tap share this process. Spawning `layout-keeper-bin gui`
-                // opened a second window (and a raw "exec" Dock icon) instead of showing
-                // the hidden one.
                 crate::platform::request_open_vault();
                 crate::tray::wake_gui();
                 true
@@ -890,8 +856,6 @@ fn flush() {
 }
 
 fn hide_standalone_daemon_from_dock() {
-    // The key loop now runs inside Typed.app. Hiding that process would hide the GUI too.
-    // A no-arg double-click also has no "gui" argv even when main defaults to the window.
     let is_gui = std::env::args().any(|a| a == "gui" || a == "settings") || launched_from_app_bundle();
     if is_gui {
         return;
@@ -905,7 +869,7 @@ fn hide_standalone_daemon_from_dock() {
         if app.is_null() {
             return;
         }
-        const PROHIBITED: isize = 2; // NSApplicationActivationPolicyProhibited
+        const PROHIBITED: isize = 2;
         let f: unsafe extern "C" fn(Id, Sel, isize) -> u8 =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let _ = f(app, sel(c"setActivationPolicy:"), PROHIBITED);
@@ -982,8 +946,6 @@ pub fn probe() -> (Option<String>, Option<Lang>) {
     on_main(|| (frontmost_bundle_id(), current_lang_on_main()))
 }
 
-/// Type `text` into the focused app (vault autofill). Unicode CGEvents tagged with `LK_MAGIC`
-/// so the daemon's tap ignores them. Needs the Accessibility permission.
 pub fn type_text(text: &str) -> Result<(), String> {
     if !unsafe { AXIsProcessTrusted() } {
         return Err("нет разрешения «Универсальный доступ»".into());
@@ -1005,10 +967,6 @@ pub fn type_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-
-/// Remember Typed.app as a login item so the key loop starts at next user login.
-/// Only writes `~/Library/LaunchAgents/app.layoutkeeper.plist`; does not launch
-/// another copy of the app in the current session.
 pub fn ensure_login_item() {
     let Some(bundle) = app_bundle_path() else {
         return;

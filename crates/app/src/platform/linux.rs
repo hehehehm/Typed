@@ -1,17 +1,3 @@
-//! Linux adapter — X11 (full) with an honest Wayland check.
-//!
-//! * focused app: EWMH `_NET_ACTIVE_WINDOW` → `WM_CLASS` (res_class), fallback `_NET_WM_PID` → `/proc/<pid>/comm`;
-//! * layout: XKB group state (`XkbGetState`), group names (`XkbGetNames`) mapped to en/ru,
-//!   switching with `XkbLockGroup`;
-//! * keys: XRecord extension on a separate connection (read-only observation of key/button events);
-//! * replacement: XTest fake key events — N × BackSpace, then the corrected word replayed as
-//!   *physical keys* with the target XKB group locked (no keymap hacking needed).
-//!
-//! All Xlib/X11 libraries are loaded at runtime (`x11-dl`), so the binary builds without X11
-//! headers and fails gracefully with a message when no X server is reachable.
-//!
-//! Wayland: global key observation and synthetic input are deliberately impossible for normal
-//! clients. Under a pure Wayland session we refuse to start and explain why (see README).
 
 use crate::controller::{Command, Controller, Input};
 use layout_keeper_core::{layout, HotkeyCode, Key, Lang, Replacement};
@@ -29,7 +15,6 @@ const KEY_PRESS: u8 = 2;
 const KEY_RELEASE: u8 = 3;
 const BUTTON_PRESS: u8 = 4;
 
-// Keysyms we care about.
 const XK_BACKSPACE: c_ulong = 0xff08;
 const XK_TAB: c_ulong = 0xff09;
 const XK_RETURN: c_ulong = 0xff0d;
@@ -64,8 +49,6 @@ fn keysym_to_hotkey_code(ks: c_ulong) -> Option<HotkeyCode> {
     }
 }
 
-
-/// Raw event forwarded from the XRecord thread.
 #[derive(Debug, Clone, Copy)]
 struct RawEvent {
     kind: u8,
@@ -95,8 +78,6 @@ impl Mods {
 }
 
 unsafe extern "C" fn ignore_x_errors(_d: *mut Display, e: *mut xlib::XErrorEvent) -> c_int {
-    // Windows vanish between "get active window" and "read its properties" all the time.
-    // Never let Xlib's default handler kill the daemon for that.
     if !e.is_null() {
         log::debug!("X error ignored: code {}", (*e).error_code);
     }
@@ -110,7 +91,6 @@ struct X11 {
     root: c_ulong,
     a_active: c_ulong,
     a_pid: c_ulong,
-    /// Lang of each XKB group index (up to 4).
     groups: [Option<Lang>; 4],
     groups_checked: Instant,
 }
@@ -217,7 +197,6 @@ impl X11 {
         self.groups.iter().position(|g| *g == Some(lang))
     }
 
-    /// Group used to read "physical US characters" from keycodes.
     fn us_group(&self) -> c_int {
         self.group_for(Lang::En).unwrap_or(0) as c_int
     }
@@ -258,7 +237,6 @@ impl X11 {
         if let Some(w) = self.window_prop_card(self.root, self.a_active).filter(|&w| w != 0) {
             return Some(w);
         }
-        // Non-EWMH window managers: fall back to input focus.
         unsafe {
             let mut w = 0;
             let mut revert = 0;
@@ -293,7 +271,6 @@ impl X11 {
         unsafe { (self.xl.XkbKeycodeToKeysym)(self.dpy, keycode, group, level) }
     }
 
-    /// Keycode + shift needed to type US character `c` (in the US group).
     fn key_for_us_char(&self, c: char) -> Option<(u8, bool)> {
         let ks = c as c_ulong;
         let kc = unsafe { (self.xl.XKeysymToKeycode)(self.dpy, ks) };
@@ -310,13 +287,10 @@ impl X11 {
         }
     }
 
-    /// Erase + retype. Returns the number of synthetic key presses (for echo suppression),
-    /// or an error without having sent anything.
     fn replace(&mut self, r: &Replacement) -> Result<usize, String> {
         if self.xt.is_none() {
             return Err("XTest extension library (libXtst) not available".into());
         }
-        // Plan everything first; abort before touching the text if any char is untypeable.
         let mut plan = Vec::with_capacity(r.insert.chars().count());
         for c in r.insert.chars() {
             let us = layout::us_key_for(c, r.target).ok_or("character not typeable in target layout")?;
@@ -352,7 +326,6 @@ impl X11 {
                 presses += 1;
             }
             for (kc, mut need_shift) in plan {
-                // Caps Lock inverts the shift level for letters; compensate.
                 if caps && self.keysym(kc, self.us_group(), 0) < 0x100 && (self.keysym(kc, self.us_group(), 0) as u8).is_ascii_alphabetic() {
                     need_shift = !need_shift;
                 }
@@ -372,8 +345,6 @@ impl X11 {
     }
 }
 
-// ---------------------------------------------------------------- XRecord thread
-
 unsafe extern "C" fn record_cb(closure: *mut c_char, data: *mut xrecord::XRecordInterceptData) {
     let tx = &*(closure as *const Sender<RawEvent>);
     let d = &*data;
@@ -384,7 +355,6 @@ unsafe extern "C" fn record_cb(closure: *mut c_char, data: *mut xrecord::XRecord
             let _ = tx.send(RawEvent { kind, keycode });
         }
     }
-    // The library resolves XRecordFreeData through the same handle; it is loaded in the thread.
     if let Ok(xr) = RECORD_LIB.with(|l| l.get().copied().ok_or(())) {
         ((*xr).XRecordFreeData)(data);
     }
@@ -433,7 +403,6 @@ fn spawn_record(tx: Sender<RawEvent>) -> Result<(), String> {
             let _ = ready_tx.send(Ok(()));
             let boxed = Box::new(tx);
             let closure = &*boxed as *const Sender<RawEvent> as *mut c_char;
-            // Blocks for the lifetime of the daemon.
             (xr.XRecordEnableContext)(data, ctx, Some(record_cb), closure);
             log::warn!("XRecord context ended");
             (xr.XRecordFreeContext)(ctrl, ctx);
@@ -443,15 +412,11 @@ fn spawn_record(tx: Sender<RawEvent>) -> Result<(), String> {
     ready_rx.recv_timeout(Duration::from_secs(5)).map_err(|_| "XRecord thread did not start".to_string())?
 }
 
-// ---------------------------------------------------------------- main loop
-
 struct Daemon {
     x: X11,
     ctl: Controller,
     mods: Mods,
-    /// Synthetic key presses still to be seen echoed back by XRecord.
     echo: usize,
-    /// Replacement waiting for the user to release modifiers (e.g. Shift after "!").
     pending: Option<Replacement>,
 }
 
@@ -510,8 +475,6 @@ impl Daemon {
         let modifiers = self.mods.shortcut();
         let key = match base {
             XK_BACKSPACE => Key::Backspace,
-            // XRecord cannot swallow keys, so Enter/Tab have already reached the
-            // app: treat them as typed boundaries (same delete-count as space).
             XK_RETURN | XK_KP_ENTER => Key::Char('\n'),
             XK_TAB => Key::Char('\t'),
             XK_SPACE => Key::Char(' '),
@@ -533,7 +496,6 @@ impl Daemon {
                     Key::Char(c)
                 }
             }
-            // Function keys, arrows, Home/End, Escape, Delete…: caret may have moved.
             0xff00..=0xffff if !(XK_SHIFT_L..=XK_SUPER_R).contains(&base) && base != XK_CAPS_LOCK => Key::Reset,
             _ => return None,
         };
@@ -549,12 +511,10 @@ impl Daemon {
         }
         let ks = self.x.keysym(ev.keycode, self.x.us_group(), 0);
         let down = ev.kind == KEY_PRESS;
-        // Modifier bookkeeping (also for our own synthetic Shift so state stays exact).
         match ks {
             XK_SHIFT_L | XK_SHIFT_R => {
                 let other = if ks == XK_SHIFT_L { self.mods.shift_r } else { self.mods.shift_l };
                 if ks == XK_SHIFT_L { self.mods.shift_l = down } else { self.mods.shift_r = down }
-                // Shift+Shift hotkey: second Shift pressed while the first is held.
                 if down && self.echo == 0 && other {
                     if self.ctl.hotkey().is_both_shifts() {
                         let cmds = self.ctl.on_input(Input::Hotkey);
@@ -581,15 +541,12 @@ impl Daemon {
         if (XK_SHIFT_L..=XK_SUPER_R).contains(&ks) || ks == XK_ISO_LEVEL3_SHIFT || ks == XK_CAPS_LOCK {
             return;
         }
-        // Typing anything while a replacement waits would invalidate its delete count.
         if self.pending.take().is_some() {
             log::debug!("pending replacement dropped: more input arrived");
             self.ctl.replace_failed();
         }
         if let Some(input) = self.translate(ev.keycode) {
             let mut cmds = self.ctl.on_input(input);
-            // XRecord cannot swallow the Backspace that undid an autocorrection: it has
-            // already erased one boundary character.
             if matches!(input, Input::Key { key: Key::Backspace, .. }) {
                 for c in cmds.iter_mut() {
                     if let Command::Replace(r) = c {
@@ -692,10 +649,6 @@ mod tests {
     }
 }
 
-/// Type `text` into the focused X11 window (vault autofill) via XTest, as physical keys.
-/// All characters must be typeable in one layout (Latin → EN, Cyrillic → RU); `\t` = Tab.
-/// Note: unlike Windows/macOS, XTest events are not tagged, so a running daemon sees them;
-/// autocorrect still skips tokens with digits/symbols, but the daemon never stores them.
 pub fn type_text(text: &str) -> Result<(), String> {
     let has_cyr = text.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c));
     let target = if has_cyr { Lang::Ru } else { Lang::En };

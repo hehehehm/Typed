@@ -1,36 +1,3 @@
-//! Wrong-layout decision engine.
-//!
-//! Feed it keys of the focused text field; when a word is finished it decides whether
-//! the word was typed in the wrong layout and returns a [`Replacement`] for the platform
-//! adapter to apply (N backspaces + corrected text + layout switch).
-//!
-//! ## Decision rules (in order)
-//! 1. Shortcut keys (Ctrl/Alt/Super/Cmd held) never reach the buffer — they reset it.
-//! 2. URLs, e-mails, paths (`@`, `://`, `www.`, `\`), tokens with digits (configurable),
-//!    and weird casing (`hElLo`, password-like) are kept. Mixed Latin+Cyrillic tokens
-//!    are kept unless re-reading one script in the other layout gives a known word (or,
-//!    with typo fixes, a unique fix): `приdtn` → `привет`, see `mixed_decision`.
-//! 2a. File names: `name.ext` with a known extension typed on the Russian layout
-//!     (`мфгдеюишт`, `ю` = the `.` key) → `vault.bin`; correct Latin file names are kept.
-//! 3. Too short (< `min_word_len` letters) → keep, except single letters when enabled:
-//!    a letter that is a one-letter word only in the other language goes there
-//!    (d → в, ф → a); real ones (a, I, в, и, я) stay; letters that are words in neither
-//!    language (q/й) follow the assigned app language.
-//! 3a. User words (`custom_words`) win: if the converted form is a user word → convert,
-//!     even if the typed form is a known built-in word (`учу` → `exe` once `exe` is added).
-//!     If the typed form is a user word → keep. No short-word rank limit for user words.
-//! 4. The typed word is a known word in its own language → keep. This also covers the
-//!    rare case where *both* forms are real words: we never convert automatically then
-//!    (the manual hotkey still works).
-//! 5. The converted form (optionally without up to 2 trailing punctuation characters,
-//!    e.g. `ghbdtn,` → `привет,`) is a known word in the other language → convert.
-//!    Words of ≤3 letters must be among the 3000 most frequent to count.
-//! 5a. Missing space (`fix_missing_spaces`): an unknown Russian token that is a glued
-//!     preposition / «не» + a frequent word becomes two words (`вофисе` → `в офисе`),
-//!     see [`crate::split`]; curated glued forms (`незнаю`) are split before rule 4.
-//! 6. Neither is a dictionary word: convert only if the typed word contains letter
-//!    bigrams impossible in its language *and* the converted form has none and is at
-//!    least 4 letters long. Random strings usually fail both and are kept.
 
 use crate::buffer::WordBuffer;
 use crate::dict::{self, Dictionary};
@@ -43,12 +10,10 @@ use crate::typo;
 use crate::userdict::UserWords;
 use std::collections::HashSet;
 
-/// Rank limit for short words spelled with sign keys (`b[` → «их»).
 const SIGN_WORD_MAX_RANK: u32 = 1000;
 
 const SINGLE_WORD_REASON: &str = "lone letter is a word only in the other language";
 
-/// Letters that make a word on their own (lowercase).
 fn is_single_letter_word(lang: Lang, c: char) -> bool {
     match lang {
         Lang::En => matches!(c, 'a' | 'i'),
@@ -56,45 +21,24 @@ fn is_single_letter_word(lang: Lang, c: char) -> bool {
     }
 }
 
-/// Words of 1–3 letters only count as dictionary hits if they are this frequent
-/// (subtitle-derived lists contain short junk like "ет").
 pub const SHORT_WORD_MAX_RANK: u32 = 3000;
 pub const SPLIT_VS_TYPO: f64 = 2.0;
 pub const SPLIT_MIN_COUNT: f64 = 8.0;
 pub const LM_SPLIT_OVER_TYPO: f64 = 1.0;
 pub const REVERT_SINGLE_NEXT_RANK: u32 = 5_000;
 
-/// Each half of a hyphenated word typed in the wrong layout (`dct-nfrb` = `все-таки`)
-/// must be at least this frequent (4+ letters; shorter halves use [`SHORT_WORD_MAX_RANK`]).
 pub const HYPHEN_PART_MAX_RANK: u32 = 20_000;
 
-/// Russian particles that only follow a hyphen (`кто-то`, `дай-ка`, `все-таки`).
 const HYPHEN_PARTICLES: [&str; 6] = ["то", "либо", "нибудь", "таки", "ка", "де"];
-/// Shortest token whose membership in the full-form set keeps it unchanged.
 pub const FULL_FORM_MIN_LEN: usize = 4;
-/// Shortest token converted only because the other layout gives a full-form-set word.
 pub const FULL_FORM_CONVERT_MIN_LEN: usize = 5;
-/// A real form of the typed layout (full-form set) gives way to an other-layout reading
-/// ranked under this; rarer readings need corpus support ([`reading_likelier`]). Since 0.3.74.
 pub const FULL_FORM_YIELD_RANK: u32 = 3_000;
-/// Short-token rule (since 0.3.74): a 2–3 letter English list entry ranked past this
-/// (`lf` 2 362, `ns` 34 218; curated extras sit at exactly [`dict::EXTRA_RANK`] = 2 000 and
-/// never qualify) whose Russian reading ranks under [`SHORT_SWITCH_DST_RANK`].
 pub const SHORT_SWITCH_SRC_RANK: u32 = 2_000;
 pub const SHORT_SWITCH_DST_RANK: u32 = 50;
-/// Latin abbreviations of that kind typed inside Russian text too (`Спартак vs Зенит`). The
-/// rule's whole candidate set was audited by eye (docs/eval-0.3.74): `ns`, `vs`, `ds`, `lf`,
-/// `bp`, `ye`; only `vs` is kept.
 const SHORT_SWITCH_KEEP: [&str; 1] = ["vs"];
-/// The corpus (n-gram unigrams) has the other-layout reading at least this many times more
-/// often, per token, than the typed form.
 pub const READING_CORPUS_RATIO: f64 = 10.0;
-/// A real typed form whose reading turns its last letters into signs (`тучею` = `next.`)
-/// converts only into a word ranked under this.
 pub const SIGNED_READING_MAX_RANK: u32 = 1_000;
 
-/// `conv` (in `dst`) is attested in the n-gram corpus and [`READING_CORPUS_RATIO`] times
-/// more frequent there than `typed` (in `src`) is in its own.
 fn reading_likelier(typed: &str, src: Lang, conv: &str, dst: Lang) -> bool {
     let freq = |w: &str, l: Lang| {
         let g = crate::ngram::get(l);
@@ -149,58 +93,33 @@ fn attested_form_wins(token: &str, text: &str, target: Lang) -> bool {
     alt / scale(target) * rate < typed / scale(src)
 }
 
-/// Tunables, normally filled from [`crate::Config`].
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
     pub autocorrect: bool,
     pub convert_single_letters: bool,
-    /// Assigned language of the current app, supplied by the controller (not persisted).
     pub preferred_lang: Option<Lang>,
     pub skip_urls_emails: bool,
     pub skip_tokens_with_digits: bool,
     pub min_word_len: usize,
-    /// User dictionary, refreshed from the config on reload.
     pub user_words: UserWords,
-    /// Fix one-letter typos toward a frequent word of the same language.
     pub fix_typos: bool,
-    /// Words the user undid (normalised: lowercase, ё → е). Never autocorrected again.
     pub never_correct: HashSet<String>,
-    /// Backspace right after an autocorrection (before any other key) undoes it.
     pub undo_on_backspace: bool,
-    /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
     pub fix_missing_spaces: bool,
-    /// How hard the typo fixer tries (only with `fix_typos`).
     pub typo_level: typo::Level,
-    /// Words whose typo fix the user undid (normalised): never typo-fixed again, but
-    /// still converted when typed in the wrong layout.
     pub never_typo: HashSet<String>,
-    /// Corrections undone once with Backspace (normalised keys, `typo:` prefix for a
-    /// typo-only undo): a second undo of the same one makes it permanent.
     pub undone_once: HashSet<String>,
-    /// Use the previous words (word n-grams) to choose and veto typo fixes.
     pub use_context: bool,
 }
 
-/// `Decision::Convert` reason for a typo fix (kept for undo).
 pub const TYPO_REASON: &str = "typo fix";
-/// Layout switched in the middle of a word (`приdtn` → `привет`).
 pub const MIXED_REASON: &str = "layout switched mid-word";
-/// Letters a mixed Latin+Cyrillic word needs before it is read as one word.
 const MIXED_MIN_LETTERS: usize = 3;
-/// One-letter Russian case endings (`iPhoneа`, `sheы`, `Windowsе`): such a letter after a
-/// Latin word is kept as an ending, never re-read on the Latin layout.
 const CASE_ENDING_LETTERS: &str = "аеёиоуыюяй";
-/// A 3-letter mixed token (`prщ` → `pro`) converts only into a word this frequent.
 const MIXED_SHORT_MAX_RANK: u32 = 5_000;
-/// English words this frequent, followed by a short Cyrillic ending, are read as a name
-/// with a Russian case ending (`keyами`), never re-read as Russian.
 const BRAND_PREFIX_RANK: u32 = 20_000;
-/// Wrong layout and a typo at once (`xnjj` → `что`): Backspace first undoes the typo
-/// fix only (`чтоо`), a second one the layout switch.
 pub const LAYOUT_TYPO_REASON: &str = "wrong layout and a typo";
-/// `Decision::Convert` reason for a whole-token home-row hand shift (`ротань` → `привет`).
 pub const HAND_SHIFT_REASON: &str = "home-row hand shift";
-/// `Decision::Convert` reason for an inserted missing space (undoable like a typo fix).
 pub const SPACE_REASON: &str = "missing space after a function word";
 
 impl Default for EngineOptions {
@@ -209,20 +128,14 @@ impl Default for EngineOptions {
     }
 }
 
-/// A key as seen by the engine (already translated to the character it produced).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
-    /// A printable character. Whitespace and pure punctuation act as word boundaries.
     Char(char),
     Backspace,
-    /// Enter / Tab and similar: finish the word, the boundary is that character.
     Boundary(char),
-    /// Cursor moved, mouse click, focus change, Escape, … — forget everything.
     Reset,
 }
 
-/// Edit for the platform adapter: erase `delete` characters before the caret,
-/// type `insert`, and make `target` the active layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Replacement {
     pub delete: usize,
@@ -230,7 +143,6 @@ pub struct Replacement {
     pub target: Lang,
 }
 
-/// Outcome of judging a finished token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     Keep(&'static str),
@@ -241,41 +153,26 @@ pub enum Decision {
 struct LastWord {
     word: String,
     boundary: String,
-    /// Set when this word is an autocorrection (wrong layout or typo): what was typed.
-    /// Undo (hotkey, conversion hotkey, Backspace) puts it back.
     fix: Option<AutoFix>,
-    /// No key since the word was finished: the Backspace-undo window.
     fresh: bool,
 }
 
 #[derive(Debug, Clone)]
 struct AutoFix {
-    /// The word exactly as typed.
     typed: String,
-    /// The first boundary character as typed (before punctuation conversion).
     typed_boundary: String,
-    /// Intermediate texts between `typed` and the shown word, oldest first: for a
-    /// wrong-layout + typo fix the plain other-layout reading. Backspace steps back
-    /// through them (partial undo) before restoring `typed`.
     steps: Vec<String>,
 }
 
-/// What the engine learned from an undo, for the controller to save in the config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Learned {
-    /// Never autocorrect this word again (`Config::never_correct`).
     NeverCorrect(String),
-    /// Never typo-fix this word again (`Config::never_typo_fix`).
     NeverTypo(String),
-    /// First Backspace undo of this key (`Config::undone_once`).
     UndoneOnce(String),
 }
 
-/// Earlier words kept for undoing an older correction with the undo hotkey.
 pub const UNDO_HISTORY: usize = 12;
 
-/// The last autocorrection, kept while the user erases it by hand: retyping exactly
-/// what was typed means "this was right" (the stubborn-repeat case).
 #[derive(Debug, Clone)]
 struct RecentFix {
     typed: String,
@@ -285,19 +182,14 @@ struct RecentFix {
 impl Decision {
 }
 
-/// Stateful engine for one text-input stream.
 #[derive(Debug, Default)]
 pub struct Engine {
     pub options: EngineOptions,
     buf: WordBuffer,
     last: Option<LastWord>,
     recent_fix: Option<RecentFix>,
-    /// Undone with Backspace: counted once the user moves on (not if they erase it).
-    /// `true` = only the typo part was undone.
     pending_learn: Option<(String, bool)>,
-    /// Learning events for the controller to save.
     learned: Vec<Learned>,
-    /// Finished words before `last` (oldest first) while the caret stays put.
     history: Vec<LastWord>,
 }
 
@@ -315,15 +207,11 @@ fn looks_like_url_or_email(t: &str) -> bool {
         || (l.contains('/') && l.split('/').filter(|s| !s.is_empty()).count() > 1)
 }
 
-/// Casing a human produces: all lower, all upper, or Capitalised.
 fn natural_case(letters: &[char]) -> bool {
     let up = letters.iter().filter(|c| c.is_uppercase()).count();
     up == 0 || up == letters.len() || (up == 1 && letters[0].is_uppercase())
 }
 
-/// All-caps or Capitalised (not lowercase). Short wrong-layout words in this
-/// casing may convert into a ranked word past [`SHORT_WORD_MAX_RANK`]; lowercase
-/// keeps the tight cap so `ajy` is not a new switch.
 fn title_or_all_caps(letters: &[char]) -> bool {
     if letters.is_empty() {
         return false;
@@ -332,9 +220,6 @@ fn title_or_all_caps(letters: &[char]) -> bool {
     up == letters.len() || (up == 1 && letters[0].is_uppercase())
 }
 
-/// Destination-word frequency check used by layout conversion. 4+ letters: any
-/// rank. 2–3 letters: under [`SHORT_WORD_MAX_RANK`], or any rank when the typist
-/// used Title/CAPS (`AJY` → `ФОН`; lowercase `ajy` stays).
 fn dst_rank_ok(w: &str, r: u32, letters: &[char]) -> bool {
     let n = w.chars().count();
     n > 3
@@ -342,10 +227,6 @@ fn dst_rank_ok(w: &str, r: u32, letters: &[char]) -> bool {
         || (n == 3 && r < HYPHEN_PART_MAX_RANK && title_or_all_caps(letters))
 }
 
-/// The letters without the ones at either end that are signs on the other layout
-/// (Ж = `:`, Э = `"`, Б = `<`, Ю = `>`, Х = `{`, Ъ = `}`): `тучесдщгвЖ` is `nextcloud:`,
-/// and its capital Ж is just Shift for the colon, not password-like casing. Capitals in
-/// the middle still count (`пароЛь`). Leaves at least one letter.
 fn edge_signs_trimmed(letters: &[char], src: Lang) -> &[char] {
     let sign = |c: &char| !layout::convert_char(*c, src).is_alphabetic();
     let start = letters.iter().take_while(|c| sign(c)).count();
@@ -362,7 +243,6 @@ impl Engine {
         Self { options, ..Default::default() }
     }
 
-    /// Forget the current and last word (focus change, click, cursor movement).
     pub fn reset(&mut self) {
         self.buf.clear();
         self.drop_context();
@@ -370,7 +250,6 @@ impl Engine {
         self.commit_pending_learn();
     }
 
-    /// We no longer know the text before the caret.
     fn drop_context(&mut self) {
         self.last = None;
         self.history.clear();
@@ -382,12 +261,10 @@ impl Engine {
         }
     }
 
-    /// Learning events since the last call (for the config).
     pub fn take_learned(&mut self) -> Vec<Learned> {
         std::mem::take(&mut self.learned)
     }
 
-    /// Add `word` to the never-correct list (this session and, via `take_learned`, the config).
     fn remember(&mut self, word: &str) {
         let key = never_key(word);
         self.options.undone_once.remove(&key);
@@ -397,8 +274,6 @@ impl Engine {
         }
     }
 
-    /// A Backspace undo of `word` (the typed word, or for `typo_only` the word whose typo
-    /// fix was undone): the second one for the same word makes it permanent.
     fn count_undo(&mut self, word: &str, typo_only: bool) {
         let key = never_key(word);
         if key.is_empty() {
@@ -419,15 +294,6 @@ impl Engine {
         }
     }
 
-    /// Undo the last autocorrection (dedicated hotkey): the word exactly as typed comes
-    /// back with its boundary, the layout it was typed in is activated, and the word is
-    /// never corrected again. `None` when the last word was not autocorrected or the
-    /// caret may have moved since.
-    ///
-    /// Pressed again (or when the last word was not autocorrected), it undoes the
-    /// previous autocorrected word, one word per press, as long as the caret has not
-    /// moved and no Enter / Tab came after it: the text typed since is erased and typed
-    /// again after the restored word.
     pub fn undo_last(&mut self, current_layout: Lang) -> Option<Replacement> {
         if self.buf.is_empty() && self.last.as_ref().is_some_and(|l| l.fix.is_some()) {
             let rep = self.restore_last(current_layout)?;
@@ -441,7 +307,6 @@ impl Engine {
         self.undo_earlier(current_layout)
     }
 
-    /// Undo the newest autocorrection among the earlier words (see [`Self::undo_last`]).
     fn undo_earlier(&mut self, current_layout: Lang) -> Option<Replacement> {
         let last = self.last.take()?;
         let mut all = std::mem::take(&mut self.history);
@@ -482,7 +347,6 @@ impl Engine {
         Some(rep)
     }
 
-    /// Put the typed word back in place of the autocorrected last word.
     fn restore_last(&mut self, current_layout: Lang) -> Option<Replacement> {
         let last = self.last.as_mut()?;
         let fix = last.fix.take()?;
@@ -499,11 +363,6 @@ impl Engine {
         Some(rep)
     }
 
-    /// Backspace right after an autocorrection: undo it instead of erasing the boundary
-    /// (the platform swallows that Backspace). Only for a single space / sign boundary;
-    /// after Enter or Tab the text may already be sent.
-    /// A wrong-layout + typo fix goes back one step at a time: first the typo fix only
-    /// (the layout switch stays), then, with another Backspace, the typed word.
     fn backspace_undo(&mut self, current_layout: Lang) -> Option<Replacement> {
         let last = self.last.as_mut()?;
         if !self.options.undo_on_backspace
@@ -521,28 +380,23 @@ impl Engine {
                 target: layout::detect_script(&step).unwrap_or(current_layout),
             };
             last.word = step.clone();
-            // Still fresh: one more Backspace restores what was typed.
             self.pending_learn = Some((step, true));
             return Some(rep);
         }
         let rep = self.restore_last(current_layout)?;
         let typed = self.last.as_ref().map(|l| l.word.clone()).unwrap_or_default();
-        // If they erase the restored word and type it again, that still counts.
         self.recent_fix = Some(RecentFix { typed: typed.clone(), erased: false });
         self.pending_learn = Some((typed, false));
         Some(rep)
     }
 
-    /// Length of the word in progress (for debug logging — never its content).
     pub fn current_len(&self) -> usize {
         self.buf.len()
     }
 
-    /// Process a key. `modifiers_held` = Ctrl/Alt/Super/Cmd were down (a shortcut).
     pub fn feed(&mut self, key: Key, modifiers_held: bool) -> Option<Replacement> {
         if modifiers_held {
             if key == Key::Backspace {
-                // Ctrl/Alt+Backspace erases a word: keep watching for a retyped original.
                 self.mark_erased();
                 self.buf.clear();
                 self.drop_context();
@@ -569,7 +423,6 @@ impl Engine {
                     }
                 }
                 if !self.buf.backspace() {
-                    // Erasing into the previous word: we no longer know what is on screen.
                     self.mark_erased();
                     self.drop_context();
                 }
@@ -581,17 +434,12 @@ impl Engine {
                 }
                 None
             }
-            // Char: the boundary is already on screen (space, punctuation).
-            // Boundary: Enter/Tab has not been delivered; the platform swallows it
-            // and we inject it after the corrected word (delete does not include it).
             Key::Char(c) => self.finish_word(c, true),
             Key::Boundary(c) => self.finish_word(c, false),
         }
     }
 
-    /// The user erases into the previous word (Backspace with an empty buffer).
     fn mark_erased(&mut self) {
-        // Erasing the word just restored with Backspace: they did not want it either.
         if self.last.is_some() {
             self.pending_learn = None;
         }
@@ -614,12 +462,9 @@ impl Engine {
             return None;
         }
         self.commit_pending_learn();
-        // Erased an autocorrection by hand and typed the original again: keep it, forever.
         if self.recent_fix.take().is_some_and(|rf| rf.erased && never_key(&rf.typed) == never_key(&token)) {
             self.remember(&token);
         }
-        // Glued to the previous word by a non-space sign (`З!К)П`, `a)b`): that is a
-        // password or code, not prose, so it is never autocorrected.
         let glued = self.last.as_ref().is_some_and(|l| {
             !l.boundary.is_empty() && !l.boundary.chars().any(char::is_whitespace)
         });
@@ -798,7 +643,6 @@ impl Engine {
         Some(rep)
     }
 
-    /// A new last word; the previous one goes to the undo history.
     fn push_last(&mut self, w: LastWord) {
         if let Some(prev) = self.last.replace(w) {
             self.history.push(prev);
@@ -808,8 +652,6 @@ impl Engine {
         }
     }
 
-    /// Manual conversion (hotkey): flips the word in progress, or else the last finished
-    /// word, regardless of dictionaries. Pressing it again flips back (undo).
     pub fn manual_convert(&mut self, current_layout: Lang) -> Option<Replacement> {
         if !self.buf.is_empty() {
             let word = self.buf.as_string();
@@ -819,7 +661,6 @@ impl Engine {
             return Some(Replacement { delete: word.chars().count(), insert: conv, target: from.other() });
         }
         if self.last.as_ref().is_some_and(|l| l.fix.is_some()) {
-            // Right after an autocorrection the conversion hotkey is an undo too.
             return self.undo_last(current_layout);
         }
         let last = self.last.as_mut()?;
@@ -837,7 +678,6 @@ impl Engine {
         Some(rep)
     }
 
-    /// Pure decision for a finished token (no state change). See module docs for the rules.
     pub fn decide(&self, token: &str) -> Decision {
         let d = self.decide_core(token);
         if let Decision::Convert { text, target, reason } = &d {
@@ -862,7 +702,6 @@ impl Engine {
         if o.skip_urls_emails && looks_like_url_or_email(token) {
             return Decision::Keep("url/email/path");
         }
-        // File names: `vault.bin` stays, `мфгдеюишт` (the same keys on RU) → `vault.bin`.
         if filename::is_en_filename(token) {
             return Decision::Keep("file name");
         }
@@ -889,8 +728,6 @@ impl Engine {
                 if layout::detect_script(&converted) == Some(dst) && conv_letters.len() == 1 {
                     let typed_word = is_single_letter_word(src, lower(letters[0]));
                     let conv_word = is_single_letter_word(dst, lower(conv_letters[0]));
-                    // A lone letter that is a word in only one language goes there:
-                    // d → в, z → я, ф → a, ш → i; real ones (a, I; в, и, я) stay.
                     let ctx = self.left_context(src);
                     let lc = core.to_lowercase();
                     let ok_ctx = |p: &str| {
@@ -905,7 +742,6 @@ impl Engine {
                     if conv_word && !typed_word && !multi_ctx {
                         return Decision::Convert { text: converted, target: dst, reason: SINGLE_WORD_REASON };
                     }
-                    // Neither is a word (q/й, x/ч): follow the app's assigned language.
                     if !typed_word && !conv_word && o.preferred_lang == Some(dst) {
                         return Decision::Convert {
                             text: converted, target: dst, reason: "single letter to app language",
@@ -913,9 +749,6 @@ impl Engine {
                     }
                 }
             }
-            // Signs that are letters in the other layout: `b[` → «их», `e;` → «уж».
-            // Only very common words; the dictionary folds ё into е, so `t`` must not
-            // pass as «тё» = «те» (её is the one real ё word here).
             let chars: Vec<char> = token.chars().collect();
             let dst_dict = dict::get(src.other());
             let all_caps_word = chars.len() >= 3
@@ -938,8 +771,6 @@ impl Engine {
         if !natural_case(edge_signs_trimmed(&letters, src)) {
             return Decision::Keep("unnatural casing (password-like)");
         }
-        // Productive mat forms are valid words: never typo-fix or flip them into
-        // an English look-alike (`всукы` ↛ `ders`, `ЗАЕБАЛСЯ` stays).
         if src == Lang::Ru && morph::is_mat_form(core) {
             return Decision::Keep("known mat form");
         }
@@ -965,9 +796,6 @@ impl Engine {
                 })
             })
         };
-        // Passed the casing guard only because of a shifted sign at the edge
-        // (`тучесдщгвЖ`): the other-layout reading may convert, nothing else (no typo
-        // fix, split or guess on a token cased like that).
         if !natural_case(&letters) {
             return Self::try_convert(&chars, src, o.min_word_len, |w| {
                 dst_dict.rank(w).is_some_and(|r| w.chars().count() > 3 || r < SHORT_WORD_MAX_RANK)
@@ -975,7 +803,6 @@ impl Engine {
             })
             .unwrap_or(Decision::Keep("unnatural casing (password-like)"));
         }
-        // Glued forms the lists carry as words (`незнаю`): split before "known word".
         if o.fix_missing_spaces && src == Lang::Ru && split::is_glued(core) {
             if let Some(d) = ranked_convert() {
                 return d;
@@ -985,17 +812,10 @@ impl Engine {
             }
         }
 
-        // A short English list entry that is rare (an abbreviation or subtitle noise such
-        // as `lf`, `ns`) whose Russian reading is one of the most frequent words (`да`,
-        // `ты`): the Russian word was meant. Into Russian only (short Russian entries of
-        // that rank are slang people type: `ща`, `ша`, `рук`), never after an English word,
-        // never for curated extras (`ok`, `js` rank above the limit) or [`SHORT_SWITCH_KEEP`].
         if src == Lang::En && (2..=3).contains(&letters.len()) && !self.typed_language_context(src) {
             let lower = Dictionary::normalize(core);
             let rare = src_dict.rank(&lower).is_some_and(|r| r > SHORT_SWITCH_SRC_RANK) && !SHORT_SWITCH_KEEP.contains(&lower.as_str());
             if rare {
-                // Trailing keys that are letters in the other layout (`lf.` = `даю`):
-                // the whole token's reading wins when it is a frequent word.
                 let whole: String = chars.iter().collect();
                 let whole_conv = layout::convert(&whole, src);
                 let whole_core = trim_non_letters(&whole_conv);
@@ -1014,20 +834,12 @@ impl Engine {
         if src_dict.contains(core) {
             return Decision::Keep("known word in current layout");
         }
-        // One hyphen inside (`dct-nfrb` = `все-таки`): '-' is the same key in both
-        // layouts, so the token arrives whole; each half must read as a frequent word.
         if let Some(d) = Self::hyphen_converted(&chars, src) {
             return d;
         }
 
-        // A real (if rare) form in the typed layout converts only when its other-layout
-        // reading is clearly the likelier word: frequent (and every typed letter a letter
-        // there), or far more frequent in the corpus than the typed form (`шару` stays,
-        // `ifhe` is subtitle noise; `туфе` → `neat`; `иную` is not `bye.`).
         let src_full = letters.len() >= FULL_FORM_MIN_LEN && src_dict.in_full_forms(core);
         let ranked = if src_full {
-            // Letters read as signs: only at the end (`тучею` = `next.`), never at the start
-            // (`херу` is not `[the`), and only into a frequent word the corpus prefers.
             let lead_letter = layout::convert(&letters[0].to_string(), src).chars().all(char::is_alphabetic);
             Self::try_convert(&chars, src, o.min_word_len, |w| {
                 let whole = w.chars().count() == letters.len();
@@ -1049,15 +861,10 @@ impl Engine {
             return d;
         }
 
-        // Full-form sets (every case, number, tense): a rare but real form in the typed
-        // layout stays, unless its other-layout reading is a ranked word (checked above:
-        // `еру` is a form in the big set, but `the` wins). Short tokens are left to the
-        // ranked lists, where the big sets are full of 2–3 letter abbreviations.
         let n_letters = letters.len();
         if n_letters >= FULL_FORM_MIN_LEN && src_dict.in_full_forms(core) {
             return Decision::Keep("known word form in current layout");
         }
-        // Unknown in the typed layout, a real (rare) form in the other one: convert.
         if n_letters >= FULL_FORM_CONVERT_MIN_LEN {
             if let Some(d) = Self::try_convert(&chars, src, o.min_word_len, |w| {
                 w.chars().count() >= FULL_FORM_CONVERT_MIN_LEN && dst_dict.in_full_forms(w)
@@ -1066,20 +873,13 @@ impl Engine {
             }
         }
 
-        // Wrong layout AND a missing space (`yflj,s` = `надобы` → `надо бы`, `dJabct` →
-        // `в офисе`): the other-layout reading is not a word, but splits like one.
         if o.fix_missing_spaces && dst == Lang::Ru {
             if let Some(d) = Self::split_converted(token, src) {
                 return d;
             }
         }
-        // Missing space after a function word (`вофисе` → `в офисе`): the token is in its
-        // own layout (no conversion fired above) and unknown in every list.
         if o.fix_missing_spaces {
             if let Some(d) = self.split_decision(token, core, src) {
-                // A typo fix that puts back a missing letter, swaps letters back or fixes
-                // one vowel beats the split (`отсуда` → `отсюда`, not `от суда`;
-                // `котрое` → `которое`); other fixes lose (`отебе` is `о тебе`, not `отеле`).
                 if o.fix_typos && core.chars().all(char::is_alphabetic) {
                     if let Some(fix) = self.typo_fix(core, src) {
                         let (n, m) = (core.chars().count(), fix.chars().count());
@@ -1093,9 +893,6 @@ impl Engine {
                             let v = |c: char| "аеёиоуыэюяAEIOUaeiou".contains(c.to_lowercase().next().unwrap_or(c));
                             n == m && diff.len() == 1 && v(x[diff[0]]) && v(y[diff[0]])
                         };
-                        // A typo that inserts letters and merges a single-letter
-                        // preposition with the next word (`врот` → `ворот` instead of
-                        // `в рот`) is never preferred over the split.
                         let split_text = match &d {
                             Decision::Convert { text, .. } => text.as_str(),
                             Decision::Keep(_) => "",
@@ -1119,9 +916,6 @@ impl Engine {
         }
 
         if o.fix_typos {
-            // Hands one column off, optionally also in the other layout (`ротань` →
-            // «привет», `jr;;p` → `hello`, `окжжз` → `hello`). Before typo_wide so a
-            // long column shift is not guessed as a shorter edit.
             let split_like = single_prep_plus_word(core, src).is_some()
                 || (core.chars().all(char::is_alphabetic) && split::lm_segment(src_dict, core, src).is_some());
             if !split_like {
@@ -1129,9 +923,6 @@ impl Engine {
                     return d;
                 }
             }
-            // `врот` is too short for the usual missing-space split, but typo-inserting
-            // `о` would merge a preposition and a noun into `ворот`. Split if spaces are
-            // on, otherwise leave the token alone.
             if let Some((prep, rest)) = single_prep_plus_word(core, src) {
                 let mid = typo::is_title_case(core)
                     && self
@@ -1157,18 +948,11 @@ impl Engine {
             if let Some(d) = self.hyphen_typo_decision(token, src) {
                 return d;
             }
-            // Wrong layout and a typo at once: the other-layout reading is one or two
-            // slips from a word there (`xnjj` → `что`).
             if let Some((d, _)) = self.layout_typo_decision(&chars, src) {
                 return d;
             }
         }
 
-        // A 2–3 letter Title/CAPS token that is no ranked word in the typed layout but
-        // reads whole as a ranked word in the other one (`ЗГИ` → `PUB`, `ЫЕЩ` → `STO`,
-        // `BHF` → `ИРА`): Shift held for a short word in the wrong layout. Lowercase
-        // keeps the tight cap; never inside a sentence of the typed language (an
-        // abbreviation there is meant).
         if (2..=3).contains(&letters.len())
             && caps_short
             && core.chars().all(char::is_alphabetic)
@@ -1185,7 +969,6 @@ impl Engine {
                 }
             }
         }
-        // Heuristic fallback for words missing from both dictionaries.
         if core.chars().all(char::is_alphabetic) && letters.len() >= 4 {
             let conv = layout::convert(core, src);
             if conv.chars().all(char::is_alphabetic)
@@ -1193,9 +976,6 @@ impl Engine {
                 && src_dict.unseen_bigrams(core) >= 1
                 && dst_dict.unseen_bigrams(&conv) == 0
             {
-                // Mid-sentence after a word of the typed language, an unknown token that is
-                // no word in the other layout either is more likely a mangled word of this
-                // sentence (`I'm vfry glad`) than a switch of language (typo mode only).
                 if o.fix_typos && self.typed_language_context(src) {
                     return Decision::Keep("unknown either way inside a sentence of the typed language");
                 }
@@ -1206,12 +986,6 @@ impl Engine {
         Decision::Keep("not confident")
     }
 
-    /// A word with both Latin and Cyrillic letters: the layout was switched mid-word
-    /// (`приdtn` → `привет`, `hellщ` → `hello`). The letters of one script are re-read in
-    /// the other layout; the result must be a known word, or (with typo fixes on, and only
-    /// for lowercase words) have a unique typo fix. If both readings qualify, nothing
-    /// changes. Mixed identifiers stay: `Gitом`, `iPhoneа` (Capitalised, unknown either
-    /// way), `PRы` (casing), anything with digits (checked before).
     fn mixed_decision(&self, token: &str) -> Option<Decision> {
         let o = &self.options;
         let core = trim_non_letters(token);
@@ -1219,7 +993,6 @@ impl Engine {
         if letters.len() < MIXED_MIN_LETTERS || !natural_case(&letters) {
             return None;
         }
-        // Script runs of the letters: `gitом` = [git][ом].
         let script = |c: char| layout::detect_script(c.encode_utf8(&mut [0; 4]));
         let mut runs: Vec<(Lang, usize)> = Vec::new();
         for &c in &letters {
@@ -1229,16 +1002,10 @@ impl Engine {
                 _ => runs.push((l, 1)),
             }
         }
-        // A word with a short ending in the other script is usually a Latin name with a
-        // Russian case ending (`sheы`, `gitом`, `Windowsе`), not a slip: one letter that can
-        // be a case ending never changes; any other single letter (`prщ`, `hellщ`: щ is the
-        // `o` key) and two-letter endings change only into an exact word.
         let mut typos_ok = o.fix_typos && letters.iter().all(|c| c.is_lowercase());
         let mut brand_ending = false;
         if let [(first, n), (_, tail)] = runs[..] {
             let prefix: String = letters[..n].iter().collect();
-            // A common English word + Russian case ending (`keyами`, `Heyом`) is not re-read
-            // as Russian (`Лунами`, `Руном`); `ghbвет` (rare `ghb`) still becomes `привет`.
             brand_ending = first == Lang::En
                 && tail <= 3
                 && dict::get(first).rank(&prefix.to_lowercase()).is_some_and(|r| r < BRAND_PREFIX_RANK);
@@ -1253,9 +1020,6 @@ impl Engine {
                 }
             }
         }
-        // Three letters: one switch only (`prщ`, not `аща`) and only into a frequent word.
-        // When the two-letter run is a word itself, only the one odd letter is re-read
-        // (`неn` → `нет`, `toщ` → `too`), never the word (`даg` is not `lfg`).
         let mut only: Option<Lang> = None;
         if letters.len() < MIXED_MIN_LETTERS + 1 {
             if runs.len() != 2 {
@@ -1275,8 +1039,6 @@ impl Engine {
                 d.contains(w) || (n >= FULL_FORM_MIN_LEN && d.in_full_forms(w))
             }
         };
-        // `.` `[` `;` … at the end may be ю х ж typed on the Latin layout: first read the
-        // whole token (exact words only), then the letters alone.
         let mut found: Vec<(bool, String, Lang)> = Vec::new();
         for lang in [Lang::Ru, Lang::En] {
             if (brand_ending && lang == Lang::Ru) || only.is_some_and(|l| l != lang) {
@@ -1305,7 +1067,6 @@ impl Engine {
                 }
             }
         }
-        // An exact reading beats a typo fix in the other script; two of a kind: keep.
         let exact: Vec<_> = found.iter().filter(|f| f.0).collect();
         let pick = match (exact.len(), found.len()) {
             (1, _) => exact[0],
@@ -1315,13 +1076,9 @@ impl Engine {
         Some(Decision::Convert { text: pick.1.clone(), target: pick.2, reason: MIXED_REASON })
     }
 
-    /// [`split::split_glued`] on the other-layout reading of `core`; signs around it are
-    /// converted as signs (`yflj,s!` → `надо бы!`).
     fn split_converted(token: &str, src: Lang) -> Option<Decision> {
         let dst = src.other();
         let chars: Vec<char> = token.chars().collect();
-        // Like `try_convert`: signs on letter keys count (`,skjkb` = `былоли`), up to two
-        // trailing signs stay signs (`yflj,s!` → `надо бы!`).
         for k in 0..=2.min(chars.len().saturating_sub(1)) {
             let (head, tail) = chars.split_at(chars.len() - k);
             if tail.iter().any(|c| c.is_alphanumeric()) {
@@ -1339,13 +1096,6 @@ impl Engine {
         None
     }
 
-    /// `dct-nfrb` → `все-таки`, `bp-pf` → `из-за`, `rnj-nb,elm` → `кто-нибудь`: exactly one
-    /// hyphen between letters, both halves frequent words in the other layout (short
-    /// halves very frequent, or a hyphen particle after the hyphen; 5+ letter halves may
-    /// be any real form), and the typed halves
-    /// not both words of the typed language (`well-known`, `up-to` stay). Into English one
-    /// half must have 4+ letters (`цудд-лтщцт` → `well-known`; `гы-гы` stays). Up to two
-    /// trailing signs stay signs.
     fn hyphen_converted(chars: &[char], src: Lang) -> Option<Decision> {
         let dst = src.other();
         let (src_dict, dst_dict) = (dict::get(src), dict::get(dst));
@@ -1355,12 +1105,8 @@ impl Engine {
                 || dst_dict.rank(&lower).is_some_and(|r| {
                     r < if lower.chars().count() <= 3 { SHORT_WORD_MAX_RANK } else { HYPHEN_PART_MAX_RANK }
                 })
-                // A rarer form of 5+ letters (`конференциях`), as for whole words.
                 || (lower.chars().count() >= FULL_FORM_CONVERT_MIN_LEN && dst_dict.in_full_forms(&lower))
         };
-        // The whole token read in the other layout, when its last half is a real (if
-        // rare) form: a trailing sign is a letter there (`ghtcc-rjyathtywbz[` is
-        // `пресс-конференциях`, not `пресс-конференция[`).
         let whole = layout::convert(&chars.iter().collect::<String>(), src);
         let whole_last_known = whole.rsplit_once('-').is_some_and(|(_, b)| {
             let b = Dictionary::normalize(b);
@@ -1376,7 +1122,6 @@ impl Engine {
             if a.chars().count() < 2 || b.chars().count() < 2 || b.contains('-') {
                 continue;
             }
-            // The typed halves: letters only (signs on letter keys come next).
             if src_dict.contains(&Dictionary::normalize(a)) && src_dict.contains(&Dictionary::normalize(b)) {
                 return None;
             }
@@ -1386,8 +1131,6 @@ impl Engine {
             if !letters(ca) || !letters(cb) || !natural_case(&conv.chars().filter(|c| c.is_alphabetic()).collect::<Vec<_>>()) {
                 continue;
             }
-            // Into English, one half needs 4+ letters: short Russian reduplications
-            // (`гы-гы`, `цу-цу`, `туц-туц`) read as `us-us`, `we-we`, `new-new`.
             let long_half = ca.chars().count().max(cb.chars().count()) >= 4;
             if (dst == Lang::Ru || long_half) && frequent(ca, false) && frequent(cb, true) {
                 let tail: String = tail.iter().collect();
@@ -1401,8 +1144,6 @@ impl Engine {
         None
     }
 
-    /// A typo in one half of a hyphenated word (`все-атки` → `все-таки`), only with
-    /// `fix_typos` at Normal/Aggressive. Already-valid hyphenated words are left alone.
     fn hyphen_typo_decision(&self, token: &str, src: Lang) -> Option<Decision> {
         let o = &self.options;
         if !o.fix_typos || o.typo_level == typo::Level::Cautious {
@@ -1419,7 +1160,6 @@ impl Engine {
         if !a.chars().all(char::is_alphabetic) || !b.chars().all(char::is_alphabetic) {
             return None;
         }
-        // Already a known hyphenated word, or a word + hyphen particle: leave alone.
         if hyphen_keep(a, b, src) {
             return None;
         }
@@ -1433,8 +1173,6 @@ impl Engine {
         if let Some(p) = particle_typo(b) {
             push(&mut accepted, a.to_string(), typo::match_case(b, p));
         }
-        // typo_fix an already-known half only via particle_typo (`как-от` → `как-то`);
-        // running assume_unknown on `за` would invent `из-же` from `из-за`.
         if !dict::get(src).is_word(b) {
             if let Some(fix) = self.typo_fix_segment(b, src, true) {
                 push(&mut accepted, a.to_string(), typo::match_case(b, &fix));
@@ -1492,7 +1230,6 @@ impl Engine {
         }
     }
 
-    /// Typo fix of `core` at the configured level, unless the user undid one for it.
     fn typo_fix(&self, core: &str, lang: Lang) -> Option<String> {
         let o = &self.options;
         if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(core)) {
@@ -1501,8 +1238,6 @@ impl Engine {
         typo::suggest_ctx(core, lang, o.typo_level, &self.left_context(lang))
     }
 
-    /// Previous finished word was itself a home-row hand-shift fix: reuse that
-    /// direction and destination for the next token of the same phrase.
     fn prev_hand_shift(&self) -> Option<(i32, Lang)> {
         let last = self.last.as_ref()?;
         let fix = last.fix.as_ref()?;
@@ -1542,16 +1277,11 @@ impl Engine {
         })
     }
 
-    /// The previous word (same sentence) is a dictionary word of `lang`.
     fn typed_language_context(&self, lang: Lang) -> bool {
         let ctx = self.left_context(lang);
         ctx.prev.as_deref().is_some_and(|p| p != crate::ngram::START && dict::get(lang).contains(p))
     }
 
-    /// The one or two words before the word being judged, if they are words of `lang`
-    /// and nothing broke the sentence in between (see [`crate::ngram::Context`]). After a
-    /// sentence end or Enter it is the sentence start; after a reset (click, focus
-    /// change), a digit or another script it is unknown.
     pub fn left_context(&self, lang: Lang) -> Context {
         let mut words: Vec<String> = Vec::new();
         if !self.options.use_context {
@@ -1559,7 +1289,6 @@ impl Engine {
         }
         for w in self.last.iter().chain(self.history.iter().rev()) {
             let b = &w.boundary;
-            // Signs typed at the end of the word belong to the gap too (`знаю.` + space).
             let tail: String = w.word.chars().rev().take_while(|c| !c.is_alphabetic()).collect();
             if b.contains(['.', '!', '?', '\n', '\r']) || tail.contains(['.', '!', '?']) {
                 words.push(crate::ngram::START.to_string());
@@ -1569,8 +1298,6 @@ impl Engine {
             if !b.chars().chain(tail.chars()).all(gap_ok) {
                 break;
             }
-            // The last letter run, as the corpus was counted (`i'm` → `m`, a split fix
-            // `в офисе` → `офисе`); digits break the sentence.
             if w.word.chars().any(|c| c.is_ascii_digit()) {
                 break;
             }
@@ -1586,8 +1313,6 @@ impl Engine {
         Context { prev: words.first().cloned(), prev2: words.get(1).cloned() }
     }
 
-    /// Wrong layout + typo: the decision and the plain other-layout reading (the
-    /// partial-undo step). Up to two trailing signs stay signs, as in `try_convert`.
     fn layout_typo_decision(&self, chars: &[char], src: Lang) -> Option<(Decision, String)> {
         let o = &self.options;
         let dst = src.other();
@@ -1656,9 +1381,6 @@ impl Engine {
                 }
             }
         }
-        // Capitalised mid-sentence tokens with a 2+ letter prefix are names
-        // (`Додома`, `Изаура`), not `До дома`. A one-letter prefix still splits
-        // (`Вофисе` → `В офисе`), including after another word.
         if typo::is_title_case(core) {
             let mid = self
                 .left_context(src)
@@ -1675,8 +1397,6 @@ impl Engine {
         Some(Decision::Convert { text: token.replacen(core, &fixed, 1), target: src, reason: SPACE_REASON })
     }
 
-    /// User words win over every other rule, digits and signs included (`ьз3` → `mp3`,
-    /// `сш.св` → `ci/cd`). Up to two trailing signs may follow the word.
     fn user_word_decision(&self, token: &str) -> Option<Decision> {
         let words = &self.options.user_words;
         if words.is_empty() {
@@ -1710,8 +1430,6 @@ impl Engine {
         None
     }
 
-    /// Convert the whole token, then without up to two trailing punctuation chars, and
-    /// accept the first converted core that `known` approves.
     fn try_convert(chars: &[char], src: Lang, min_len: usize, known: impl Fn(&str) -> bool) -> Option<Decision> {
         let dst = src.other();
         for k in 0..=2.min(chars.len().saturating_sub(1)) {
@@ -1735,8 +1453,6 @@ impl Engine {
     }
 }
 
-/// Single-letter Russian prepositions / conjunctions / pronouns that start a
-/// missing-space split (`в рот`, `с ним`). A typo fix must not merge these back.
 const SINGLE_LETTER_PREPS: &[char] = &['в', 'с', 'к', 'у', 'о', 'и', 'а', 'я'];
 
 fn is_single_letter_prep_split(text: &str) -> bool {
@@ -1750,8 +1466,6 @@ fn is_single_letter_prep_split(text: &str) -> bool {
     matches!(cs.next(), Some(c) if SINGLE_LETTER_PREPS.contains(&c)) && cs.next().is_none()
 }
 
-/// `врот` = preposition `в` + known word `рот`. The whole token must itself not be a word
-/// (`встал`, `итак` stay).
 fn single_prep_plus_word(core: &str, lang: Lang) -> Option<(String, String)> {
     if lang != Lang::Ru {
         return None;
@@ -1763,7 +1477,6 @@ fn single_prep_plus_word(core: &str, lang: Lang) -> Option<(String, String)> {
         return None;
     }
     let rest: String = cs.collect();
-    // 2-letter rests collide with short typos (`ядл` is `для`, not `я дл`).
     if rest.chars().count() < 3 {
         return None;
     }
@@ -1777,7 +1490,6 @@ fn single_prep_plus_word(core: &str, lang: Lang) -> Option<(String, String)> {
         d.is_word(&rest) || morph::is_known_form(d, &rest)
     };
     if rest_ok {
-        // Preserve the typed casing of each half.
         let n = core.chars().next()?.len_utf8();
         return Some((core[..n].to_string(), core[n..].to_string()));
     }
@@ -1838,8 +1550,6 @@ fn particle_typo(typed: &str) -> Option<&'static str> {
             if !is_close_typo(&lower, p) {
                 return false;
             }
-            // `как` is a word one deletion from the particle `ка`; do not chop it.
-            // Same-length slips (`от` → `то`) and rare doubled-letter slips (`тоо` → `то`) stay.
             if known && lower.chars().count() != p.chars().count() {
                 let rare_double = drops.iter().any(|x| x == p)
                     && d.rank(&lower).is_none_or(|r| r >= SHORT_WORD_MAX_RANK);
@@ -1870,7 +1580,6 @@ fn is_close_typo(a: &str, b: &str) -> bool {
         if diff.len() != 1 {
             return false;
         }
-        // Two-letter particles: only a neighbour-key slip, not an arbitrary letter.
         if av.len() <= 2 {
             return typo::adjacent_keys(av[diff[0]], bv[diff[0]], Lang::Ru);
         }
@@ -1915,17 +1624,14 @@ fn is_char_subseq(short: &[char], long: &[char]) -> bool {
     i == short.len()
 }
 
-/// A command-line flag (`-D`, `--oneline`): do not typo-fix or convert the layout.
 fn is_cli_flag(token: &str) -> bool {
     token.starts_with('-')
 }
 
-/// Key for the never-correct list: the token's letters core, lowercase, `ё` → `е`.
 pub fn never_key(token: &str) -> String {
     Dictionary::normalize(trim_non_letters(token))
 }
 
-/// Convenience: normalised dictionary check used by tests and the CLI.
 pub fn is_known(word: &str, lang: Lang) -> bool {
     dict::get(lang).is_word(&Dictionary::normalize(word))
 }
@@ -1951,22 +1657,17 @@ mod tests {
 
     #[test]
     fn shifted_sign_at_the_edge_is_not_password_casing() {
-        // Shift+ж is `:` on the Latin layout: `nextcloud:` typed on the Russian one.
         assert_eq!(conv("тучесдщгвЖ").as_deref(), Some("nextcloud:"));
         assert_eq!(conv("ТучесдщгвЖ").as_deref(), Some("Nextcloud:"));
-        // Э = `"`, Б = `<`, Ю = `>` at either end.
         assert_eq!(conv("руддщЭ").as_deref(), Some("hello\""));
         assert_eq!(conv("ЭруддщЭ").as_deref(), Some("\"hello\""));
         assert_eq!(conv("ЭРуддщ").as_deref(), Some("\"Hello"));
         assert_eq!(conv("руддщЮ").as_deref(), Some("hello>"));
-        // Capitals in the middle are still password-like; so is odd casing next to the sign.
         for t in ["тучесДщгвЖ", "тУчесдщгвЖ", "ТУчесдщгвЖ", "пароЛьЖ", "ЖпАроль"] {
             assert_eq!(engine().decide(t), Decision::Keep("unnatural casing (password-like)"), "{t}");
         }
-        // Only a conversion, never a typo fix, for such casing.
         let typos = Engine::new(EngineOptions { fix_typos: true, ..Default::default() });
         assert_eq!(typos.decide("ПаркуЖ"), Decision::Keep("unnatural casing (password-like)"));
-        // Without the sign: unchanged rules.
         assert_eq!(conv("тучесдщгв").as_deref(), Some("nextcloud"));
         assert_eq!(conv("реезы").as_deref(), Some("https"));
     }
@@ -1996,9 +1697,7 @@ mod tests {
         assert_eq!(conv("rfr-yb,elm").as_deref(), Some("как-нибудь"));
         assert_eq!(conv("lfq-rf").as_deref(), Some("дай-ка"));
         assert_eq!(conv("цудд-лтщцт").as_deref(), Some("well-known"));
-        // A trailing sign that is a letter of a real form stays a letter.
         assert_eq!(conv("ghtcc-rjyathtywbz[").as_deref(), Some("пресс-конференциях"));
-        // Real hyphenated words in their own layout, and short reduplications, stay.
         for w in ["well-known", "up-to", "e-mail", "x-ray", "кто-то", "все-таки", "гы-гы", "цу-цу", "туц-туц", "rnj-nj-nj"] {
             assert_eq!(conv(w), None, "{w}");
         }
@@ -2026,11 +1725,9 @@ mod tests {
         assert_eq!(fix("по-моемуу").as_deref(), Some("по-моему"));
         assert_eq!(fix("все-тоо").as_deref(), Some("все-то"));
         assert_eq!(fix("яркко-голубом").as_deref(), Some("ярко-голубом"));
-        // Already valid hyphenated words stay.
         for w in ["все-таки", "всё-таки", "кто-то", "из-за", "по-моему", "как-нибудь", "дай-ка", "кое-как", "во-первых", "по-новому", "когда-нибудь", "кошко-мальчик", "Кошко-мальчик", "КОШКО-МАЛЬЧИК", "красно-белый", "нейро-сеть", "Нейро-сеть", "НЕЙРО-СЕТЬ"] {
             assert_eq!(fix(w), None, "must keep {w}");
         }
-        // Only with typo fixes at Normal/Aggressive.
         assert_eq!(typo_fix_at(typo::Level::Cautious, "все-атки"), None);
         let off = Engine::new(EngineOptions { fix_typos: false, typo_level: typo::Level::Normal, ..Default::default() });
         assert!(matches!(off.decide("все-атки"), Decision::Keep(_)));
@@ -2038,26 +1735,20 @@ mod tests {
 
     #[test]
     fn preposition_plus_word_is_not_merged() {
-        // Missing space after a one-letter preposition must split, not grow into a word.
         assert_eq!(field_after(typo::Level::Normal, "врот"), "в рот");
         assert_eq!(field_after(typo::Level::Aggressive, "врот"), "в рот");
         assert_eq!(field_after(typo::Level::Normal, "ВРОТ"), "В РОТ");
-        // Typed with a space: never merge.
         assert_eq!(field_after(typo::Level::Normal, "в рот"), "в рот");
         assert_eq!(field_after(typo::Level::Normal, "В РОТ"), "В РОТ");
         assert_eq!(field_after(typo::Level::Normal, "ЕБАНЫЙ В РОТ"), "ЕБАНЫЙ В РОТ");
         assert_eq!(field_after(typo::Level::Normal, "ЕБАНЫЙ ВРОТ"), "ЕБАНЫЙ В РОТ");
         assert_eq!(field_after(typo::Level::Normal, "ебаный в рот"), "ебаный в рот");
-        // Existing splits of longer function words still beat a typo-insert merge.
         assert_eq!(field_after(typo::Level::Normal, "отебе"), "о тебе");
-        // Longer preposition + typo that restores a letter still wins (`отсуда` → `отсюда`).
         assert_eq!(field_after(typo::Level::Normal, "отсуда"), "отсюда");
     }
 
     #[test]
     fn caps_short_wrong_layout_converts() {
-        // `фон` ranks past SHORT_WORD_MAX_RANK, so lowercase `ajy` must stay (do not
-        // make short lowercase switching more aggressive). Title/CAPS still convert.
         assert_eq!(layout::convert("AJY", Lang::En), "ФОН");
         assert_eq!(layout::convert("Ajy", Lang::En), "Фон");
         assert_eq!(layout::convert("ajy", Lang::En), "фон");
@@ -2065,12 +1756,9 @@ mod tests {
         assert_eq!(conv("Ajy").as_deref(), Some("Фон"));
         assert_eq!(conv("ajy"), None, "lowercase short switch is unchanged");
         assert_eq!(field_after(typo::Level::Normal, "AJY"), "ФОН");
-        // Other direction: 3-letter English word typed caps on RU (`НЩГ` = `YOU`).
         assert_eq!(layout::convert("YOU", Lang::En), "НЩГ");
         assert_eq!(conv("НЩГ").as_deref(), Some("YOU"));
         assert_eq!(conv("Нщг").as_deref(), Some("You"));
-        // `you` is frequent, so lowercase `нщг` already converted before this change.
-        // Known words in the typed layout are not dragged over, even in caps.
         assert_eq!(conv("ВСЕ"), None);
         assert_eq!(conv("THE"), None);
         assert_eq!(conv("VS"), None);
@@ -2091,33 +1779,27 @@ mod tests {
             assert_eq!(field_after(level, "заебался"), "заебался", "{level:?}");
             assert_eq!(field_after(level, "ЕБАНЫЙ"), "ЕБАНЫЙ", "{level:?}");
         }
-        // Neighbour typo still fixed in caps-unrelated words.
         assert_eq!(field_after(typo::Level::Normal, "услушу"), "услугу");
         assert_eq!(field_after(typo::Level::Normal, "УСЛУШУ"), "УСЛУГУ");
     }
 
     #[test]
     fn wrong_layout_with_a_missing_space() {
-        // `yflj,s` is `надобы` (the comma is the б key): converted and split.
         assert_eq!(engine().decide("yflj,s"), Decision::Convert { text: "надо бы".into(), target: Lang::Ru, reason: SPACE_REASON });
         assert_eq!(conv("Yflj,s").as_deref(), Some("Надо бы"));
         assert_eq!(conv("yflj,s!").as_deref(), Some("надо бы!"));
-        assert_eq!(conv("dJabct").as_deref(), None); // odd casing stays
+        assert_eq!(conv("dJabct").as_deref(), None);
         assert_eq!(conv("djabct").as_deref(), Some("в офисе"));
         assert_eq!(conv("yflj").as_deref(), Some("надо"));
-        // Words that end in those particles convert whole.
         assert_eq!(conv("xnj,s").as_deref(), Some("чтобы"));
         assert_eq!(conv("nfr;t").as_deref(), Some("также"));
-        // A product name typed on the Russian layout.
         assert_eq!(conv("чцшлш").as_deref(), Some("xwiki"));
-        // Letter keys that are signs on the Latin layout: `б` = `,`, `ж` = `;`, `э` = `'`.
         assert_eq!(conv(",skjkb").as_deref(), Some("было ли"));
         assert_eq!(conv("'njn;t").as_deref(), Some("этот же"));
     }
 
     #[test]
     fn layout_switched_mid_word_0_3_69() {
-        // The letters of one script re-read in the other layout give a known word.
         assert_eq!(conv("приdtn").as_deref(), Some("привет"));
         assert_eq!(conv("ghbвет").as_deref(), Some("привет"));
         assert_eq!(conv("Приdtn").as_deref(), Some("Привет"));
@@ -2125,18 +1807,15 @@ mod tests {
         assert_eq!(conv("гkfpf[").as_deref(), Some("глазах"));
         assert_eq!(conv("приdtn.").as_deref(), Some("привет."));
         assert_eq!(conv("wщrld").as_deref(), Some("world"));
-        // One letter after the switch that cannot be a case ending (щ is the `o` key).
         assert_eq!(conv("prщ").as_deref(), Some("pro"));
         assert_eq!(conv("Prщ").as_deref(), Some("Pro"));
         assert_eq!(conv("hellщ").as_deref(), Some("hello"));
         assert_eq!(conv("неn").as_deref(), Some("нет"));
         assert_eq!(conv("toщ").as_deref(), Some("too"));
-        // A two-letter word plus one odd letter is not re-read as a whole.
         for t in ["даg", "изm", "dты", "сif", "мby"] {
             assert_eq!(conv(t), None, "{t}");
         }
         assert_eq!(conv("ыщund").as_deref(), Some("sound"));
-        // Plus an ordinary typo, when typo fixes are on.
         let typos = Engine::new(EngineOptions { fix_typos: true, ..Default::default() });
         let fix = |t: &str| match typos.decide(t) {
             Decision::Convert { text, .. } => Some(text),
@@ -2146,11 +1825,9 @@ mod tests {
         assert_eq!(fix("wщrlds").as_deref(), Some("worlds"));
         assert_eq!(fix("beaгtfiul").as_deref(), Some("beautiful"));
         assert_eq!(conv("приdtnn"), None);
-        // Mixed names and identifiers stay.
         for t in ["Gitом", "iPhoneа", "gitом", "PRы", "VPNом", "Wi-Fiем", "abcабв", "оотjbmь", "sheы", "youе", "Windowsе", "Heyом", "keyами", "gitа", "macу", "Appleй", "linuxе"] {
             assert_eq!(fix(t), None, "{t}");
         }
-        // Through the key buffer, with the replacement in the word's own layout.
         let mut e = engine();
         assert_eq!(type_str(&mut e, "приdtn "), vec![Replacement { delete: 7, insert: "привет ".into(), target: Lang::Ru }]);
     }
@@ -2220,15 +1897,12 @@ mod tests {
 
     #[test]
     fn both_words_collision_not_converted() {
-        // Find a real collision in the vendored lists and make sure we keep it.
         let en = dict::get(Lang::En);
         let ru = dict::get(Lang::Ru);
         let _ = (en, ru);
         for w in ["ytn", "rfr"] {
-            // "ytn"→"нет", "rfr"→"как": EN side not words → converted.
             assert!(conv(w).is_some(), "{w}");
         }
-        // A token that is a word in its own layout is kept even if its conversion is a word too.
         let mut found = None;
         for line in include_str!("../data/en.txt").lines().take(20000) {
             let c = layout::convert(line, Lang::En);
@@ -2267,14 +1941,12 @@ mod tests {
         type_str(&mut e, "ghbdtn");
         let r = e.feed(Key::Boundary('\n'), false).unwrap();
         assert_eq!(r.insert, "привет\n");
-        // Enter has not been typed into the field yet — only the word is deleted.
         assert_eq!(r.delete, 6);
         let mut e = engine();
         type_str(&mut e, "ghbdtn");
         let r = e.feed(Key::Boundary('\t'), false).unwrap();
         assert_eq!(r.insert, "привет\t");
         assert_eq!(r.delete, 6);
-        // A typed space *is* already on screen.
         let mut e = engine();
         let r = type_str(&mut e, "ghbdtn ");
         assert_eq!(r[0].delete, 7);
@@ -2292,8 +1964,6 @@ mod tests {
 
     #[test]
     fn plus_does_not_end_a_word() {
-        // '+' stays inside the token so `ctrl+shift+k` (and a single letter in the
-        // other layout, e.g. `ctrl+shift+к`) is one mixed or punctuated word, not three.
         let mut e = engine();
         assert!(type_str(&mut e, "ctrl+shift+k").is_empty());
         assert_eq!(e.current_len(), "ctrl+shift+k".chars().count());
@@ -2304,13 +1974,10 @@ mod tests {
     fn manual_convert_current_and_last() {
         let mut e = engine();
         type_str(&mut e, "qzx");
-        // Current word, dictionary-unsure: still converts.
         let r = e.manual_convert(Lang::En).unwrap();
         assert_eq!(r, Replacement { delete: 3, insert: "йяч".into(), target: Lang::Ru });
-        // Pressing again flips back.
         assert_eq!(e.manual_convert(Lang::Ru).unwrap().insert, "qzx");
         type_str(&mut e, " ");
-        // Last committed word incl. its boundary.
         let r = e.manual_convert(Lang::En).unwrap();
         assert_eq!(r, Replacement { delete: 4, insert: "йяч ".into(), target: Lang::Ru });
     }
@@ -2334,7 +2001,6 @@ mod tests {
 
     #[test]
     fn comma_inside_ru_word_typed_on_en() {
-        // ",eltn" = "будет": ',' is the б key, so it must stay part of the word.
         let mut e = engine();
         let r = type_str(&mut e, ",eltn ");
         assert_eq!(r[0].insert, "будет ");
@@ -2359,7 +2025,6 @@ mod tests {
         assert_eq!(type_str(&mut e, "b[ "), vec![Replacement { delete: 3, insert: "их ".into(), target: Lang::Ru }]);
         e.options.preferred_lang = Some(Lang::En);
         assert_eq!(type_str(&mut e, "b[ ")[0].insert, "их ");
-        // Not a word in the other language: left alone.
         assert_eq!(conv("a,"), None);
         assert_eq!(conv("x["), None);
         assert_eq!(conv("t`").as_deref(), Some("её"));
@@ -2381,7 +2046,6 @@ mod tests {
             Replacement { delete: 7, insert: "привет ".into(), target: Lang::Ru },
             Replacement { delete: 2, insert: "в ".into(), target: Lang::Ru },
         ]);
-        // Password-like: a letter glued to a sign stays.
         assert!(type_str(&mut e, "d!").is_empty());
         e.options.convert_single_letters = false;
         assert!(matches!(e.decide("d"), Decision::Keep(_)));
@@ -2404,9 +2068,7 @@ mod tests {
 
     #[test]
     fn user_word_on_typed_side_is_kept() {
-        // "ghbdtn" → "привет" normally; as a user word it stays.
         assert_eq!(engine_with(&["ghbdtn"]).decide("ghbdtn"), Decision::Keep("user word in current layout"));
-        // Unknown 3-letter typed form: user word on the typed side wins over a dictionary hit.
         assert_eq!(engine_with(&["rfr"]).decide("rfr"), Decision::Keep("user word in current layout"));
     }
 
@@ -2416,7 +2078,6 @@ mod tests {
         assert_eq!(conv("сшсв").as_deref(), Some("cicd"));
         assert_eq!(conv("шьрщ").as_deref(), Some("imho"));
         assert_eq!(conv("bv[j").as_deref(), Some("имхо"));
-        // "exe" ships as a built-in extra, but must not beat the real Russian word.
         assert!(dict::get(Lang::En).contains("exe"));
         assert_eq!(conv("учу"), None);
     }
@@ -2424,16 +2085,13 @@ mod tests {
     fn single_letters_to_assigned_language() {
         let mut e = engine();
         e.options.preferred_lang = Some(Lang::Ru);
-        // Not a word anywhere: the app language decides.
         assert_eq!(type_str(&mut e, "q "), vec![Replacement { delete: 2, insert: "й ".into(), target: Lang::Ru }]);
-        // A real English word stays even in a Russian app.
         assert!(type_str(&mut e, "a ").is_empty());
         assert_eq!(type_str(&mut e, "d ")[0].insert, "в ");
         e.options.preferred_lang = Some(Lang::En);
         assert_eq!(type_str(&mut e, "й ")[0].insert, "q ");
         assert!(type_str(&mut e, "в ").is_empty());
         assert_eq!(type_str(&mut e, "ф ")[0].insert, "a ");
-        // Inside an English sentence with 1-letter "i", "d" stays "d".
         let mut e2 = Engine::new(EngineOptions { fix_typos: true, ..Default::default() });
         assert!(type_str(&mut e2, "that i d ").is_empty());
     }
@@ -2455,7 +2113,6 @@ mod tests {
     #[test]
     fn converted_word_boundary_and_manual_roundtrip() {
         let mut e = engine();
-        // US keys for «например» are yfghbvth (not ntghbvth).
         assert_eq!(conv("yfghbvth?").as_deref(), Some("например,"));
         assert_eq!(type_str(&mut e, "yfghbvth?"), vec![Replacement {
             delete: 9, insert: "например,".into(), target: Lang::Ru,
@@ -2482,7 +2139,6 @@ mod tests {
         }]);
     }
 
-
     #[test]
     fn passwords_with_signs_are_left_alone() {
         for pref in [Lang::Ru, Lang::En] {
@@ -2493,7 +2149,6 @@ mod tests {
             e.options.preferred_lang = Some(pref);
             assert!(type_str(&mut e, "P!R)G ").is_empty(), "pref {pref:?}");
         }
-        // Prose with punctuation still converts.
         let mut e = engine();
         assert_eq!(type_str(&mut e, "ghbdtn! ").len(), 1);
     }
@@ -2508,7 +2163,6 @@ mod tests {
         assert_eq!(reps[0].insert, "mp3 ");
     }
 
-
     #[test]
     fn typo_fix_and_undo() {
         let mut e = engine();
@@ -2520,24 +2174,19 @@ mod tests {
         assert_eq!(r[0].insert, "Because ");
         let undo = e.manual_convert(Lang::En).unwrap();
         assert_eq!(undo, Replacement { delete: 8, insert: "Becuase ".into(), target: Lang::En });
-        // Wrong layout still wins over typo fixing.
         assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
-        // User words are never "fixed".
         let mut e = Engine::new(EngineOptions { user_words: UserWords::from_words(&["пирвет"]), fix_typos: true, ..Default::default() });
         assert!(type_str(&mut e, "пирвет ").is_empty());
     }
-
 
     #[test]
     fn abbreviations_convert() {
         assert_eq!(conv("пкфзрйд").as_deref(), Some("graphql"));
         assert_eq!(conv("vxc").as_deref(), Some("мчс"));
         assert_eq!(conv("cybkc").as_deref(), Some("снилс"));
-        // And are not dragged into the other layout.
         assert_eq!(conv("мчс"), None);
         assert_eq!(conv("oauth"), None);
     }
-
 
     #[test]
     fn file_names_in_wrong_layout() {
@@ -2545,13 +2194,11 @@ mod tests {
         assert_eq!(conv("ензув-0ю3ю59юефкюпя").as_deref(), Some("typed-0.3.59.tar.gz"));
         let mut e = engine();
         assert_eq!(type_str(&mut e, "мфгдеюишт "), vec![Replacement { delete: 10, insert: "vault.bin ".into(), target: Lang::En }]);
-        // Correct names never go to Russian, Russian words with ю/б stay.
         for keep in ["vault.bin", "typed-0.3.59.tar.gz", "README.md", "люблю", "сюда", "плюс"] {
             assert_eq!(conv(keep), None, "{keep}");
         }
         let mut e = engine();
         assert!(type_str(&mut e, "vault.bin ").is_empty());
-        // Russian words typed on EN with the ю key still convert, punctuation as before.
         assert_eq!(conv("k.,jdm").as_deref(), Some("любовь"));
         assert_eq!(conv("yfghbvth?").as_deref(), Some("например,"));
     }
@@ -2580,7 +2227,6 @@ mod tests {
         let cautious = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Cautious, ..Default::default() });
         assert!(matches!(cautious.decide("ротань"), Decision::Keep(_)));
         assert!(matches!(cautious.decide("jr;;p"), Decision::Keep(_)));
-        // Negatives: real words, clips, tech, typo_wide cases still as before.
         assert!(matches!(e.decide("привет"), Decision::Keep(_)));
         assert!(matches!(e.decide("hello"), Decision::Keep(_)));
         assert!(matches!(e.decide("загран"), Decision::Keep(_)));
@@ -2589,8 +2235,6 @@ mod tests {
         let off = engine();
         assert!(matches!(off.decide("ротань"), Decision::Keep(_)), "fix_typos is off by default");
 
-        // Phrase consistency: after a right-shift fix, the next word in the same
-        // direction is also recovered.
         let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
         let a = layout::shift_token("привет", Lang::Ru, Lang::Ru, 1).unwrap();
         let b = layout::shift_token("хорошо", Lang::Ru, Lang::Ru, 1).unwrap();
@@ -2602,7 +2246,6 @@ mod tests {
         e.feed(Key::Backspace, false)
     }
 
-    /// Never-correct words learned since the last call.
     fn never(e: &mut Engine) -> Vec<String> {
         e.take_learned().into_iter().filter_map(|l| if let Learned::NeverCorrect(w) = l { Some(w) } else { None }).collect()
     }
@@ -2614,15 +2257,11 @@ mod tests {
         let undo = e.undo_last(Lang::Ru).unwrap();
         assert_eq!(undo, Replacement { delete: 7, insert: "ghbdtn ".into(), target: Lang::En });
         assert_eq!(never(&mut e), vec!["ghbdtn".to_string()]);
-        // Never again, in any casing; other words still convert.
         assert!(type_str(&mut e, "ghbdtn ").is_empty());
         assert!(type_str(&mut e, "Ghbdtn, ").is_empty());
         assert_eq!(type_str(&mut e, "pltcm ")[0].insert, "здесь ");
-        // After a kept word the undo hotkey reaches back to the previous correction
-        // (since 0.3.72): `здесь` goes back to `pltcm`, `hello ` is typed again after it.
         assert!(type_str(&mut e, "hello ").is_empty());
         assert_eq!(e.undo_last(Lang::En), Some(Replacement { delete: 12, insert: "pltcm hello ".into(), target: Lang::En }));
-        // Nothing older to undo, also in the middle of a word.
         assert_eq!(e.undo_last(Lang::En), None);
         type_str(&mut e, "ghbd");
         assert_eq!(e.undo_last(Lang::En), None);
@@ -2632,7 +2271,6 @@ mod tests {
     fn undo_restores_typed_punctuation_and_typo() {
         let mut e = engine();
         e.options.fix_typos = true;
-        // `?` on the EN layout is `,` on the RU one; undo puts back what was typed.
         assert_eq!(type_str(&mut e, "ghbdtn?")[0].insert, "привет,");
         assert_eq!(e.undo_last(Lang::Ru).unwrap().insert, "ghbdtn?");
         assert_eq!(type_str(&mut e, " пирвет ")[0].insert, "привет ");
@@ -2650,7 +2288,6 @@ mod tests {
         let r = e.manual_convert(Lang::En).unwrap();
         assert_eq!(r, Replacement { delete: 6, insert: "зуфсу ".into(), target: Lang::Ru });
         assert_eq!(never(&mut e), vec!["зуфсу".to_string()]);
-        // Pressed again: a plain flip, as before.
         assert_eq!(e.manual_convert(Lang::Ru).unwrap().insert, "peace ");
     }
 
@@ -2659,8 +2296,6 @@ mod tests {
         let mut e = engine();
         assert_eq!(type_str(&mut e, "зуфсу ")[0].insert, "peace ");
         assert_eq!(bs(&mut e), Some(Replacement { delete: 6, insert: "зуфсу ".into(), target: Lang::Ru }));
-        // Counted only once the user moves on; since 0.3.72 the first undo is only
-        // noted (`undone_once`), the second one of the same word makes it permanent.
         assert!(e.take_learned().is_empty());
         assert!(type_str(&mut e, "привет ").is_empty());
         assert_eq!(e.take_learned(), vec![Learned::UndoneOnce("зуфсу".into())]);
@@ -2674,23 +2309,19 @@ mod tests {
     #[test]
     fn backspace_undo_only_first_key_and_not_after_enter() {
         let mut e = engine();
-        // Another key in between: Backspace just erases.
         type_str(&mut e, "ghbdtn ");
         type_str(&mut e, "a");
         assert_eq!(bs(&mut e), None);
         assert_eq!(bs(&mut e), None);
-        // Second Backspace after an undo erases normally.
         let mut e = engine();
         type_str(&mut e, "ghbdtn ");
         assert!(bs(&mut e).is_some());
         assert_eq!(bs(&mut e), None);
-        // After Enter the message may be sent already.
         let mut e = engine();
         assert!(e.feed(Key::Char('g'), false).is_none());
         type_str(&mut e, "hbdtn");
         assert!(e.feed(Key::Boundary('\n'), false).is_some());
         assert_eq!(bs(&mut e), None);
-        // Switched off in the settings.
         let mut e = engine();
         e.options.undo_on_backspace = false;
         type_str(&mut e, "ghbdtn ");
@@ -2699,7 +2330,6 @@ mod tests {
 
     #[test]
     fn erased_and_retyped_original_is_kept_and_remembered() {
-        // The «stubbornly repeats the mistake» case: erase the fix, type it again.
         let mut e = engine();
         e.options.undo_on_backspace = false;
         e.options.fix_typos = true;
@@ -2709,20 +2339,16 @@ mod tests {
         }
         assert!(type_str(&mut e, "пирвет ").is_empty(), "retyped original is kept");
         assert_eq!(never(&mut e), vec!["пирвет".to_string()]);
-        // Ctrl+Backspace works the same.
         assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
         assert!(e.feed(Key::Backspace, true).is_none());
         assert!(type_str(&mut e, "ghbdtn ").is_empty());
         assert_eq!(never(&mut e), vec!["ghbdtn".to_string()]);
-        // A different word after erasing is judged normally and nothing is learned.
         assert_eq!(type_str(&mut e, "pltcm ")[0].insert, "здесь ");
         for _ in 0..6 {
             bs(&mut e);
         }
         assert_eq!(type_str(&mut e, "ntcn ")[0].insert, "тест ");
         assert!(never(&mut e).is_empty());
-        // With Backspace-undo on: the first Backspace restores, the user keeps erasing
-        // and retypes the original: still kept and remembered.
         let mut e = engine();
         assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
         assert!(bs(&mut e).is_some());
@@ -2761,7 +2387,6 @@ mod tests {
 
     #[test]
     fn context_keeps_names_it_knows() {
-        // Names the corpus knows after their usual previous word are not "fixed".
         for s in ["нельсон мандела ", "ален делон "] {
             assert_eq!(type_str(&mut ctx_engine(true), s), vec![], "{s}");
         }
@@ -2769,7 +2394,6 @@ mod tests {
 
     #[test]
     fn context_picks_between_close_candidates() {
-        // Too close to call alone; the previous words decide.
         for (s, fix) in [("я бы хотл ", "хотел "), ("со мпой ", "мной ")] {
             let reps = type_str(&mut ctx_engine(true), s);
             assert_eq!(reps.last().map(|r| r.insert.as_str()), Some(fix), "{s}");
@@ -2778,8 +2402,6 @@ mod tests {
 
     #[test]
     fn mangled_word_inside_a_sentence_keeps_its_layout() {
-        // `vfry` alone reads like Russian letters (`макн`); after an English word it is a
-        // mangled English word and stays.
         assert_eq!(conv("vfry").as_deref(), Some("макн"));
         assert_eq!(type_str(&mut ctx_engine(true), "so vfry "), vec![]);
         assert!(!type_str(&mut ctx_engine(false), "so vfry ").is_empty());
@@ -2798,7 +2420,6 @@ mod tests {
             "{:?}",
             e.decide("-D")
         );
-        // A hyphen inside a word is not a flag.
         assert!(!matches!(e.decide("все-таки"), Decision::Keep("cli flag")));
     }
 
@@ -2837,10 +2458,8 @@ mod tests {
         let mut e = typo_engine();
         assert_eq!(type_str(&mut e, "xnjj "), vec![Replacement { delete: 5, insert: "что ".into(), target: Lang::Ru }]);
         assert_eq!(type_str(&mut e, "ghbdnt ")[0].insert, "привет ");
-        // Typo fixes off: only the plain other-layout reading, as before.
         let mut e = engine();
         assert!(type_str(&mut e, "ghbdnt ").first().map_or(true, |r| r.insert != "привет "));
-        // Cautious level: the 0.3.71 rules, no combined fix.
         let mut e = typo_engine();
         e.options.typo_level = typo::Level::Cautious;
         assert!(type_str(&mut e, "xnjj ").first().map_or(true, |r| r.insert != "что "));
@@ -2858,12 +2477,10 @@ mod tests {
         };
         assert_eq!(out("отменаисправления").as_ref().map(|(t, r)| (t.as_str(), *r)), Some(("отмена исправления", SPACE_REASON)));
         assert_eq!(out("лдва").as_ref().map(|(t, r)| (t.as_str(), *r)), Some(("два", TYPO_REASON)));
-        // Cautious typo level still splits (spaces are not typo-level), but not `лдва`.
         let mut c = typo_engine();
         c.options.typo_level = typo::Level::Cautious;
         assert!(matches!(c.decide("отменаисправления"), Decision::Convert { .. }));
         assert!(matches!(c.decide("лдва"), Decision::Keep(_)));
-        // Real words stay.
         for w in ["два", "отмена", "исправления", "чтобы", "также", "благополучие"] {
             assert!(matches!(e.decide(w), Decision::Keep(_)), "{w}");
         }
@@ -2873,13 +2490,9 @@ mod tests {
     fn partial_undo_keeps_the_layout() {
         let mut e = typo_engine();
         assert_eq!(type_str(&mut e, "xnjj ")[0].insert, "что ");
-        // First Backspace: only the typo fix goes, the Russian reading stays.
         assert_eq!(bs(&mut e), Some(Replacement { delete: 4, insert: "чтоо ".into(), target: Lang::Ru }));
-        // Second one: exactly what was typed, in the layout it was typed in.
         assert_eq!(bs(&mut e), Some(Replacement { delete: 5, insert: "xnjj ".into(), target: Lang::En }));
-        // Third: an ordinary Backspace.
         assert_eq!(bs(&mut e), None);
-        // The undo hotkey undoes everything at once.
         let mut e = typo_engine();
         type_str(&mut e, "xnjj ");
         assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 4, insert: "xnjj ".into(), target: Lang::En }));
@@ -2895,7 +2508,6 @@ mod tests {
         }
         let learned = e.take_learned();
         assert_eq!(learned, vec![Learned::UndoneOnce("typo:чтоо".into()), Learned::NeverTypo("чтоо".into())]);
-        // Now only the layout is fixed; other words still get typo fixes.
         assert!(type_str(&mut e, "xnjj ").first().map_or(true, |r| r.insert != "что "));
         assert_eq!(type_str(&mut e, "превт ")[0].insert, "привет ");
     }
@@ -2906,17 +2518,14 @@ mod tests {
         assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
         assert_eq!(type_str(&mut e, "vbh ")[0].insert, "мир ");
         assert!(type_str(&mut e, "и ").is_empty());
-        // Newest first: `мир`, then `привет`; the text after each is typed again.
         assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 6, insert: "vbh и ".into(), target: Lang::Ru }));
         assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 13, insert: "ghbdtn vbh и ".into(), target: Lang::Ru }));
         assert_eq!(e.undo_last(Lang::Ru), None);
         assert_eq!(never(&mut e), vec!["vbh".to_string(), "ghbdtn".to_string()]);
-        // A word in progress is kept and typed again too.
         let mut e = typo_engine();
         type_str(&mut e, "ghbdtn ");
         type_str(&mut e, "ми");
         assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 9, insert: "ghbdtn ми".into(), target: Lang::Ru }));
-        // Not past Enter (the message may be sent) or a caret move.
         let mut e = typo_engine();
         type_str(&mut e, "ghbdtn");
         e.feed(Key::Boundary('\n'), false);
@@ -2939,7 +2548,6 @@ mod tests {
 
     #[test]
     fn full_form_words_are_kept_and_fixes_still_work() {
-        // Real forms missing from the ranked lists are never "fixed".
         for w in ["скидывать", "скидываешь", "скидывавшимися", "оцени", "вкладками", "раскладками"] {
             assert!(is_known(w, Lang::Ru), "{w}");
             assert_eq!(typo::suggest(w, Lang::Ru), None, "{w}");
@@ -2953,12 +2561,9 @@ mod tests {
         assert_eq!(typo::suggest("чтокой", Lang::Ru).as_deref(), Some("точкой"));
         assert_eq!(conv("зуфсу").as_deref(), Some("peace"));
         assert_eq!(conv("мфгдеюишт").as_deref(), Some("vault.bin"));
-        // `еру` is a form in the full Russian set, but `the` is a ranked word: convert.
         assert_eq!(conv("еру").as_deref(), Some("the"));
         assert_eq!(conv("цуку").as_deref(), Some("were"));
-        // A rare Russian form typed on the EN layout converts via the full set.
         assert_eq!(conv("crblsdfdibvcz").as_deref(), Some("скидывавшимся"));
-        // A rare real Russian form typed correctly stays.
         assert_eq!(conv("скидывавшимся"), None);
     }
 
@@ -2966,23 +2571,18 @@ mod tests {
     fn brands_0_3_65() {
         let mut e = engine();
         e.options.fix_typos = true;
-        // Typed in EN: kept (it used to become `realm`).
         assert!(type_str(&mut e, "realme ").is_empty());
         assert!(type_str(&mut e, "Realme ").is_empty());
         for w in ["realme", "tecno", "infinix", "oneplus"] {
             assert_eq!(e.decide(w), Decision::Keep("known word form in current layout"), "{w}");
         }
-        // Typed on the RU layout: converted to the brand.
         assert_eq!(conv("куфдьу").as_deref(), Some("realme"));
         assert_eq!(conv("шташтшч").as_deref(), Some("infinix"));
-        // Russian spellings stay Russian.
         for w in ["реалми", "сяоми", "айфоном", "самсунга", "хуавея"] {
             assert_eq!(conv(w), None, "{w}");
             assert_eq!(e.decide(w), Decision::Keep("known word form in current layout"), "{w}");
         }
-        // And still convert when typed on the EN layout.
         assert_eq!(conv("fqajyjv").as_deref(), Some("айфоном"));
-        // Earlier user cases are unchanged.
         assert_eq!(conv("зуфсу").as_deref(), Some("peace"));
         assert_eq!(conv("мфгдеюишт").as_deref(), Some("vault.bin"));
         assert_eq!(typo::suggest("скидывать", Lang::Ru), None);
@@ -2996,14 +2596,11 @@ mod tests {
         assert_eq!(type_str(&mut e, "Вофисе, ")[0].insert, "В офисе, ");
         assert_eq!(type_str(&mut e, "незнаю ")[0].insert, "не знаю ");
         assert_eq!(type_str(&mut e, "кврачу ")[0].insert, "к врачу ");
-        // Real words and wrong-layout words are not touched.
         assert!(type_str(&mut e, "сделать вопрос сколько ").is_empty());
         assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
-        // Undo restores and remembers.
         assert_eq!(type_str(&mut e, "нафайле ")[0].insert, "на файле ");
         assert_eq!(bs(&mut e), Some(Replacement { delete: 9, insert: "нафайле ".into(), target: Lang::Ru }));
         assert!(type_str(&mut e, "дальше ").is_empty());
-        // Second Backspace undo of the same word: remembered.
         assert_eq!(type_str(&mut e, "нафайле ")[0].insert, "на файле ");
         assert!(bs(&mut e).is_some());
         assert!(type_str(&mut e, "дальше ").is_empty());
@@ -3013,7 +2610,6 @@ mod tests {
         assert_eq!(type_str(&mut e, "вофисе ")[0].insert, "в офисе ");
         assert_eq!(e.undo_last(Lang::Ru).unwrap(), Replacement { delete: 8, insert: "вофисе ".into(), target: Lang::Ru });
         assert_eq!(never(&mut e), vec!["вофисе".to_string()]);
-        // With typo fixing on: a missing letter beats a split, a wrong one does not.
         let mut e = engine();
         e.options.fix_typos = true;
         assert_eq!(type_str(&mut e, "отсуда ")[0].insert, "отсюда ");
@@ -3021,19 +2617,16 @@ mod tests {
         assert_eq!(type_str(&mut e, "наработе ")[0].insert, "на работе ");
         assert_eq!(type_str(&mut e, "отебе ")[0].insert, "о тебе ");
         assert_eq!(type_str(&mut e, "чтокой ")[0].insert, "точкой ");
-        // Setting off, or autocorrect off (exception apps): nothing happens.
         let mut e = engine();
         e.options.fix_missing_spaces = false;
         assert!(type_str(&mut e, "вофисе незнаю ").is_empty());
         let mut e = engine();
         e.options.autocorrect = false;
         assert!(type_str(&mut e, "вофисе ").is_empty());
-        // User words win.
         let mut e = engine_with(&["вофисе"]);
         assert!(type_str(&mut e, "вофисе ").is_empty());
     }
 
-    /// Types `text` key by key (then Enter) at `level` and returns what the field holds.
     fn field_after(level: typo::Level, text: &str) -> String {
         let mut e = typo_engine();
         e.options.typo_level = level;
@@ -3060,12 +2653,9 @@ mod tests {
 
     #[test]
     fn real_forms_short_tokens_and_new_words_0_3_74() {
-        // A real form of the typed layout stays when the other reading is subtitle noise.
         assert_eq!(conv("шару"), None);
         assert_eq!(conv("иную"), None);
-        // Rare forms whose reading is a frequent word still switch.
         assert_eq!(conv("цуку").as_deref(), Some("were"));
-        // Short rare English entries whose Russian reading is a top word.
         assert_eq!(conv("lf").as_deref(), Some("да"));
         assert_eq!(conv("lf.").as_deref(), Some("даю"));
         assert_eq!(conv("Lf").as_deref(), Some("Да"));
@@ -3073,10 +2663,8 @@ mod tests {
         for keep in ["vs", "ok", "js", "id", "cd", "ls", "db", "ui", "pr", "dj", "us"] {
             assert_eq!(conv(keep), None, "{keep}");
         }
-        // Not after an English word (`kubectl get ns`).
         let mut e = typo_engine();
         assert!(type_str(&mut e, "get ns ").is_empty());
-        // New words of regular formation are not typos; a far guess is not made.
         for level in [typo::Level::Normal, typo::Level::Aggressive] {
             let s = "есть зранилка типа nas, образ лежит на хосте -- зас сделают шару? я смогу напрямик скачать на нее? и надо почистить boot -- как лучше сделать?";
             assert_eq!(field_after(level, s), s, "{level:?}");

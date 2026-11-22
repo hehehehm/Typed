@@ -1,41 +1,22 @@
-//! Look of the settings window: a quiet cross-platform desktop utility.
-//!
-//! One base unit `U` = 4 px; spacing is an integer multiple of `U`. Neutral surfaces,
-//! 1 px hairlines, one small radius family (6 px containers, 4 px controls). The five
-//! section colours are accents only, taken from the original water logo: sun gold, sand,
-//! seafoam, sea turquoise, coral. A switch that is on is always sea turquoise. The home
-//! screen sits on a photographic sea backdrop (day / dusk). Text uses the platform UI
-//! font when it can be found (Segoe UI on Windows, SF / Helvetica Neue on macOS), else
-//! the bundled one. Type scale is one ratio, 6:5: 12 · 14.4 · 17.3 · 20.7 · 24.9.
-//! Layout rule: no widget asks for more width than `ui.available_width()`.
 
 use eframe::egui::{self, Color32, FontId, Rect, Rounding, Sense, Stroke, Ui, Vec2};
 use std::cell::Cell;
 use std::sync::Arc;
 
-/// Base module, in logical pixels.
 pub const U: f32 = 4.0;
 pub const GAP: f32 = U;
 pub const PAD: f32 = U * 2.0;
-/// Horizontal inset of rows inside a group (3U).
 pub const INSET: f32 = U * 3.0;
-/// Window margin (4U).
 pub const MARGIN: f32 = U * 4.0;
-/// Minimum hit target (8U).
 pub const HIT: f32 = U * 8.0;
-/// Row height inside groups (10U).
 pub const ROW: f32 = HIT + GAP * 2.0;
 pub const MARK: f32 = U * 4.0;
-/// Section header height (12U).
 pub const HEADER: f32 = U * 12.0;
-/// Toggle: 36 × 20 track, 9:5 like the native ones, round knob.
 pub const SWITCH_W: f32 = U * 9.0;
 pub const SWITCH_H: f32 = U * 5.0;
 pub const KNOB: f32 = 14.0;
-/// Visual height of buttons, fields and keycaps inside a 32 px target.
 pub const CTRL_H: f32 = 28.0;
 pub const CAP_H: f32 = U * 6.0;
-/// Corner radii: containers and controls.
 pub const RADIUS: f32 = 6.0;
 pub const RADIUS_SM: f32 = U;
 pub const HAIR: f32 = 1.0;
@@ -46,16 +27,13 @@ pub const FONT_LG: f32 = FONT_MD * 1.2;
 pub const FONT_XL: f32 = FONT_LG * 1.2;
 pub const FONT_XXL: f32 = FONT_XL * 1.2;
 
-/// Accents taken from the original water logo (sun sparkles, sand, shallow
-/// sea, coral at sunset). Dark ink `INK_ON_COLOR` sits on all of them (WCAG AA).
-pub const SUN: Color32 = Color32::from_rgb(0xE8, 0xC4, 0x68); // Программы
-pub const SAND: Color32 = Color32::from_rgb(0xD4, 0xA0, 0x6E); // Словарь
-pub const SEAFOAM: Color32 = Color32::from_rgb(0x72, 0xC2, 0xB9); // Сейф
-pub const SEA: Color32 = Color32::from_rgb(0x5B, 0xB8, 0xC4); // Настройки; switch that is on
-pub const CORAL: Color32 = Color32::from_rgb(0xE4, 0x7A, 0x6A); // Поддержать
+pub const SUN: Color32 = Color32::from_rgb(0xE8, 0xC4, 0x68);
+pub const SAND: Color32 = Color32::from_rgb(0xD4, 0xA0, 0x6E);
+pub const SEAFOAM: Color32 = Color32::from_rgb(0x72, 0xC2, 0xB9);
+pub const SEA: Color32 = Color32::from_rgb(0x5B, 0xB8, 0xC4);
+pub const CORAL: Color32 = Color32::from_rgb(0xE4, 0x7A, 0x6A);
 pub const INK_ON_COLOR: Color32 = Color32::from_rgb(0x23, 0x26, 0x2B);
 
-/// Older names kept so existing call sites compile.
 #[allow(dead_code)]
 pub const YELLOW: Color32 = SUN;
 #[allow(dead_code)]
@@ -67,7 +45,6 @@ pub const CYAN: Color32 = SEA;
 #[allow(dead_code)]
 pub const RED: Color32 = CORAL;
 
-
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub dark: bool,
@@ -78,15 +55,12 @@ pub struct Theme {
     pub line: Color32,
     pub ink: Color32,
     pub muted: Color32,
-    /// Stronger than `muted` for counts and short marks that must stay AA
-    /// even on a slightly mixed plate (card corner, group caption).
     pub muted_strong: Color32,
     pub warn: Color32,
 }
 
 pub fn theme(dark: bool) -> Theme {
     if dark {
-        // Night sea: deep teal water, warm sand-white ink, gold as the warning.
         Theme {
             dark,
             bg: Color32::from_rgb(0x15, 0x1E, 0x21),
@@ -100,7 +74,6 @@ pub fn theme(dark: bool) -> Theme {
             warn: Color32::from_rgb(0xE8, 0xC4, 0x48),
         }
     } else {
-        // Sun-warm sand, from the geometry mark's cream and the water's gold light.
         Theme {
             dark,
             bg: Color32::from_rgb(0xF4, 0xEF, 0xE6),
@@ -137,7 +110,6 @@ pub fn hair(color: Color32) -> Stroke {
     Stroke::new(HAIR, color)
 }
 
-/// Snap down to a multiple of `U` (never below `min`).
 pub fn snap(v: f32, min: f32) -> f32 {
     ((v / U).floor() * U).max(min)
 }
@@ -146,19 +118,15 @@ thread_local! {
     static MAC_PREVIEW: Cell<bool> = const { Cell::new(false) };
 }
 
-/// macOS conventions (⌃⌥⇧⌘ keycaps). True on macOS, or in a screenshot preview.
 pub fn mac_style() -> bool {
     cfg!(target_os = "macos") || MAC_PREVIEW.with(|c| c.get())
 }
 
-/// Screenshot tests: render this thread with macOS conventions.
 #[cfg(test)]
 pub fn set_mac_preview(on: bool) {
     MAC_PREVIEW.with(|c| c.set(on));
 }
 
-/// Hotkey label parts for display: `Ctrl+Alt+Z` → `[Ctrl, Alt, Z]`, or on macOS
-/// `[⌃, ⌥, Z]`. Only the label changes, never the stored hotkey.
 pub fn combo_parts(combo: &str) -> Vec<String> {
     let parts: Vec<&str> = if combo.len() > 1 && combo.contains('+') { combo.split('+').collect() } else { vec![combo] };
     parts
@@ -179,7 +147,6 @@ pub fn combo_parts(combo: &str) -> Vec<String> {
         .collect()
 }
 
-/// Platform UI font candidates (path, face index in a collection).
 fn system_font_candidates() -> Vec<(std::path::PathBuf, u32)> {
     let mut v = Vec::new();
     if cfg!(windows) {
@@ -195,8 +162,6 @@ fn system_font_candidates() -> Vec<(std::path::PathBuf, u32)> {
     v
 }
 
-/// A font file is used only if it parses and covers Latin, Cyrillic and digits,
-/// so a missing or odd file never breaks the window (egui would panic on a bad font).
 fn usable_font(bytes: &[u8], index: u32) -> bool {
     use ab_glyph::Font;
     match ab_glyph::FontRef::try_from_slice_and_index(bytes, index) {
@@ -215,14 +180,11 @@ fn load_font(path: &std::path::Path, index: u32) -> Option<egui::FontData> {
     Some(d)
 }
 
-/// Fonts: the platform UI font first (if found), then the bundled ones; Hack and
-/// the emoji fonts catch symbols (→, ∅, ⌘). Call once per context.
 pub fn install_fonts(ctx: &egui::Context) {
     let found = system_font_candidates().into_iter().find_map(|(p, i)| load_font(&p, i));
     install_fonts_with(ctx, found);
 }
 
-/// Same as `install_fonts` with an explicit primary font (tests: a macOS-like preview).
 pub fn install_fonts_with(ctx: &egui::Context, primary: Option<egui::FontData>) {
     let mut fonts = egui::FontDefinitions::default();
     if let Some(d) = primary {
@@ -322,7 +284,6 @@ pub fn text_w(ui: &Ui, text: &str, font: FontId) -> f32 {
     ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font, Color32::WHITE).size().x)
 }
 
-/// Focus: a 2 px ring just outside the control, same corner family.
 pub fn focus_ring(ui: &Ui, rect: Rect, radius: f32, focused: bool) {
     if focused {
         let t = cur(ui);
@@ -335,7 +296,6 @@ pub fn warn(ui: &mut Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).color(c)).wrap());
 }
 
-/// Small muted caption above a group, inset like the rows.
 pub fn group_title(ui: &mut Ui, text: &str, count: Option<usize>, tip: &str) {
     let t = cur(ui);
     ui.horizontal(|ui| {
@@ -351,8 +311,6 @@ pub fn group_title(ui: &mut Ui, text: &str, count: Option<usize>, tip: &str) {
     });
 }
 
-/// Inset grouped list: rounded surface, hairline border; rows inside are
-/// separated with `sep`.
 pub fn group<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let t = cur(ui);
     egui::Frame::none()
@@ -368,7 +326,6 @@ pub fn group<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
-/// Hairline between rows of a group (inset by the group margin).
 pub fn sep(ui: &mut Ui) {
     let t = cur(ui);
     let w = ui.available_width();
@@ -376,7 +333,6 @@ pub fn sep(ui: &mut Ui) {
     ui.painter().rect_filled(r, 0.0, t.line);
 }
 
-/// Plain block (kept for callers that just need vertical padding).
 pub fn block<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(0.0, GAP))
@@ -391,13 +347,10 @@ fn control_rect(rect: Rect) -> Rect {
     Rect::from_center_size(rect.center(), egui::vec2(rect.width(), CTRL_H.min(rect.height())))
 }
 
-/// Width a [`tile`] / [`primary`] button needs to show `text` without ellipsis.
 pub fn tile_width(ui: &Ui, text: &str) -> f32 {
     (text_w(ui, text, font_md()) + INSET * 2.0).max(HIT)
 }
 
-/// Button: 28 px visual in a 32 px target. `fill` TRANSPARENT = neutral button.
-/// Sized to the label; only shrinks when the whole row is narrower than the text.
 pub fn tile(ui: &mut Ui, text: &str, fill: Color32, fg: Color32) -> egui::Response {
     let t = cur(ui);
     let f = font_md();
@@ -446,7 +399,6 @@ pub fn secondary(ui: &mut Ui, text: &str) -> egui::Response {
     tile(ui, text, Color32::TRANSPARENT, t.ink)
 }
 
-/// Rounded `+` button in the accent colour.
 pub fn plus_square(ui: &mut Ui, accent: Color32, tip: &str) -> egui::Response {
     let t = cur(ui);
     let enabled = ui.is_enabled();
@@ -477,8 +429,6 @@ pub fn plus_square(ui: &mut Ui, accent: Color32, tip: &str) -> egui::Response {
     if tip.is_empty() || !enabled { resp } else { resp.on_hover_text(tip) }
 }
 
-/// The toggle: 36 × 20 pill, round 14 px knob, animated.
-/// Off — hairline outline, muted knob on the left. On — accent fill, white knob on the right.
 pub fn paint_switch(ui: &Ui, rect: Rect, id: egui::Id, on: bool, hovered: bool, accent: Color32) -> Rect {
     let t = cur(ui);
     let k = ui.ctx().animate_bool_with_time(id.with("sw"), on, 0.14);
@@ -514,7 +464,6 @@ fn state_tip(on: bool, tip: &str) -> String {
     if tip.is_empty() { state.into() } else { format!("{tip} · {state}") }
 }
 
-/// Row with a label and a toggle on the right; the whole row toggles.
 pub fn toggle_row(ui: &mut Ui, on: &mut bool, title: &str, tip: &str, accent: Color32) -> bool {
     let t = cur(ui);
     let id = ui.next_auto_id();
@@ -534,7 +483,6 @@ pub fn toggle_row(ui: &mut Ui, on: &mut bool, title: &str, tip: &str, accent: Co
     }
 }
 
-/// Segmented control: rounded track, the chosen segment filled with the accent.
 pub fn segment_strip<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str, &str)], total_w: f32, accent: Color32) -> bool {
     let n = options.len().max(1);
     let w = (total_w / n as f32).max(U * 7.0);
@@ -568,13 +516,11 @@ pub fn segment_strip<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &
     changed
 }
 
-/// Keycaps for a combo; on macOS with ⌃⌥⇧⌘ symbols.
 pub fn keycaps(ui: &mut Ui, combo: &str, max_w: f32, active: bool, accent: Color32) -> egui::Response {
     let t = cur(ui);
     let f = font_sm();
     let mut parts = combo_parts(combo);
     if mac_style() && parts.len() > 1 {
-        // macOS writes shortcuts as one run of symbols: ⌃⇧V.
         let joined: String = parts.concat();
         if joined.chars().count() <= 6 {
             parts = vec![joined.chars().map(|c| c.to_string()).collect::<Vec<_>>().join("\u{2009}")];
@@ -593,7 +539,6 @@ pub fn keycaps(ui: &mut Ui, combo: &str, max_w: f32, active: bool, accent: Color
     let cap = |r: Rect, s: &str, max: f32| {
         p.rect_filled(r, RADIUS_SM, fill);
         p.rect_stroke(r.shrink(0.5), RADIUS_SM, hair(edge));
-        // Keycap base: a slightly darker lower edge.
         p.line_segment([egui::pos2(r.left() + 2.0, r.bottom() - 0.5), egui::pos2(r.right() - 2.0, r.bottom() - 0.5)], hair(mix(edge, t.ink, 0.25)));
         let g = line_galley(ui, s, f.clone(), fg, max);
         p.galley(r.center() - g.size() / 2.0, g, fg);
@@ -612,7 +557,6 @@ pub fn keycaps(ui: &mut Ui, combo: &str, max_w: f32, active: bool, accent: Color
     if fits { resp } else { resp.on_hover_text(combo) }
 }
 
-/// Text field: rounded, hairline border, accent border on focus.
 pub fn field(ui: &mut Ui, text: &mut String, hint_text: &str, width: f32, password: bool, accent: Color32) -> egui::Response {
     let t = cur(ui);
     let w = width.min(ui.available_width()).max(HIT);
@@ -643,8 +587,6 @@ pub fn add_line_plus(ui: &mut Ui, text: &mut String, hint_text: &str, tip: &str,
     add_line_plus_focus(ui, text, hint_text, tip, accent, false)
 }
 
-/// Like [`add_line_plus`]; when `request_focus` is set the field takes focus this frame.
-/// `+` is disabled and Enter is ignored while the field is empty.
 pub fn add_line_plus_focus(
     ui: &mut Ui,
     text: &mut String,
@@ -679,8 +621,6 @@ pub fn password_bg(ui: &mut Ui, text: &mut String, hint_text: &str, width: f32, 
     field(ui, text, hint_text, width, true, accent)
 }
 
-/// Row: label left, actions right (right-to-left), 32 px; `fill` TRANSPARENT = no
-/// vertical padding, otherwise a 40 px row.
 pub fn row(ui: &mut Ui, fill: Color32, label: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui)) -> egui::Response {
     let margin = if fill != Color32::TRANSPARENT { egui::Margin::symmetric(0.0, GAP) } else { egui::Margin::ZERO };
     egui::Frame::none()
@@ -703,13 +643,11 @@ pub fn row(ui: &mut Ui, fill: Color32, label: impl FnOnce(&mut Ui), actions: imp
         .response
 }
 
-/// 40 px row inside a group.
 pub fn line_row(ui: &mut Ui, label: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui)) -> egui::Response {
     let t = cur(ui);
     row(ui, t.surface, label, actions)
 }
 
-/// Text action (no box), accent-dark underline on hover.
 pub fn link(ui: &mut Ui, text: &str, accent: Color32) -> egui::Response {
     let t = cur(ui);
     let f = font_md();
@@ -726,13 +664,10 @@ pub fn link(ui: &mut Ui, text: &str, accent: Color32) -> egui::Response {
     resp
 }
 
-/// Word token: rounded, hairline, mono word, muted tag, × on the right.
 pub fn chip(ui: &mut Ui, word: &str, tag: Option<&str>) -> bool {
     chip_with_tip(ui, word, tag, None)
 }
 
-/// Like [`chip`], but `tip` is shown on hover (e.g. a full path). If `tip` is
-/// `None` and the label does not fit, the full `word` is used as the tooltip.
 pub fn chip_with_tip(ui: &mut Ui, word: &str, tag: Option<&str>, tip: Option<&str>) -> bool {
     let t = cur(ui);
     let wf = font_mono();
@@ -772,7 +707,6 @@ pub fn chip_with_tip(ui: &mut Ui, word: &str, tag: Option<&str>, tip: Option<&st
     xresp.on_hover_text("Удалить").clicked()
 }
 
-/// Toggle followed by its label.
 pub fn check(ui: &mut Ui, on: &mut bool, text: &str, accent: Color32) -> bool {
     let t = cur(ui);
     let f = font_md();
@@ -792,7 +726,6 @@ pub fn check(ui: &mut Ui, on: &mut bool, text: &str, accent: Color32) -> bool {
     }
 }
 
-/// Day (light theme) and dusk (dark theme) photographic backdrops.
 pub fn sea_jpeg(dark: bool) -> &'static [u8] {
     if dark {
         include_bytes!("../../../assets/bg-sea-dusk.jpg")
@@ -810,19 +743,15 @@ pub fn load_sea_texture(ctx: &egui::Context, dark: bool) -> egui::TextureHandle 
     )
 }
 
-/// Decode a backdrop JPEG to packed sRGB bytes (no gamma conversion, no premultiply).
 pub fn sea_srgb(dark: bool) -> (usize, usize, Vec<u8>) {
     let img = image::load_from_memory(sea_jpeg(dark)).expect("sea backdrop jpeg").to_rgb8();
     (img.width() as usize, img.height() as usize, img.into_raw())
 }
 
-/// Tight frosted plate behind header controls so they stay readable on the photo
-/// without washing the rest of the strip.
 pub fn frost_plate(ui: &mut Ui, rect: Rect) {
     if rect.width() <= 1.0 || rect.height() <= 1.0 {
         return;
     }
-    // So the UX tester can measure gaps between adjacent header plates.
     let id = ui.id().with(("frost", (rect.min.x.to_bits(), rect.min.y.to_bits(), rect.width().to_bits())));
     ui.interact(rect, id, Sense::hover());
     let t = cur(ui);
@@ -835,8 +764,6 @@ pub fn frost_plate(ui: &mut Ui, rect: Rect) {
     ui.painter().rect_stroke(rect.shrink(0.5), RADIUS_SM, hair(t.line));
 }
 
-/// Draw `tex` to cover `rect` (crop overflow, never letterbox). `align_y` 0 = keep
-/// the top of the photo (the water), 1 = the bottom (the sand).
 pub fn paint_photo(ui: &Ui, rect: Rect, tex: &egui::TextureHandle, align_y: f32, tint: Color32) {
     if rect.width() <= 1.0 || rect.height() <= 1.0 {
         return;
@@ -862,7 +789,6 @@ pub fn paint_photo(ui: &Ui, rect: Rect, tex: &egui::TextureHandle, align_y: f32,
     ui.painter().with_clip_rect(rect).add(egui::Shape::mesh(mesh));
 }
 
-/// Soft shadow under a home card, so it sits on the photo instead of melting into it.
 pub fn card_shadow(ui: &Ui, rect: Rect) {
     let t = cur(ui);
     let color = Color32::from_black_alpha(if t.dark { 90 } else { 40 });
@@ -870,8 +796,6 @@ pub fn card_shadow(ui: &Ui, rect: Rect) {
     ui.painter().add(shadow.as_shape(rect, RADIUS));
 }
 
-/// Subtle dark frost under a caption on the dusk sand. The pale day sand already
-/// keeps dark ink well above WCAG AA, so the light theme has no plate.
 pub fn caption_plate(ui: &Ui, pos: egui::Pos2, size: Vec2) {
     let t = cur(ui);
     if !t.dark {
@@ -883,22 +807,18 @@ pub fn caption_plate(ui: &Ui, pos: egui::Pos2, size: Vec2) {
     ui.painter().rect_filled(r, RADIUS_SM, Color32::from_rgba_unmultiplied(t.surface.r(), t.surface.g(), t.surface.b(), 170));
 }
 
-/// Section mark: a solid circle in the section colour with the glyph in ink.
-
 pub fn paint_mark(p: &egui::Painter, c: egui::Pos2, d: f32, color: Color32, idx: usize) {
     p.circle_filled(c, d / 2.0, color);
     p.circle_stroke(c, d / 2.0 - 0.5, hair(shade(color, -0.12)));
     paint_home_icon(p, c, (d * 0.22).round(), idx);
 }
 
-/// Chevron «‹» for the back button.
 pub fn paint_chevron(p: &egui::Painter, c: egui::Pos2, color: Color32) {
     let s = Stroke::new(1.6, color);
     p.line_segment([egui::pos2(c.x + 3.0, c.y - 6.0), egui::pos2(c.x - 3.0, c.y)], s);
     p.line_segment([egui::pos2(c.x - 3.0, c.y), egui::pos2(c.x + 3.0, c.y + 6.0)], s);
 }
 
-/// Crisp geometric symbol painted inside each of the 5 home squares (`idx` 0..5).
 pub fn paint_home_icon(p: &egui::Painter, c: egui::Pos2, u: f32, idx: usize) {
     let fg = INK_ON_COLOR;
     let s = Stroke::new(HAIR.max(u * 0.12), fg);
@@ -942,7 +862,6 @@ pub fn paint_home_icon(p: &egui::Painter, c: egui::Pos2, u: f32, idx: usize) {
     }
 }
 
-/// sRGB relative luminance (WCAG 2).
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn relative_luminance(c: Color32) -> f32 {
     fn lin(v: u8) -> f32 {
@@ -989,8 +908,6 @@ mod contrast_tests {
             assert_aa(&format!("{tag} muted_strong on surface_hover"), t.muted_strong, t.surface_hover);
             assert_aa(&format!("{tag} muted_strong on field"), t.muted_strong, t.field);
         }
-        // Sampled plates from the UX tester: counts sit near a rounded card
-        // corner or on a slightly mixed group caption.
         let dark = theme(true);
         assert_aa("dark count on mixed card #404A4D", dark.muted_strong, Color32::from_rgb(0x40, 0x4A, 0x4D));
         let light = theme(false);
@@ -1004,7 +921,6 @@ mod contrast_tests {
         for (name, c) in [("sun", SUN), ("sand", SAND), ("seafoam", SEAFOAM), ("sea", SEA), ("coral", CORAL)] {
             assert_aa(&format!("ink on {name}"), INK_ON_COLOR, c);
         }
-        // Aliases still point at the same swatches.
         assert_eq!(YELLOW, SUN);
         assert_eq!(ORANGE, SAND);
         assert_eq!(LIME, SEAFOAM);
@@ -1039,7 +955,6 @@ mod contrast_tests {
     fn broken_font_files_are_ignored() {
         assert!(!usable_font(b"not a font", 0));
         assert!(load_font(std::path::Path::new("/nonexistent/SFNS.ttf"), 0).is_none());
-        // Whatever the platform offers, installing never panics.
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         install_fonts_with(&ctx, None);
@@ -1067,7 +982,6 @@ mod contrast_tests {
             let (w, h, rgb) = sea_srgb(dark);
             assert!(w > 0 && h > 0 && rgb.len() == w * h * 3, "dark={dark}");
             let img = egui::ColorImage::from_rgb([w, h], &rgb);
-            // from_rgb must keep the JPEG's 8-bit sRGB bytes (no extra gamma, no premultiply).
             for (i, px) in img.pixels.iter().enumerate().step_by((w * h / 64).max(1)) {
                 let o = i * 3;
                 assert_eq!([px.r(), px.g(), px.b()], [rgb[o], rgb[o + 1], rgb[o + 2]], "px {i} dark={dark}");

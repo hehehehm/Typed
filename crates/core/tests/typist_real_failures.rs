@@ -1,7 +1,3 @@
-//! Deterministic typist regressions: every case in
-//! `tests/data/typist_real_failures.txt` must pass at Normal (fix_typos on).
-//!
-//! Run: `cargo test -p layout_keeper_core --test typist_real_failures -- --nocapture`
 use layout_keeper_core::{typo, Config, Engine, Key};
 
 const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/typist_real_failures.txt");

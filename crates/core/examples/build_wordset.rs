@@ -1,6 +1,3 @@
-//! Build a full-form FST set: `build_wordset <words.txt> <out.fst>`.
-//! Input: one word per line (any order); words are normalised (lowercase, ё → е),
-//! anything that is not purely `a-z` / `а-я` is skipped. See `data/README.md`.
 use layout_keeper_core::dict::{key_bytes, Dictionary};
 fn main() {
     let mut args = std::env::args().skip(1);

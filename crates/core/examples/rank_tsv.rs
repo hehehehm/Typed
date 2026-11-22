@@ -1,4 +1,3 @@
-//! stdin: `typed\t...` lines; stdout: line + `\tsrc_rank\tsrc_full\tdst_rank\tdst_full`.
 use layout_keeper_core::{dict, layout};
 use std::io::BufRead;
 fn main() {

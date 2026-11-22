@@ -1,14 +1,3 @@
-//! Embedded word lists (vendored, offline) and letter-bigram statistics.
-//!
-//! Source: top 40 000 words of each language from hermitdave/FrequencyWords
-//! (OpenSubtitles 2018 frequency lists, CC-BY-SA-4.0), filtered to pure
-//! lowercase letters, `ё` folded to `е`, plus small curated extras
-//! (`*_extra.txt`: chat slang, abbreviations, tech terms, rare/old words). See `data/README.md`.
-//! Urban Dictionary content is deliberately NOT bundled.
-//!
-//! Since 0.3.64 each language also has a full-form FST set (`*_known.fst`, ~3.2 M RU /
-//! 0.8 M EN forms from OpenCorpora, Hunspell, SCOWL, Wiktionary, wordfreq). It is only for
-//! "is this a real word" ([`Dictionary::is_word`]); ranks and fix targets stay with the lists.
 
 use crate::layout::Lang;
 use fst::Streamer;
@@ -16,10 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
-/// Process-wide switch for the full-form sets (on by default; audits compare both).
 static FULL_FORMS: AtomicBool = AtomicBool::new(true);
 
-/// Turn the full-form "known words" sets on or off (before/after audits).
 pub fn set_full_forms_enabled(on: bool) {
     FULL_FORMS.store(on, Ordering::Relaxed);
 }
@@ -28,50 +15,30 @@ static EN_WORDS: &str = include_str!("../data/en.txt");
 static RU_WORDS: &str = include_str!("../data/ru.txt");
 static EN_EXTRA: &str = include_str!("../data/en_extra.txt");
 static RU_EXTRA: &str = include_str!("../data/ru_extra.txt");
-/// Full-form "known words" sets (every case, number, gender, tense…), see `data/README.md`.
-/// FST sets over [`key_bytes`]; used only to answer "is this a real word", never to
-/// offer a correction target. Memory-mapped from the binary, no start-up cost.
 static EN_KNOWN: &[u8] = include_bytes!("../data/en_known.fst");
 static RU_KNOWN: &[u8] = include_bytes!("../data/ru_known.fst");
-/// Brand / product / company / service names (Wikidata CC0 + curated), since 0.3.65.
-/// Known-only like the full-form sets: never offered as a correction.
-/// Russian forms that are only proper names (OpenCorpora Name / Surn / Patr / Geox / Orgn /
-/// Trad, built by `tools/wordsets/oc_names.py`), since 0.3.74: never the target of a
-/// spelling-error fix (`азриэлю` is not "fixed" into the name form `азриелю`).
 static RU_NAMES: &[u8] = include_bytes!("../data/ru_names.fst");
 static EN_BRANDS: &str = include_str!("../data/en_brands.txt");
 static EN_TECH: &str = include_str!("../data/en_tech.txt");
 static RU_CLIPPED: &str = include_str!("../data/ru_clipped.txt");
 static RU_BRANDS: &str = include_str!("../data/ru_brands.txt");
 
-/// Rank given to curated extras that are not in the frequency list: frequent enough to
-/// pass the short-word check in the engine (so `дщд` → `lol` works).
 pub const EXTRA_RANK: u32 = 2_000;
 
-/// Only the first this-many frequency-list words feed the bigram statistics, so growing
-/// the list does not dilute the "unusual bigram" heuristic.
 pub const BIGRAM_SOURCE_WORDS: usize = 20_000;
 
-/// See [`Dictionary::unseen_bigrams`].
 pub const MIN_BIGRAM_WORDS: u32 = 10;
 
-/// Word list for one language with frequency ranks (0 = most frequent).
 pub struct Dictionary {
     lang: Lang,
     ranks: HashMap<String, u32>,
     bigrams: HashSet<(char, char)>,
-    /// All words sorted, for prefix lookups.
     sorted: Vec<String>,
-    /// Full-form set without ranks (see [`Dictionary::is_word`]).
     known: Option<fst::Set<&'static [u8]>>,
-    /// Brand and product names (see [`Dictionary::with_brands`]).
     brands: HashSet<String>,
-    /// Proper-name-only forms (see [`Dictionary::is_name_form`]).
     names: Option<fst::Set<&'static [u8]>>,
 }
 
-/// One byte per letter for the full-form sets: `a`–`z` as ASCII, `а`–`я` as
-/// 0xE0–0xFF (the cp1251 positions), `ё` folded into `е`. `None` for anything else.
 pub fn key_bytes(word: &str) -> Option<Vec<u8>> {
     word.chars()
         .map(|c| match c {
@@ -83,7 +50,6 @@ pub fn key_bytes(word: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// Inverse of [`key_bytes`]: reconstruct a normalised word from FST key bytes.
 pub fn from_key_bytes(bytes: &[u8]) -> Option<String> {
     let mut s = String::with_capacity(bytes.len());
     for &b in bytes {
@@ -104,8 +70,6 @@ impl Dictionary {
         Self::with_extras(lang, list, "")
     }
 
-    /// Frequency list plus curated extras (`#` comment lines ignored). Extras get rank
-    /// `min(list rank, EXTRA_RANK)` so short ones pass the engine's short-word check.
     pub fn with_extras(lang: Lang, list: &str, extras: &str) -> Self {
         let mut ranks = HashMap::new();
         let mut counts: HashMap<(char, char), u32> = HashMap::new();
@@ -131,35 +95,27 @@ impl Dictionary {
                 }
             }
         }
-        // Bigrams appearing in fewer than MIN_BIGRAM_WORDS vocabulary words are treated as
-        // "unusual" for the language (compounds and loanwords produce rare noise pairs).
         let bigrams = counts.into_iter().filter(|&(_, n)| n >= MIN_BIGRAM_WORDS).map(|(k, _)| k).collect();
         let mut sorted: Vec<String> = ranks.keys().cloned().collect();
         sorted.sort_unstable();
         Dictionary { lang, ranks, bigrams, sorted, known: None, brands: HashSet::new(), names: None }
     }
 
-    /// Attach a full-form set built by `examples/build_wordset.rs`.
     pub fn with_known_set(mut self, fst_bytes: &'static [u8]) -> Self {
         self.known = fst::Set::new(fst_bytes).ok();
         self
     }
 
-    /// Attach a proper-name-only form set (FST like [`Dictionary::with_known_set`]).
     pub fn with_name_set(mut self, fst_bytes: &'static [u8]) -> Self {
         self.names = fst::Set::new(fst_bytes).ok();
         self
     }
 
-    /// A form that is only a proper name (a first name, surname, patronymic, place or
-    /// organisation in OpenCorpora): never offered as a spelling-error fix.
     pub fn is_name_form(&self, word: &str) -> bool {
         let Some(set) = &self.names else { return false };
         key_bytes(&Self::normalize(word)).is_some_and(|k| set.contains(k))
     }
 
-    /// Attach a brand-name list (`#` comment lines ignored). Brands count as full forms:
-    /// real words that are never changed and never offered as fixes.
     pub fn with_brands(mut self, list: &str) -> Self {
         self.brands = list
             .lines()
@@ -170,8 +126,6 @@ impl Dictionary {
         self
     }
 
-    /// Extra known tokens (tech identifiers) that behave like brands: they are
-    /// real words, but never typo-fix targets.
     pub fn with_more_known(mut self, list: &str) -> Self {
         self.brands.extend(
             list
@@ -183,23 +137,18 @@ impl Dictionary {
         self
     }
 
-    /// Number of brand names attached.
     pub fn brands_len(&self) -> usize {
         self.brands.len()
     }
 
-    /// A brand / product name from the bundled list.
     pub fn is_brand(&self, word: &str) -> bool {
         !self.brands.is_empty() && FULL_FORMS.load(Ordering::Relaxed) && self.brands.contains(&Self::normalize(word))
     }
 
-    /// Number of words in the full-form set (0 without one).
     pub fn known_len(&self) -> usize {
         self.known.as_ref().map_or(0, |s| s.len())
     }
 
-    /// In the full-form set only (normalised or not). Rare forms live here: they are
-    /// real words, but have no frequency rank and are never correction targets.
     pub fn in_full_forms(&self, word: &str) -> bool {
         if self.is_brand(word) {
             return true;
@@ -211,8 +160,6 @@ impl Dictionary {
         key_bytes(&Self::normalize(word)).is_some_and(|k| set.contains(k))
     }
 
-    /// A real word of this language: ranked list, curated extras or full-form set.
-    /// Use for "do not touch this word" checks; use [`Dictionary::rank`] to pick fixes.
     pub fn is_word(&self, word: &str) -> bool {
         self.contains(word) || self.in_full_forms(word)
     }
@@ -227,21 +174,17 @@ impl Dictionary {
         self.ranks.is_empty()
     }
 
-    /// Normalised lookup key: lowercase, `ё` → `е`.
     pub fn normalize(word: &str) -> String {
         word.chars().flat_map(char::to_lowercase).map(|c| if c == 'ё' { 'е' } else { c }).collect()
     }
 
-    /// Frequency rank of the word, if known.
     pub fn rank(&self, word: &str) -> Option<u32> {
         self.ranks.get(&Self::normalize(word)).copied()
     }
-    /// All words with their ranks (normalised form).
     pub fn iter(&self) -> impl Iterator<Item = (&str, u32)> {
         self.ranks.iter().map(|(w, &r)| (w.as_str(), r))
     }
 
-    /// Visit every form in the full-form FST (normalised letters, `ё` folded to `е`).
     pub fn visit_full_forms(&self, mut f: impl FnMut(&str)) {
         let Some(set) = &self.known else { return };
         let mut stream = set.stream();
@@ -252,18 +195,15 @@ impl Dictionary {
         }
     }
 
-    /// Rank of an already normalised word (no case folding, no allocation).
     pub fn rank_exact(&self, word: &str) -> Option<u32> {
         self.ranks.get(word).copied()
     }
 
-    /// Some word starts with `prefix` (normalised).
     pub fn has_prefix(&self, prefix: &str) -> bool {
         let i = self.sorted.partition_point(|w| w.as_str() < prefix);
         self.sorted.get(i).is_some_and(|w| w.starts_with(prefix))
     }
 
-    /// Ranked words starting with `prefix` (normalised), from the sorted list.
     pub fn starting_with<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = (&'a str, u32)> + 'a {
         let i = self.sorted.partition_point(|w| w.as_str() < prefix);
         self.sorted[i..]
@@ -272,10 +212,6 @@ impl Dictionary {
             .filter_map(move |w| self.ranks.get(w).map(|&r| (w.as_str(), r)))
     }
 
-    /// Words of the full-form set within `max` edits (Levenshtein plus swaps of two
-    /// neighbour letters) of `word` (normalised letters), starting with one of `first`
-    /// letters. A walk of the fst that stops as soon as a branch exceeds `max`, so it
-    /// visits only a tiny part of the 3 M forms. At most `limit` results.
     pub fn full_forms_near(&self, word: &str, max: usize, first: &[char], limit: usize) -> Vec<String> {
         let Some(set) = &self.known else { return Vec::new() };
         if !FULL_FORMS.load(Ordering::Relaxed) {
@@ -302,14 +238,12 @@ impl Dictionary {
         self.rank(word).is_some()
     }
 
-    /// Number of letter bigrams in `word` that are unusual in this language's vocabulary.
     pub fn unseen_bigrams(&self, word: &str) -> usize {
         let chars: Vec<char> = Self::normalize(word).chars().collect();
         chars.windows(2).filter(|p| !self.bigrams.contains(&(p[0], p[1]))).count()
     }
 }
 
-/// Embedded full-form FST bytes for `lang` (for audits building their own dictionaries).
 pub fn full_forms_fst(lang: Lang) -> &'static [u8] {
     match lang {
         Lang::En => EN_KNOWN,
@@ -317,7 +251,6 @@ pub fn full_forms_fst(lang: Lang) -> &'static [u8] {
     }
 }
 
-/// Embedded brand list for `lang` (for audits building their own dictionaries).
 pub fn brands_list(lang: Lang) -> &'static str {
     match lang {
         Lang::En => EN_BRANDS,
@@ -325,7 +258,6 @@ pub fn brands_list(lang: Lang) -> &'static str {
     }
 }
 
-/// Ranked list plus extras only, without the full-form set (audits and tests).
 pub fn ranked_only(lang: Lang) -> Dictionary {
     match lang {
         Lang::En => Dictionary::with_extras(Lang::En, EN_WORDS, EN_EXTRA),
@@ -333,7 +265,6 @@ pub fn ranked_only(lang: Lang) -> Dictionary {
     }
 }
 
-/// Lazily built, process-wide dictionary for `lang`.
 pub fn get(lang: Lang) -> &'static Dictionary {
     static EN: OnceLock<Dictionary> = OnceLock::new();
     static RU: OnceLock<Dictionary> = OnceLock::new();
@@ -390,7 +321,6 @@ mod tests {
         }
         assert!(get(Lang::En).brands_len() > 10_000);
         assert!(get(Lang::Ru).brands_len() > 3_000);
-        // Short tokens are left out: they collide with mistyped words.
         assert!(!get(Lang::En).is_brand("kia") && !get(Lang::En).is_brand("bmw"));
         assert!(!get(Lang::En).is_brand("# brand"));
     }
@@ -403,15 +333,12 @@ mod tests {
     }
 }
 
-/// Inverse of [`key_bytes`].
 pub fn key_to_word(k: &[u8]) -> String {
     k.iter()
         .map(|&b| if b >= 0xE0 { char::from_u32(b as u32 - 0xE0 + 'а' as u32).unwrap_or('?') } else { b as char })
         .collect()
 }
 
-/// One step of [`Dictionary::full_forms_near`]: extend the path with byte `b`, compute the
-/// next edit-distance row (optimal string alignment), recurse while it can still match.
 #[allow(clippy::too_many_arguments)]
 fn near_walk(
     fst: &fst::raw::Fst<&'static [u8]>,
@@ -430,7 +357,7 @@ fn near_walk(
         return;
     }
     let n = key.len();
-    let i = path.len() + 1; // length of the candidate prefix incl. b
+    let i = path.len() + 1;
     let mut row = vec![0usize; n + 1];
     row[0] = i;
     let mut row_min = row[0];

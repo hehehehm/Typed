@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dump wordfreq 'large' lists as `word<TAB>zipf` (wf_ru.txt, wf_en.txt); merge.py filters them."""
+
 import re, wordfreq
 for lang, ok in [('ru', r'^[а-яё]+$'), ('en', r'^[a-z]+$')]:
     with open(f'wf_{lang}.txt', 'w') as out:

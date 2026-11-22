@@ -1,5 +1,4 @@
-﻿# Compatible with Windows PowerShell 5.1 and PowerShell 7.
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 try {
@@ -12,7 +11,6 @@ try {
         throw 'Не найден cargo. Установите Rust: https://rustup.rs/ и откройте новое окно PowerShell.'
     }
 
-    # Read only [workspace.package], not a dependency version.
     $toml = Get-Content -LiteralPath $manifest -Raw
     $section = [regex]::Match($toml, '(?ms)^\[workspace\.package\]\s*\r?\n(?<body>.*?)(?=^\[|\z)')
     $versionMatch = [regex]::Match($section.Groups['body'].Value, '(?m)^version\s*=\s*"([^"]+)"')

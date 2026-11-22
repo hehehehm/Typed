@@ -1,6 +1,3 @@
-//! `cargo run --release --example ctx_unknown_dump -- ru|en [normal|aggressive]`: every rare
-//! word (rank 20 000+ or unranked, 3+ letters) of the first 3000 held-out sentences treated
-//! as unknown, with its sentence context; prints `word<TAB>prev<TAB>fix` for each change.
 use layout_keeper_core::{dict, dict::Dictionary, layout, layout::Lang, ngram, typo};
 fn main() {
     let a: Vec<String> = std::env::args().collect();
@@ -29,7 +26,6 @@ fn main() {
                 continue;
             }
             total += 1;
-            // Previous word joined by a space or comma (or none).
             let prev = (k > 0 && chars[ws[k - 1].1..ws[k].0].iter().all(|c| c.is_whitespace() || *c == ',')).then(|| chars[ws[k - 1].0..ws[k - 1].1].iter().collect::<String>());
             let ctx = match &prev { Some(p) => ngram::Context::of(&[p.as_str()]), None => ngram::Context::of(&[ngram::START]) };
             if let Some(f) = typo::suggest_as_unknown_ctx(d, &w, lang, level, &ctx) {

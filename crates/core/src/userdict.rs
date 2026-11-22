@@ -1,15 +1,8 @@
-//! User-defined words and abbreviations (`custom_words` in the config).
-//!
-//! They are kept outside the process-wide built-in dictionaries so the daemon can refresh
-//! them on every config reload. In the engine they take priority over built-in words:
-//! if the converted form is a user word, the token is converted even when the typed form
-//! is a known word (add `exe` → typing `учу` gives `exe`).
 
 use crate::dict::Dictionary;
 use crate::layout::{self, Lang};
 use std::collections::HashSet;
 
-/// Why a custom word was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WordError {
     Empty,
@@ -19,7 +12,6 @@ pub enum WordError {
 }
 
 impl WordError {
-    /// Short Russian status message for the GUI.
     pub fn message_ru(self) -> &'static str {
         match self {
             WordError::Empty => "Пустое слово",
@@ -30,7 +22,6 @@ impl WordError {
     }
 }
 
-/// Validate a custom word and return its language (Latin → EN, Cyrillic → RU).
 pub fn classify(word: &str) -> Result<Lang, WordError> {
     let w = word.trim();
     if w.is_empty() {
@@ -39,7 +30,6 @@ pub fn classify(word: &str) -> Result<Lang, WordError> {
     if w.chars().any(char::is_whitespace) {
         return Err(WordError::Phrase);
     }
-    // Digits and signs are fine (mp3, c++, ci/cd); the language comes from the letters.
     if !w.chars().any(|c| c.is_alphabetic()) {
         return Err(WordError::NotLetters);
     }
@@ -49,7 +39,6 @@ pub fn classify(word: &str) -> Result<Lang, WordError> {
     layout::detect_script(w).ok_or(WordError::MixedScript)
 }
 
-/// Normalised per-language set of user words.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UserWords {
     en: HashSet<String>,
@@ -57,7 +46,6 @@ pub struct UserWords {
 }
 
 impl UserWords {
-    /// Build from config entries; invalid entries are skipped silently.
     pub fn from_words<S: AsRef<str>>(words: &[S]) -> Self {
         let mut u = UserWords::default();
         for w in words {
@@ -88,7 +76,6 @@ impl UserWords {
     }
 }
 
-/// Case-insensitive duplicate check used by the GUI.
 pub fn contains_word(list: &[String], word: &str) -> bool {
     let n = Dictionary::normalize(word.trim());
     list.iter().any(|w| Dictionary::normalize(w.trim()) == n)

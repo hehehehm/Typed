@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""OpenCorpora word forms that are only proper names (every parse tagged Name, Surn,
-Patr, Geox, Orgn or Trad) via the pymorphy3 Russian dictionary -> oc_names.txt.
-Since 0.3.74: such forms are never targets of a spelling-error fix (see data/README.md)."""
+
 import pymorphy3, re
 NAME = {'Name', 'Surn', 'Patr', 'Geox', 'Orgn', 'Trad'}
 m = pymorphy3.MorphAnalyzer()

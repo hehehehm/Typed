@@ -1,19 +1,3 @@
-//! Engine-level evaluation of layout and typo correction (run with
-//! `cargo test --release -p layout_keeper_core --test correction_eval -- --ignored --nocapture`).
-//!
-//! Recall cases (through `Engine::decide`, `fix_typos` on, default options):
-//! * `typo k` — a frequent word (len 2..12) with k = 1, 2, 3 realistic slips (neighbour
-//!   key, dropped letter, extra neighbour key, doubled letter, swapped neighbours; never in
-//!   the first letter). Slips that make a real word are skipped (undetectable).
-//! * `layout` — the same word typed in the other layout; `layout+typo` — plus one slip.
-//!
-//! False-positive cases:
-//! * `unknown` — real forms outside the ranked lists treated as unknown words (a proxy for
-//!   names / slang the dictionaries miss): `typo::suggest_as_unknown` and
-//!   `typo::layout_typo_as_unknown` (wrong-layout + typo reading). Any change counts.
-//! * `curated` — names, brands, code tokens, URLs, mixed case, abbreviations, slang through
-//!   the engine. Any change counts.
-//! * `known` — correctly spelled frequent words through the engine (must be 0).
 use layout_keeper_core::{dict, dict::Dictionary, engine::Decision, layout, layout::Lang, typo, Engine, EngineOptions};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -42,7 +26,6 @@ impl Rng {
     }
 }
 
-/// One realistic slip, never at position 0.
 fn slip(v: &mut Vec<char>, lang: Lang, rng: &mut Rng) -> bool {
     let n = v.len();
     if n < 2 { return false; }
@@ -101,7 +84,6 @@ fn out_text(e: &Engine, token: &str) -> Option<String> {
     r
 }
 
-/// Frequent words of each length, evenly spread over the ranks.
 fn pool(lang: Lang, len: usize, n: usize) -> Vec<String> {
     let d = dict::get(lang);
     let limit = if len <= 3 { 3_000 } else { 20_000 };
@@ -110,7 +92,6 @@ fn pool(lang: Lang, len: usize, n: usize) -> Vec<String> {
         .filter(|(w, r)| *r < limit && w.chars().count() == len && w.chars().all(char::is_alphabetic) && layout::detect_script(w) == Some(lang))
         .map(|(w, r)| (w.to_string(), r))
         .collect();
-    // Rank, then the word: extras share one rank, and the map order must not decide.
     v.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     if v.len() <= n { return v.into_iter().map(|x| x.0).collect(); }
     (0..n).map(|i| v[i * v.len() / n].0.clone()).collect()
@@ -165,7 +146,6 @@ fn correction_eval() {
                     let typed = if cap { capitalise(&typed) } else { typed };
                     let typed = if is_layout {
                         let t = layout::convert(&typed, lang);
-                        // The other-layout reading is a real word there: undetectable.
                         if dict::get(lang.other()).is_word(&t) { continue; }
                         if kind == "layout+typo" && d.is_word(&Dictionary::normalize(&layout::convert(&t, lang.other()))) { continue; }
                         t
@@ -174,7 +154,6 @@ fn correction_eval() {
                     expect(&format!("{kind}|{w}"));
                     let got = out_text(&e, &typed);
                     times.push((t0.elapsed().as_secs_f64() * 1000.0, typed.clone()));
-                    // Wrong layout + slip, converted but the slip left: half done.
                     let half = is_layout && got.as_deref().is_some_and(|g| Dictionary::normalize(g) != w && Dictionary::normalize(g) == Dictionary::normalize(&layout::convert(&typed, lang.other())));
                     let cell = table.entry((kind, len)).or_default();
                     let tot = totals.entry(kind).or_default();
@@ -205,7 +184,6 @@ fn correction_eval() {
         report.push('\n');
     }
 
-    // False positives: real forms outside the ranked lists treated as unknown.
     report += "## False positives: unknown-word proxy (changed %)\n\n| set | 2-3 | 4 | 5-6 | 7-8 | 9-12 | all |\n|---|---|---|---|---|---|---|\n";
     let bucket = |n: usize| match n { 0..=3 => 0, 4 => 1, 5..=6 => 2, 7..=8 => 3, _ => 4 };
     for lang in [Lang::Ru, Lang::En] {
@@ -235,7 +213,6 @@ fn correction_eval() {
             wrong_ex.insert(format!("FP unknown {lang:?} {name}"), ex);
         }
     }
-    // Curated tokens through the engine.
     let mut changed = vec![];
     let curated = curated();
     for t in &curated {
@@ -243,7 +220,6 @@ fn correction_eval() {
         if let Some(g) = out_text(&e, t) { changed.push(format!("{t}→{g}")); }
     }
     let _ = writeln!(report, "\n## Curated FP set (names, brands, code, URLs, slang): changed {}/{} ({:.1}%)\n\n{:?}\n", changed.len(), curated.len(), 100.0 * changed.len() as f64 / curated.len() as f64, changed);
-    // Known words through the engine.
     let mut known_changed = vec![];
     let mut n_known = 0;
     for lang in [Lang::Ru, Lang::En] {
@@ -268,7 +244,6 @@ fn correction_eval() {
     if let Ok(p) = std::env::var("EVAL_OUT") { std::fs::write(p, &report).unwrap(); }
 }
 
-/// Every 97th full-form word that is not in the ranked list (letters only, 3..12).
 fn full_only(lang: Lang, ranked: &Dictionary) -> Vec<String> {
     use fst::{IntoStreamer, Streamer};
     let set = fst::Set::new(dict::full_forms_fst(lang)).unwrap();
@@ -319,8 +294,6 @@ Tallinn Riga Vilnius Kyiv Lviv Minsk Almaty Tashkent Bishkek Tbilisi Yerevan Bak
     s.split_whitespace().map(str::to_string).collect()
 }
 
-/// One spelling error (not a keyboard slip), never at the first letter: a doubled letter
-/// typed once, a single consonant doubled, or (Russian) a confused unstressed vowel.
 fn spelling_error(w: &str, lang: Lang, rng: &mut Rng) -> Option<String> {
     let v: Vec<char> = w.chars().collect();
     let n = v.len();
@@ -353,14 +326,11 @@ fn spelling_error(w: &str, lang: Lang, rng: &mut Rng) -> Option<String> {
     if opts.is_empty() {
         return None;
     }
-    // Prefer the dropped double letter (the classic error) when there is one.
     let doubles: Vec<&Vec<char>> = opts.iter().filter(|u| u.len() + 1 == n).collect();
     let pick = if !doubles.is_empty() && rng.next(2) == 0 { doubles[rng.next(doubles.len())].clone() } else { opts[rng.next(opts.len())].clone() };
     Some(pick.into_iter().collect())
 }
 
-/// Spelling-error recall (since 0.3.74): frequent words and rare real forms (outside the
-/// ranked lists) with one or two spelling errors, through the engine.
 #[test]
 #[ignore]
 fn spelling_eval() {

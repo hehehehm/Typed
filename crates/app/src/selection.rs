@@ -1,26 +1,15 @@
 #![cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
-//! "Convert selection": the convert hotkey with no known last word flips whatever is
-//! selected in the focused app, or else the word left of the caret.
-//!
-//! Runs on its own thread: the copy / paste keystrokes we inject must pass through our
-//! own keyboard hook, which would stall if we waited on the hook thread.
-//! Only the clipboard is used; nothing leaves the machine. The previous clipboard text is
-//! put back afterwards (non-text clipboard contents are not preserved).
 
 use layout_keeper_core::layout;
 use layout_keeper_core::Lang;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// Keystrokes the platform injects into the focused app.
 pub trait Keys: Send + 'static {
-    /// True while the user still holds Ctrl / Shift / Alt / Cmd of the hotkey.
     fn modifiers_held(&self) -> bool;
     fn copy(&self);
     fn paste(&self);
-    /// Extend the selection one word to the left (Ctrl+Shift+Left / Option+Shift+Left).
     fn select_word_left(&self);
-    /// Called with the new layout after a successful paste.
     fn done(&self, target: Lang);
 }
 
@@ -52,7 +41,6 @@ fn wait_modifiers_released(keys: &impl Keys) -> bool {
     true
 }
 
-/// Copy and wait for the clipboard to fill (it was cleared first).
 fn copy_text(cb: &mut arboard::Clipboard, keys: &impl Keys) -> Option<String> {
     let _ = cb.clear();
     keys.copy();
@@ -68,7 +56,6 @@ fn copy_text(cb: &mut arboard::Clipboard, keys: &impl Keys) -> Option<String> {
     None
 }
 
-/// Editors such as VS Code copy the whole line when nothing is selected.
 fn looks_like_line_copy(s: &str) -> bool {
     s.ends_with('\n') && s.matches('\n').count() == 1
 }
@@ -102,7 +89,6 @@ fn run(keys: &impl Keys) -> Result<(), String> {
     cb.set_text(out).map_err(|e| { restore(&mut cb); e.to_string() })?;
     std::thread::sleep(Duration::from_millis(30));
     keys.paste();
-    // Give the app time to read the clipboard before we put the old text back.
     std::thread::sleep(Duration::from_millis(300));
     restore(&mut cb);
     keys.done(target);

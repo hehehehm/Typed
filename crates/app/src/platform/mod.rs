@@ -1,5 +1,3 @@
-//! OS adapters. Each exposes `run(controller)` (blocking event loop) and
-//! `probe() -> (Option<app id>, Option<Lang>)` for `layout-keeper status`.
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -66,7 +64,6 @@ mod unsupported {
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub use unsupported::{probe, run, type_text};
 
-/// Flag file next to config.json: an already-running GUI consumes it and opens the vault tab.
 fn vault_request_path() -> std::path::PathBuf {
     layout_keeper_core::Config::default_path().with_file_name("open-vault")
 }
@@ -95,7 +92,6 @@ fn show_gui_request_path() -> std::path::PathBuf {
     layout_keeper_core::Config::default_path().with_file_name("show-gui")
 }
 
-/// Ask an already-running settings window to come out of the tray.
 #[allow(dead_code)]
 pub fn request_show_gui() {
     let p = show_gui_request_path();
@@ -130,13 +126,11 @@ pub fn acquire_gui_lock() -> Result<Option<std::fs::File>, String> {
     daemon_lock::acquire_at(&path)
 }
 
-/// Start `layout-keeper gui` from the same executable the daemon was launched from.
 #[allow(dead_code)]
 pub fn spawn_settings_gui() {
     spawn_settings_gui_inner(false);
 }
 
-/// Start settings already showing the vault tab (summon hotkey).
 #[allow(dead_code)]
 pub fn spawn_settings_gui_vault() {
     spawn_settings_gui_inner(true);
@@ -164,8 +158,6 @@ fn spawn_settings_gui_inner(vault: bool) {
     }
 }
 
-/// Spawn exactly the no-argument daemon used by target/release, never the GUI.
-/// Shared by Linux and Windows; macOS starts the tap inside Typed.app instead.
 #[cfg(not(target_os = "macos"))]
 fn spawn_daemon() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -176,10 +168,9 @@ fn spawn_daemon() -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        cmd.creation_flags(0x0800_0000);
     }
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    // Reap it if it ever exits while the settings window is still open.
     std::thread::spawn(move || { let _ = child.wait(); });
     Ok(())
 }
@@ -190,8 +181,6 @@ mod daemon_lock {
     use std::os::fd::AsRawFd;
     use std::path::Path;
 
-    // Advisory lock is released by the OS on exit/crash. Keep the file itself;
-    // unlinking it could let two processes lock different inodes.
     pub fn acquire_at(path: &Path) -> Result<Option<File>, String> {
         let file = OpenOptions::new().read(true).write(true).create(true)
             .truncate(false).open(path).map_err(|e| e.to_string())?;
@@ -235,9 +224,6 @@ pub fn ensure_daemon_running() -> Result<(), String> {
     Ok(())
 }
 
-/// On macOS the keyboard tap must live in the Typed.app process. A separate
-/// `layout-keeper-bin` helper does not inherit Accessibility and shows up in
-/// the Dock as a bouncing generic icon.
 #[cfg(target_os = "macos")]
 pub fn ensure_daemon_running() -> Result<(), String> {
     stop_daemon();

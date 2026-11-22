@@ -5,5 +5,4 @@ Set files = CreateObject("Scripting.FileSystemObject")
 appDir = files.GetParentFolderName(WScript.ScriptFullName)
 executable = files.BuildPath(appDir, "typed.exe")
 shell.CurrentDirectory = appDir
-' Window style 0 hides the console; False keeps startup non-blocking.
 shell.Run Chr(34) & executable & Chr(34), 0, False

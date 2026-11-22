@@ -1,5 +1,3 @@
-//! Minimal C ABI so a future Android IME (Kotlin/JNI) or iOS keyboard extension (Swift)
-//! can reuse the decision logic. Pure functions only — no state, no I/O.
 
 use crate::engine::{Decision, Engine, EngineOptions};
 use crate::layout::{self, Lang};
@@ -16,11 +14,6 @@ fn into_c(s: String) -> *mut c_char {
     CString::new(s).map(CString::into_raw).unwrap_or(std::ptr::null_mut())
 }
 
-/// Re-interpret `text` as typed in the other layout (script auto-detected, EN if unclear).
-/// Returns a newly allocated string; free it with [`lk_free`].
-///
-/// # Safety
-/// `text` must be NULL or a valid NUL-terminated UTF-8 string.
 #[no_mangle]
 pub unsafe extern "C" fn lk_convert_layout(text: *const c_char) -> *mut c_char {
     let Some(t) = to_str(text) else { return std::ptr::null_mut() };
@@ -28,10 +21,6 @@ pub unsafe extern "C" fn lk_convert_layout(text: *const c_char) -> *mut c_char {
     into_c(layout::convert(t, from))
 }
 
-/// Autocorrect decision for a finished word: corrected text, or NULL to keep it.
-///
-/// # Safety
-/// `word` must be NULL or a valid NUL-terminated UTF-8 string.
 #[no_mangle]
 pub unsafe extern "C" fn lk_autocorrect_word(word: *const c_char) -> *mut c_char {
     let Some(w) = to_str(word) else { return std::ptr::null_mut() };
@@ -41,10 +30,6 @@ pub unsafe extern "C" fn lk_autocorrect_word(word: *const c_char) -> *mut c_char
     }
 }
 
-/// Free a string returned by this library.
-///
-/// # Safety
-/// `s` must be NULL or a pointer previously returned by this library.
 #[no_mangle]
 pub unsafe extern "C" fn lk_free(s: *mut c_char) {
     if !s.is_null() {

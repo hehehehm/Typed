@@ -1,5 +1,3 @@
-//! Prints context fit and veto for `prev2 prev word fix` (debug helper):
-//! `ctx_fit ru "о том" надт надо`.
 use layout_keeper_core::{layout::Lang, ngram};
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();

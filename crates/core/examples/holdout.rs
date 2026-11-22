@@ -1,5 +1,3 @@
-//! Hold-out audit: dictionary from the top N words, then correct words ranked below N
-//! (absent from that dictionary) must not be "fixed".
 use layout_keeper_core::{dict::Dictionary, layout::Lang, typo};
 fn main() {
     let n: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(20000);
@@ -8,7 +6,6 @@ fn main() {
         let all = std::fs::read_to_string(path).unwrap();
         let words: Vec<&str> = all.lines().map(str::trim).filter(|w| !w.is_empty()).collect();
         let top = words[..n].join("\n");
-        // `full` as a third argument: also attach the full-form set (as shipped).
         let with_full = std::env::args().nth(3).as_deref() == Some("full");
         let mut d = Dictionary::from_list(lang, &top);
         if with_full {

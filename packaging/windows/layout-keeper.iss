@@ -31,11 +31,6 @@ CloseApplicationsFilter=typed.exe,layout-keeper.exe
 RestartApplications=no
 SetupIconFile=..\..\assets\typed.ico
 UninstallDisplayIcon={app}\typed.exe
-; User data is NEVER deleted, neither by this setup nor by its uninstaller, nor by the
-; previous-version removal in [Code]: config.json, vault.bin and typed.chk live in
-; %APPDATA%\typed (legacy: %APPDATA%\layout-keeper), i.e. AppData\Roaming, while the
-; program goes to AppData\Local. There is deliberately no [UninstallDelete] section and
-; [InstallDelete] below only lists old program files and shortcuts.
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -56,13 +51,11 @@ Name: "desktopicon"; Description: "{cm:DesktopIcon}"; Flags: unchecked
 Name: "startup"; Description: "{cm:Startup}"
 
 [Files]
-; Since 0.3.68 the program is typed.exe (was layout-keeper.exe, removed in [InstallDelete]).
 Source: "{#BuildDir}\typed.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "start-hidden.vbs"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-; Settings ensure the background daemon is running; never start a second visible daemon.
 Name: "{group}\Typed"; Filename: "{app}\typed.exe"; Parameters: "gui"; WorkingDir: "{app}"
 Name: "{userdesktop}\Typed"; Filename: "{app}\typed.exe"; Parameters: "gui"; WorkingDir: "{app}"; Tasks: desktopicon
 Name: "{userstartup}\Typed"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\start-hidden.vbs"""; WorkingDir: "{app}"; Tasks: startup
@@ -71,12 +64,9 @@ Name: "{userstartup}\Typed"; Filename: "{sys}\wscript.exe"; Parameters: """{app}
 Filename: "{app}\typed.exe"; Parameters: "gui"; WorkingDir: "{app}"; Description: "{cm:OpenSettings}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Safety net after files are removed. The real stop happens in [Code] below,
-; before deletion: the daemon has no window, so only /F actually ends it.
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM typed.exe /T"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "CloseTypedDaemon"
 
 [Code]
-// «Запуск администратором» (0.3.68+) registers the Task Scheduler task "Typed".
 function TypedTaskExists: Boolean;
 var
   ResultCode: Integer;
@@ -88,18 +78,13 @@ procedure StopTypedProcesses;
 var
   ResultCode: Integer;
 begin
-  // A daemon started by the task runs as administrator: taskkill from this
-  // non-elevated setup cannot end it, the task itself can.
   if TypedTaskExists then
     Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "Typed"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM typed.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  // Before 0.3.68 the program was layout-keeper.exe.
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM layout-keeper.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(400);
 end;
 
-// Uninstall: delete the task. It was created with administrator rights, so if a plain
-// delete fails, ask Windows once (UAC) to delete it as administrator.
 procedure DeleteTypedTask;
 var
   ResultCode: Integer;
@@ -111,12 +96,9 @@ begin
     ShellExec('runas', ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "Typed" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
-// Uninstall entry written by every Typed / LayoutKeeper installer.
-// Must match AppId in [Setup] (the doubled brace there is just Inno escaping).
 const
   TypedUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{08E53160-AB9C-43F4-9025-DB168DEDB7D9}_is1';
 
-// Path of the uninstaller from an UninstallString like "C:\...\unins000.exe" /SILENT.
 function ExtractExePath(const Cmd: String): String;
 var
   S: String;
@@ -139,10 +121,6 @@ begin
   Result := S;
 end;
 
-// Silently run the previous version's uninstaller registered under RootKey, wherever
-// it was installed (also the old %LOCALAPPDATA%\LayoutKeeper folder), and wait for it.
-// The old uninstallers only remove program files and shortcuts: user data in
-// %APPDATA%\typed and %APPDATA%\layout-keeper is never touched.
 procedure UninstallFrom(const RootKey: Integer);
 var
   Cmd, Exe: String;
@@ -157,8 +135,6 @@ begin
   Log('Removing the previous Typed version: ' + Exe);
   if Exec(Exe, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
-    // The uninstaller finishes in a copy of itself in %TEMP%: wait (up to ~30 s) until
-    // its registry entry and its exe are gone, so it cannot delete the new files.
     I := 0;
     while (RegKeyExists(RootKey, TypedUninstallKey) or FileExists(Exe)) and (I < 120) do
     begin
@@ -181,17 +157,12 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  // Stop the running daemon first (it has no window, so only taskkill /F ends it),
-  // then remove the previous version before any new file is copied.
   StopTypedProcesses;
   RemovePreviousVersion;
   StopTypedProcesses;
   Result := '';
 end;
 
-// After an update from a version before 0.3.68 the "Typed" task (Запуск администратором)
-// still starts the removed layout-keeper.exe: re-register it for typed.exe. That needs
-// administrator rights, so Windows asks once, and only in that case.
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -211,15 +182,12 @@ begin
   if CurUninstallStep = usUninstall then
   begin
     StopTypedProcesses;
-    // A new setup removes the previous version silently: keep the task then, so an
-    // update does not switch «Запуск администратором» off (same exe path).
     if not UninstallSilent then
       DeleteTypedTask;
   end;
 end;
 
 [InstallDelete]
-; 0.3.68: the program was renamed layout-keeper.exe → typed.exe.
 Type: files; Name: "{app}\layout-keeper.exe"
 Type: files; Name: "{localappdata}\LayoutKeeper\layout-keeper.exe"
 Type: files; Name: "{localappdata}\LayoutKeeper\LICENSE"

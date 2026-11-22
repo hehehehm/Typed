@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Merge full-form word sources into ru_all.txt / en_all.txt (see crates/core/data/README.md).
 
-Run in a directory with the extracted sources (made by fetch.sh); prints per-source counts.
-Only lowercase a-z / а-я words survive (ё folded into е); hyphenated forms are dropped
-because the typing engine never sees them as one letters-only word.
-"""
 import os, re
 RU = re.compile(r'^[а-я]+$'); EN = re.compile(r'^[a-z]+$')
 def norm(w): return w.strip().lower().replace('ё', 'е')
@@ -34,18 +29,14 @@ def edits1(w, ab):
         for c in ab: yield w[:i] + c + w[i+1:]
     for i in range(len(w) + 1):
         for c in ab: yield w[:i] + c + w[i:]
-# Frequency lists (wordfreq) and Wiktionary also carry common misspellings (`becuase`,
-# `recieve`, `teh`, `seperate`): a word found only there is dropped when it is one edit
-# (letter added, dropped, replaced, or two neighbours swapped) away from a word of the
-# curated morphological dictionaries.
 FREQ_ONLY = {f'wordfreq large, zipf>={ZMIN}', 'Wiktionary forms (kaikki.org)'}
 
 class Near:
-    """One-edit neighbourhood test against a fixed word set."""
+    
     def __init__(self, words, ab):
         self.c, self.ab = set(words), ab
         self.pos = None
-        if len(self.c) < 1_500_000:  # positional deletes index (fast, memory-hungry)
+        if len(self.c) < 1_500_000:
             self.pos = set()
             for w in self.c:
                 for i in range(len(w)): self.pos.add((i, w[:i] + w[i+1:]))
@@ -55,9 +46,9 @@ class Near:
             return any(e in c for e in edits1(x, self.ab))
         for i in range(len(x)):
             d = x[:i] + x[i+1:]
-            if d in c or (i, d) in self.pos: return True       # dropped / replaced letter
-            if i + 1 < len(x) and x[:i] + x[i+1] + x[i] + x[i+2:] in c: return True  # swap
-        return any((i, x) in self.pos for i in range(len(x) + 1))  # extra letter
+            if d in c or (i, d) in self.pos: return True
+            if i + 1 < len(x) and x[:i] + x[i+1] + x[i] + x[i+2:] in c: return True
+        return any((i, x) in self.pos for i in range(len(x) + 1))
 for lang, srcs in SRC.items():
     ok = RU if lang == 'ru' else EN
     total = set()
@@ -66,7 +57,7 @@ for lang, srcs in SRC.items():
         if words is None: print(f'{lang}: {name}: MISSING'); continue
         s = {w for w in words if ok.match(w) and len(w) >= 2}
         if name in FREQ_ONLY:
-            if near is None:  # built once, from the curated sources before the first filtered one
+            if near is None:
                 near = Near(total, RU_AB if lang == 'ru' else EN_AB)
             before = len(s - total)
             s = {w for w in s if w in total or not near.near(w)}

@@ -1,10 +1,4 @@
-//! App-id helpers: short names and filters for the remembered-apps list.
-//!
-//! System shell/hosts and one-shot installers are hidden from the main list
-//! (they stay reachable behind a click-to-reveal toggle). Installers are also
-//! skipped by auto-learn so they do not accumulate.
 
-/// File name of an app id / path: `C:\a\b\powershell.exe` → `powershell.exe`, `firefox` → `firefox`.
 pub fn basename(id: &str) -> &str {
     let t = id.trim_end_matches(['\\', '/']);
     match t.rfind(['\\', '/']) {
@@ -14,7 +8,6 @@ pub fn basename(id: &str) -> &str {
     }
 }
 
-/// True when the id looks like a full path (so a "show path" button makes sense).
 pub fn has_path(id: &str) -> bool {
     basename(id) != id
 }
@@ -35,8 +28,6 @@ fn is_windows_system_path(id: &str) -> bool {
         || p.contains("\\windows\\servicing\\")
 }
 
-/// One-shot installers, unpackers and files that live in a temp folder.
-/// These should not stay in the remembered-apps list.
 pub fn is_ephemeral_app(id: &str) -> bool {
     if is_temp_path(id) {
         return true;
@@ -58,8 +49,6 @@ pub fn is_ephemeral_app(id: &str) -> bool {
         || stem.contains("vc_redist")
 }
 
-/// Shell / OS UI entries are tucked away in the remembered-apps list only.
-/// Match names, never directories: user terminals in System32 stay visible.
 pub fn is_system_app(id: &str) -> bool {
     if is_windows_system_path(id) {
         return true;
@@ -164,7 +153,6 @@ pub fn is_system_app(id: &str) -> bool {
     )
 }
 
-/// Hidden from the main remembered-apps list (still visible behind a toggle).
 pub fn is_hidden_app(id: &str) -> bool {
     is_system_app(id) || is_ephemeral_app(id)
 }

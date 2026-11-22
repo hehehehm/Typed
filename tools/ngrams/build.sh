@@ -1,6 +1,4 @@
 #!/bin/sh
-# Rebuilds crates/core/data/{ru,en}_ngrams.fst and the held-out samples of the evaluation.
-# Usage: tools/ngrams/build.sh <dir with the files of fetch.sh>   (from the repository root)
 set -e
 src=$1
 python3 tools/ngrams/count.py ru "$src/ru" "$src/rus_sentences.tsv.bz2" "$src/ruwiki-latest-pages-articles1.xml-p1p224167.bz2" 25000000

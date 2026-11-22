@@ -1,17 +1,3 @@
-//! Windows adapter.
-//!
-//! * focused app: GUI focus / visible Z-order fallback → `GetWindowThreadProcessId` → `QueryFullProcessImageNameW`
-//!   (app id = lowercase full exe path);
-//! * layout: `GetKeyboardLayout(thread of foreground window)` (LANGID primary 0x09 = en, 0x19 = ru),
-//!   switching with `WM_INPUTLANGCHANGEREQUEST` to an installed HKL from `GetKeyboardLayoutList`;
-//! * keys: `WH_KEYBOARD_LL` low-level hook (+ `WH_MOUSE_LL` to forget the word on clicks);
-//! * replacement: `SendInput` — N × VK_BACK, then the corrected text as `KEYEVENTF_UNICODE`.
-//!
-//! The hook callback only updates the in-memory buffer and queues commands; the actual
-//! `SendInput` runs from the message loop after the hook has returned, and every callback
-//! is wrapped in `catch_unwind` so a bug can never take the user's input down with it.
-//! No administrator rights are needed, but elevated windows cannot be hooked/injected from a
-//! non-elevated process (UIPI) — run LayoutKeeper elevated only if you really need that.
 
 use crate::controller::{Command, Controller, Input};
 use layout_keeper_core::{layout, HotkeyCode, Key, Lang, Replacement};
@@ -50,10 +36,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CLOSE, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
 
-/// Marker in `dwExtraInfo` of our own synthetic input.
-const LK_MAGIC: usize = 0x4C4B_5045; // "LKPE"
+const LK_MAGIC: usize = 0x4C4B_5045;
 const WM_LK_FLUSH: u32 = WM_APP + 1;
-/// Selection converted on the worker thread; wParam 1 = EN, 2 = RU.
 const WM_LK_SEL_DONE: u32 = WM_APP + 2;
 
 struct WinKeys {
@@ -65,10 +49,10 @@ impl crate::selection::Keys for WinKeys {
         [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(key_down)
     }
     fn copy(&self) {
-        send_chord(&[VK_LCONTROL], 0x43); // C
+        send_chord(&[VK_LCONTROL], 0x43);
     }
     fn paste(&self) {
-        send_chord(&[VK_LCONTROL], 0x56); // V
+        send_chord(&[VK_LCONTROL], 0x56);
     }
     fn select_word_left(&self) {
         send_chord_ext(&[VK_LCONTROL, VK_LSHIFT], VK_LEFT, true);
@@ -83,7 +67,6 @@ fn send_chord(mods: &[u16], vk: u16) {
     send_chord_ext(mods, vk, false)
 }
 
-/// Press `mods`, tap `vk`, release. Tagged with LK_MAGIC so our hook ignores it.
 fn send_chord_ext(mods: &[u16], vk: u16, extended: bool) {
     const KEYEVENTF_EXTENDEDKEY: u32 = 0x0001;
     let ext = if extended { KEYEVENTF_EXTENDEDKEY } else { 0 };
@@ -102,11 +85,7 @@ struct State {
     thread_id: u32,
     lshift: bool,
     rshift: bool,
-    /// Swallow the matching KEYUP after we ate Enter/Tab on KEYDOWN.
     swallow_up: Option<u32>,
-    /// Layout used to interpret the word in progress. Frozen on the first letter
-    /// from the live foreground HKL so a layout switch after the previous word
-    /// cannot mix scripts mid-word (capitalized second word would not convert).
     word_lang: Option<Lang>,
 }
 
@@ -134,7 +113,6 @@ fn lang_of_hkl(h: HKL) -> Option<Lang> {
     }
 }
 
-/// Only use ordinary visible app windows when recovering from a stale/minimized foreground.
 unsafe fn usable_window(hwnd: HWND, walking: bool) -> bool {
     if hwnd.is_null() || IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
         return false;
@@ -153,8 +131,6 @@ unsafe fn usable_window(hwnd: HWND, walking: bool) -> bool {
         "ForegroundStaging" | "NotifyIconOverflowWindow")
 }
 
-/// Windows can temporarily keep a minimized app as foreground. Resolve the input
-/// focus first, then fall back to the first usable app in top-level Z-order.
 fn target_window() -> HWND {
     unsafe {
         let mut info: GUITHREADINFO = std::mem::zeroed();
@@ -177,7 +153,6 @@ fn target_window() -> HWND {
         } else {
             GetWindow(hwnd, GW_HWNDFIRST)
         };
-        // Windows may destroy/reorder windows during traversal; bound the walk.
         for _ in 0..4096 {
             if next.is_null() {
                 break;
@@ -242,14 +217,11 @@ fn switch_layout_for(hwnd: HWND, lang: Lang) -> bool {
         if their == 0 {
             return false;
         }
-        // Read BEFORE any attach / activate: those poison later reads.
         if lang_of_hkl(GetKeyboardLayout(their)) == Some(lang) {
-            // Still nudge with a message (apps may overwrite after activation), no hotkey.
             post_request(hwnd, hkl);
             return true;
         }
         let ours = GetCurrentThreadId();
-        // A. Messages to the root, the focused child and all visible windows of the PID.
         send_request(hwnd, hkl);
         let attached = their != ours && AttachThreadInput(ours, their, 1) != 0;
         if attached {
@@ -257,7 +229,6 @@ fn switch_layout_for(hwnd: HWND, lang: Lang) -> bool {
             if !focus.is_null() && focus != hwnd && GetAncestor(focus, GA_ROOT) == hwnd {
                 send_request(focus, hkl);
             }
-            // B. Extra attempt; result is NOT trusted.
             if ActivateKeyboardLayout(hkl, KLF_SETFORPROCESS).is_null() {
                 ActivateKeyboardLayout(hkl, 0);
             }
@@ -266,7 +237,6 @@ fn switch_layout_for(hwnd: HWND, lang: Lang) -> bool {
         let mut ctx = EnumCtx { pid, hkl, skip: hwnd };
         EnumWindows(Some(enum_proc), &mut ctx as *mut EnumCtx as LPARAM);
         let _ = INPUTLANGCHANGE_SYSCHARSET;
-        // C. Fallback: the user's own Windows language hotkey, at most one toggle per call.
         if lang_of_hkl(GetKeyboardLayout(their)) == Some(lang) {
             return true;
         }
@@ -308,9 +278,6 @@ unsafe extern "system" fn enum_proc(w: HWND, lp: LPARAM) -> BOOL {
     1
 }
 
-/// Only press the hotkey when the real foreground is our target app (or is
-/// iconic / shell chrome while our resolved window is the target), so we never
-/// flip explorer's layout when the taskbar swallowed the click.
 unsafe fn foreground_is_target(hwnd: HWND, pid: u32) -> bool {
     let fg = GetForegroundWindow();
     if fg.is_null() {
@@ -353,7 +320,6 @@ fn reg_string(name: &str) -> Option<String> {
     }
 }
 
-/// HKCU\Keyboard Layout\Toggle: "1" Alt+Shift, "2" Ctrl+Shift, "4" grave; "3"/missing = none.
 fn language_hotkey() -> Option<Combo> {
     let v = reg_string("Language Hotkey").or_else(|| reg_string("Hotkey"))?;
     match v.as_str() {
@@ -387,8 +353,6 @@ fn key_input(vk: u16, scan: u16, flags: u32) -> INPUT {
 fn replace(r: &Replacement) -> Result<(), String> {
     const MODS: [u16; 8] = [VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LWIN, VK_RWIN];
     let held = MODS.map(key_down);
-    // GetAsyncKeyState changes on synthetic KEYUP too. Preserve physical Shift in
-    // the hook bookkeeping, which ignores LK_MAGIC but still sees real releases.
     STATE.with(|s| {
         if let Some(st) = s.borrow_mut().as_mut() {
             st.lshift = held[0];
@@ -407,7 +371,6 @@ fn replace(r: &Replacement) -> Result<(), String> {
         match c {
             '\n' | '\r' | '\t' => {
                 let vk = if c == '\t' { VK_TAB } else { VK_RETURN };
-                // Preserve Shift so Shift+Enter stays a newline in chats (not a send).
                 let shift_was = held[0] || held[1];
                 if shift_was {
                     inputs.push(key_input(VK_LSHIFT, 0, 0));
@@ -429,9 +392,7 @@ fn replace(r: &Replacement) -> Result<(), String> {
     }
     let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
     let complete = sent as usize == inputs.len();
-    // Never flip the layout if Windows blocked the replacement (e.g. UIPI).
     if complete { switch_layout(r.target); }
-    // Restore only Shift so we do not re-press Ctrl+Shift (Windows language hotkey).
     let physical = STATE.with(|s| s.borrow().as_ref().map(|st| [st.lshift, st.rshift]).unwrap_or([held[0], held[1]]));
     let restore: Vec<INPUT> = [VK_LSHIFT, VK_RSHIFT].into_iter().zip([held[0], held[1]]).zip(physical)
         .filter_map(|((vk, was_down), still_down)| {
@@ -441,13 +402,11 @@ fn replace(r: &Replacement) -> Result<(), String> {
         unsafe { SendInput(restore.len() as u32, restore.as_ptr(), std::mem::size_of::<INPUT>() as i32); }
     }
     if !complete {
-        // SendInput is blocked as a whole by UIPI (elevated target); a partial send is very unlikely.
         return Err(format!("SendInput sent {sent}/{} events (elevated target window?)", inputs.len()));
     }
     Ok(())
 }
 
-/// US-layout character for a virtual key with the given shift state.
 fn us_char(vk: u32, shift: bool) -> Option<char> {
     let pick = |a: char, b: char| Some(if shift { b } else { a });
     match vk {
@@ -506,8 +465,6 @@ fn combo_mods() -> (bool, bool, bool, bool) {
 fn match_hotkey(st: &State, vk: u32) -> Option<Input> {
     let code = vk_to_hotkey_code(vk)?;
     let (c, a, s, m) = combo_mods();
-    // Undo first: a custom combo must not fall into a relaxed conversion match.
-    // Bare Backspace is not a hotkey; it is handled as Key::Backspace below.
     if st.ctl.matches_undo_combo(code, c, a, s, m) {
         Some(Input::Undo)
     } else if st.ctl.hotkey().matches_relaxed_shift(code, c, a, s, m) {
@@ -527,7 +484,6 @@ fn enqueue(st: &mut State, input: Input) {
     }
 }
 
-/// Returns true to swallow the key (our hotkeys, and Enter/Tab that triggered a replacement).
 fn handle_key(st: &mut State, vk: u32, down: bool) -> bool {
     if !down {
         if st.swallow_up == Some(vk) {
@@ -541,7 +497,6 @@ fn handle_key(st: &mut State, vk: u32, down: bool) -> bool {
     if vk == VK_LSHIFT as u32 || vk == VK_RSHIFT as u32 || vk == VK_SHIFT as u32 {
         let other = if vk == VK_LSHIFT as u32 { st.rshift } else { st.lshift };
         if vk == VK_LSHIFT as u32 { st.lshift = down } else { st.rshift = down }
-        // Shift+Shift: the second Shift goes down while the first is still held.
         if down && other {
             if st.ctl.hotkey().is_both_shifts() {
                 enqueue(st, Input::Hotkey);
@@ -578,7 +533,6 @@ fn handle_key(st: &mut State, vk: u32, down: bool) -> bool {
                 };
                 Some(Input::Key { key: Key::Char(c), modifiers: mods })
             }
-            // Arrows, Home/End, Escape, Delete, F-keys…: caret may have moved.
             None => {
                 st.word_lang = None;
                 Some(Input::Key { key: Key::Reset, modifiers: mods })
@@ -590,10 +544,6 @@ fn handle_key(st: &mut State, vk: u32, down: bool) -> bool {
     if st.ctl.current_word_len() == 0 {
         st.word_lang = None;
     }
-    // Swallow Enter/Tab when they triggered a replacement so the chat does not
-    // send the uncorrected word. replace() injects the key after the new text.
-    // Backspace right after an autocorrection undoes it: the restore deletes the
-    // boundary itself, so this Backspace must not reach the app.
     if matches!(vk, 0x0D | 0x09 | 0x08) && st.pending.iter().any(|c| matches!(c, Command::Replace(_))) {
         st.swallow_up = Some(vk);
         return true;
@@ -660,8 +610,6 @@ fn flush() {
         if st.pending.is_empty() {
             return vec![];
         }
-        // Do not wait for Ctrl/Alt/Win: replace() releases them before SendInput,
-        // and SummonGui should raise the window even while the chord is still down.
         std::mem::take(&mut st.pending)
     });
     for c in cmds {
@@ -703,7 +651,6 @@ fn flush() {
 }
 
 fn tick() {
-    // Keep the observation and language request on exactly the same HWND.
     let hwnd = target_window();
     let (app, lang) = foreground_for(hwnd);
     let cmds = STATE.with(|s| {
@@ -723,7 +670,6 @@ fn tick() {
 }
 
 unsafe extern "system" fn win_event_proc(_h: HWINEVENTHOOK, _e: u32, _w: HWND, _o: i32, _c: i32, _t: u32, _ms: u32) {
-    // Out-of-context hooks are delivered on our message loop thread; avoid re-entrancy.
     let busy = STATE.with(|s| s.try_borrow_mut().is_err());
     if !busy {
         tick();
@@ -734,7 +680,6 @@ fn daemon_mutex_name() -> Vec<u16> {
     "Local\\LayoutKeeper-daemon\0".encode_utf16().collect()
 }
 
-/// Own this handle until the event loop exits; even error paths release it.
 struct DaemonMutex(HANDLE);
 impl Drop for DaemonMutex {
     fn drop(&mut self) { unsafe { CloseHandle(self.0); } }
@@ -746,7 +691,6 @@ fn acquire_daemon_mutex() -> Result<Option<DaemonMutex>, String> {
         let handle = CreateMutexW(ptr::null(), 0, name.as_ptr());
         let error = GetLastError();
         if handle.is_null() && error == ERROR_ACCESS_DENIED {
-            // Created by a daemon running as administrator: it is already running.
             return Ok(None);
         }
         if handle.is_null() {
@@ -771,7 +715,6 @@ pub fn daemon_is_running() -> Result<bool, String> {
         }
         let error = GetLastError();
         if error == ERROR_FILE_NOT_FOUND { Ok(false) }
-        // Owned by a daemon running as administrator.
         else if error == ERROR_ACCESS_DENIED { Ok(true) }
         else { Err(format!("OpenMutexW(LayoutKeeper-daemon) failed: {error}")) }
     }
@@ -806,15 +749,10 @@ fn post_quit_to_process(pid: u32) {
     }
 }
 
-/// Stop the background `typed.exe` (or pre-0.3.68 `layout-keeper.exe`) daemon process, leaving this GUI alive.
-/// Ask it to unhook via WM_QUIT first; only force-kill if it ignores that.
 pub fn stop_daemon() {
     stop_daemon_except(&[]);
 }
 
-/// Like [`stop_daemon`], also sparing the processes in `keep`. A daemon running as
-/// administrator cannot be opened from a normal process: then the «Typed» task that
-/// started it is asked to end it.
 pub fn stop_daemon_except(keep: &[u32]) {
     let mut unreachable = false;
     unsafe {
@@ -865,7 +803,6 @@ fn gui_mutex_name() -> Vec<u16> {
     "Local\\LayoutKeeper-gui\0".encode_utf16().collect()
 }
 
-/// Held for the lifetime of the settings process so a second launch raises the existing window.
 pub struct GuiMutex(HANDLE);
 impl Drop for GuiMutex {
     fn drop(&mut self) { unsafe { CloseHandle(self.0); } }
@@ -877,7 +814,6 @@ pub fn acquire_gui_mutex() -> Result<Option<GuiMutex>, String> {
         let handle = CreateMutexW(ptr::null(), 0, name.as_ptr());
         let error = GetLastError();
         if handle.is_null() && error == ERROR_ACCESS_DENIED {
-            // A settings window running as administrator holds it.
             return Ok(None);
         }
         if handle.is_null() {
@@ -913,7 +849,6 @@ fn keep_daemon_responsive() {
             ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
             StateMask: 0,
         };
-        // Best effort: older Windows versions may not support this information class.
         SetProcessInformation(process, ProcessPowerThrottling,
             &state as *const _ as *const core::ffi::c_void,
             std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32);
@@ -921,11 +856,8 @@ fn keep_daemon_responsive() {
     }
 }
 
-/// Thread running the daemon's message loop (the tray's «Выход» posts WM_QUIT to it).
 static DAEMON_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Tray commands, on the tray thread of the daemon (since 0.3.69 the icon lives here, so
-/// the settings process can exit whenever its window is closed or minimized).
 fn on_tray_cmd(cmd: crate::tray::TrayCmd) {
     use crate::tray::TrayCmd;
     match cmd {
@@ -935,8 +867,6 @@ fn on_tray_cmd(cmd: crate::tray::TrayCmd) {
     }
 }
 
-/// «Выход»: close the settings window (its process locks the vault and exits), then stop
-/// this daemon. Anything still alive after the grace period is ended by `stop_daemon_except`.
 fn quit_everything() {
     let mut title: Vec<u16> = crate::brand::WINDOW_TITLE.encode_utf16().collect();
     title.push(0);
@@ -961,7 +891,6 @@ fn quit_everything() {
     }
 }
 
-/// Raise the settings window, or start a new settings process if none is open.
 fn show_settings(vault: bool) {
     if vault {
         crate::platform::request_open_vault();
@@ -976,7 +905,6 @@ fn show_settings(vault: bool) {
             force_foreground(hwnd);
             return;
         }
-        // We just got the click / hotkey, so we may hand the foreground to the new window.
         AllowSetForegroundWindow(ASFW_ANY);
     }
     if vault {
@@ -1061,9 +989,6 @@ pub fn probe() -> (Option<String>, Option<Lang>) {
     foreground()
 }
 
-/// Type `text` into the focused window (vault autofill from the GUI process).
-/// Uses `KEYEVENTF_UNICODE`, so it is independent of the active layout; `\t` is a real Tab.
-/// Events carry `LK_MAGIC`, so a running daemon's hook ignores them (no autocorrect, no buffering).
 pub fn type_text(text: &str) -> Result<(), String> {
     let mut inputs = Vec::with_capacity(text.len() * 2);
     for c in text.chars() {
@@ -1079,7 +1004,6 @@ pub fn type_text(text: &str) -> Result<(), String> {
         }
     }
     let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
-    // Overwrite the UTF-16 units we copied into the INPUT buffer.
     for i in inputs.iter_mut() {
         i.Anonymous.ki.wScan = 0;
     }
@@ -1088,7 +1012,6 @@ pub fn type_text(text: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 fn summon_gui() {
     show_settings(true);

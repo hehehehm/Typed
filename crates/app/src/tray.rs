@@ -1,10 +1,3 @@
-//! System tray / menu-bar icon.
-//!
-//! * Windows (since 0.3.69): the icon lives in the background daemon (`typed.exe` with no
-//!   arguments). Its commands open the settings window — a separate `typed.exe gui`
-//!   process that exits whenever it is closed or minimized — or quit both processes.
-//! * macOS: the key tap runs inside Typed.app, so the menu-bar icon stays in that process;
-//!   closing or minimizing hides the window and the icon brings it back.
 
 use eframe::egui;
 use std::sync::mpsc::Receiver;
@@ -91,7 +84,6 @@ impl Drop for TrayHandle {
 
 static REPAINT: Mutex<Option<egui::Context>> = Mutex::new(None);
 
-/// Settings-window tray (macOS menu bar; elsewhere there is none in the GUI process).
 #[allow(dead_code)]
 pub fn start(logo_index: u8) -> Option<TrayHandle> {
     #[cfg(target_os = "macos")]
@@ -105,7 +97,6 @@ pub fn start(logo_index: u8) -> Option<TrayHandle> {
     }
 }
 
-/// Windows daemon tray: `handler` runs on the tray thread for every menu / click command.
 #[cfg(windows)]
 pub fn start_daemon_tray(logo_index: u8, handler: fn(TrayCmd)) -> Option<TrayHandle> {
     win::start(logo_index, handler)
@@ -169,7 +160,6 @@ mod win {
     const SWP_SHOWWINDOW: u32 = 0x0040;
     const SW_HIDE: i32 = 0;
     const HWND_TOPMOST: HWND = -1isize as HWND;
-    /// The daemon re-reads the logo choice from config.json this often.
     const LOGO_TIMER: usize = 1;
     const LOGO_POLL_MS: u32 = 2000;
 
@@ -180,7 +170,6 @@ mod win {
         config_mtime: Option<std::time::SystemTime>,
     }
 
-    /// Logo chosen in the settings window (config.json), if the file changed since `seen`.
     fn config_logo(seen: &mut Option<std::time::SystemTime>) -> Option<u8> {
         let path = layout_keeper_core::Config::default_path();
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
@@ -192,7 +181,6 @@ mod win {
         Some(crate::logos::index(cfg.logo))
     }
 
-    /// Remove the icon and free the state; safe to call twice.
     fn cleanup(hwnd: HWND) {
         unsafe {
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
@@ -441,8 +429,6 @@ mod win {
             let _ = config_logo(&mut config_mtime);
             let state = Box::new(TrayState { handler, hicon, logo: logo_index, config_mtime });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
-            // A daemon running as administrator (the «Typed» task) must still receive
-            // Explorer's tray clicks and its restart broadcast (UIPI filters them otherwise).
             let taskbar_created = RegisterWindowMessageW(wide("TaskbarCreated").as_ptr());
             for m in [CALLBACK, taskbar_created, WM_CONTEXTMENU] {
                 ChangeWindowMessageFilterEx(hwnd, m, MSGFLT_ALLOW, std::ptr::null_mut());
@@ -493,9 +479,6 @@ mod win {
                 Ok(hwnd) => {
                     let _ = ready_tx.send(Ok(hwnd as isize));
                     message_loop();
-                    // A WM_QUIT posted to every thread (`stop_daemon` from another
-                    // process) ends the loop before WM_CLOSE: remove the icon anyway,
-                    // or a dead icon stays in the tray until the mouse passes over it.
                     cleanup(hwnd);
                     unsafe { DestroyWindow(hwnd) };
                 }

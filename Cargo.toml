@@ -9,7 +9,5 @@ rust-version = "1.80"
 license = "MIT"
 authors = ["B. Konti"]
 
-# eframe 0.29.1 with the hidden-window busy-loop fix (egui PR #7905 backport), see
-# third_party/eframe/src/native/run.rs ("Typed patch"). Offline, no other changes.
 [patch.crates-io]
 eframe = { path = "third_party/eframe" }

@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Run in an empty directory. Fetch English (and Russian) labels of brands, companies, software, games, websites,
-# products from Wikidata (CC0). Output: wd_<name>.tsv (label@lang, sitelinks). Then: python3 tools/brands/build.py <dir> <full-form dir> <repo>.
 set -u
-q() { # name class minsitelinks path
+q() {
   local name=$1 cls=$2 min=$3 path=${4:-"wdt:P31/wdt:P279?"}
   local query="SELECT ?l ?s WHERE { ?i $path wd:$cls ; wikibase:sitelinks ?s . FILTER(?s >= $min) ?i rdfs:label ?l . FILTER(lang(?l) = 'en' || lang(?l) = 'ru') }"
   for try in 1 2 3; do

@@ -1,24 +1,3 @@
-//! Automated UI/UX tester for the settings window.
-//!
-//! Drives `App::draw` headlessly with egui `RawInput` pointer and key events
-//! (egui_kittest is not available for 0.29 and is not pulled in). Shares the
-//! CPU rasterizer in `gui_shots`.
-//!
-//! * Always-on `cargo test`: scenario tests that assert config/state, plus
-//!   structural and contrast checks. Findings are reported, not failed, so
-//!   known visual issues do not break the suite.
-//! * `ux_visual_regression` (`--ignored`): PNG shots for a theme × style × size
-//!   × edge-data matrix, pixel-diff against a baseline, and a written report.
-//!
-//! Env (ignored run):
-//! * `TYPED_UI_UX_SHOTS` — actual PNGs (default `/tmp/typed-ui-ux-shots`)
-//! * `TYPED_UI_UX_BASELINE` — baseline dir (default `ui-ux-baseline/` at the
-//!   repo root; gitignored, do not commit large binaries)
-//! * `TYPED_UI_UX_UPDATE_BASELINE=1` — copy actuals into the baseline
-//! * `TYPED_UI_UX_DIFF` — dir for diff images and the report
-//! * `TYPED_UI_UX_DIFF_PCT` — fail threshold, percent of pixels (default 1.0)
-//! * `TYPED_UI_UX_FAIL_ON_DIFF=1` — make the ignored test fail when the
-//!   baseline exists and the diff is over the threshold
 
 use super::shots::{
     app_with, app_with_no_icon_preload, focus, inject_app_catalog, locked_vault_ui, merge_textures, rasterize, sample_cfg, write_png, INTER,
@@ -206,7 +185,6 @@ impl Harness {
         }
     }
 
-    /// Click `btn` painted on the same row as `row_needle`.
     fn click_on_row(&mut self, row_needle: &str, btn: &str) -> bool {
         let Some(row) = self.find_text(row_needle) else {
             return false;
@@ -220,7 +198,6 @@ impl Harness {
             if (t.rect.center().y - y).abs() > 14.0 {
                 continue;
             }
-            // Prefer the closest horizontally, skipping the row label itself.
             if t.rect.intersects(row.rect) && t.text == row.text {
                 continue;
             }
@@ -246,7 +223,6 @@ impl Harness {
         let Some(t) = self.find_text(title) else {
             return false;
         };
-        // Captions sit just under the card; the hit target is the square above.
         let above = Pos2::new(t.rect.center().x, (t.rect.top() - 8.0).max(0.0));
         let pos = self
             .clickables()
@@ -291,7 +267,6 @@ impl Harness {
         }
     }
 
-    /// Rightmost HIT-sized clickable on the add-program row (the plus square).
     fn click_plus(&mut self) -> bool {
         let Some(w) = find_plus(self) else { return false };
         if !w.enabled {
@@ -301,7 +276,6 @@ impl Harness {
         true
     }
 
-    /// Trash button on the row whose label contains `name`.
     fn click_delete_on_row(&mut self, name: &str) -> bool {
         let Some(row) = self.find_text(name) else {
             return false;
@@ -327,7 +301,6 @@ impl Harness {
             self.click(w.interact_rect.center());
             true
         } else {
-            // Wrapped chips: a small × sits just to the right of the name.
             let w = self
                 .clickables()
                 .into_iter()
@@ -352,7 +325,6 @@ impl Harness {
         }
     }
 
-    /// Logo tiles on the «Логотип» row, left-to-right (Beach … Porthole).
     fn logo_tiles(&self) -> Vec<WidgetRect> {
         let y = self
             .find_text("Логотип")
@@ -410,7 +382,6 @@ impl Harness {
             self.click(w.interact_rect.center());
             true
         } else {
-            // Fall back to a point on the same row, right-hand side.
             self.click(Pos2::new(
                 (t.rect.right() + 80.0).min(self.size.x - 24.0),
                 y,
@@ -495,7 +466,6 @@ fn text_style(ts: &epaint::TextShape) -> (Color32, f32) {
 #[derive(Clone, Debug)]
 struct Issue {
     kind: &'static str,
-    /// "must", "should", "nice" for usability; "note" for structural checks.
     severity: &'static str,
     screen: String,
     detail: String,
@@ -532,9 +502,7 @@ impl Issue {
 
 struct Findings {
     issues: Vec<Issue>,
-    /// Single-line text fields: (screen, height, rect). Compared across screens.
     field_heights: Vec<(String, f32, Rect)>,
-    /// Input-row cards (group around a field + action): (screen, height, top, rect).
     input_cards: Vec<(String, f32, f32, Rect)>,
 }
 
@@ -570,10 +538,6 @@ fn inspect_all(
     raster
 }
 
-/// Intended click targets (buttons, tiles, toggles, links). egui's default
-/// selectable labels also have `sense.click` (and usually `drag`, but
-/// `focusable` is false) so they can be highlighted; those are not buttons
-/// and must not trip the 24 px hit-target check.
 fn is_hit_target(w: &WidgetRect) -> bool {
     w.enabled
         && w.sense.click
@@ -604,15 +568,12 @@ fn inspect_struct(h: &Harness, screen: &str, findings: &mut Findings) {
         ));
     }
 
-    // Outside / clipped widgets. Use interact_rect (already clipped by parent Uis
-    // and scroll areas) so rows below the fold in a ScrollArea are not flagged.
     for w in &widgets {
         if !is_hit_target(w) {
             continue;
         }
         let r = w.interact_rect;
         let vis = r.intersect(win);
-        // Rows past or barely peeking through the bottom of a ScrollArea are expected.
         let scroll_sliver = vis.height() < 4.0 && r.max.y > win.max.y - 1.0;
         if !scroll_sliver && (r.max.x > win.max.x + OUT_TOL || r.min.x < win.min.x - OUT_TOL) {
             findings.push(Issue::new(
@@ -622,8 +583,6 @@ fn inspect_struct(h: &Harness, screen: &str, findings: &mut Findings) {
                 Some(r),
             ));
         }
-        // A control that starts well inside the window and is cut off vertically
-        // (not the last sliver of a scrolling list).
         if !scroll_sliver && r.min.y < win.max.y - st::ROW && r.max.y > win.max.y + OUT_TOL {
             findings.push(Issue::new(
                 "clip",
@@ -636,7 +595,6 @@ fn inspect_struct(h: &Harness, screen: &str, findings: &mut Findings) {
 
     for t in h.texts() {
         let r = t.rect;
-        // Text laid out below a ScrollArea's fold is clipped on purpose.
         if r.min.y >= win.max.y - OUT_TOL {
             continue;
         }
@@ -655,8 +613,6 @@ fn inspect_struct(h: &Harness, screen: &str, findings: &mut Findings) {
         let vis = r.intersect(t.clip).intersect(win);
         let lost_x = (r.intersect(win).width() - vis.width()).max(0.0);
         let lost_y = (r.intersect(win).height() - vis.height()).max(0.0);
-        // Horizontal clipping of visible text is a real issue; a row cut by the
-        // bottom of a scroll viewport is not.
         if lost_x > 1.5 {
             findings.push(Issue::new(
                 "clip",
@@ -685,8 +641,6 @@ fn inspect_struct(h: &Harness, screen: &str, findings: &mut Findings) {
     let clicks = h.clickables();
     for w in &clicks {
         let r = w.interact_rect;
-        // A row cut by a ScrollArea or a 2 px scrollbar track is not a designed
-        // 24 px target failure.
         if r.height() + 0.05 < MIN_HIT && w.rect.height() + 0.05 >= MIN_HIT {
             continue;
         }
@@ -708,7 +662,6 @@ fn inspect_struct(h: &Harness, screen: &str, findings: &mut Findings) {
         }
     }
 
-    // Overlapping interactive rects: ignore parent-contains-child.
     for (i, a) in clicks.iter().enumerate() {
         for b in clicks.iter().skip(i + 1) {
             let oa = a.interact_rect.intersect(b.interact_rect);
@@ -836,7 +789,6 @@ fn sample_background(
         return None;
     }
     let mut samples: Vec<[u8; 3]> = Vec::new();
-    // Inside the text box, keep pixels that are not the glyph colour.
     let step = ((x1 - x0).max(y1 - y0) / 12).max(1);
     for y in (y0..y1).step_by(step as usize) {
         for x in (x0..x1).step_by(step as usize) {
@@ -847,7 +799,6 @@ fn sample_background(
             }
         }
     }
-    // Ring just outside the glyphs, in case the box is almost all ink.
     if samples.len() < 4 {
         let pad = (2.0 * ppp).ceil() as i32;
         for (x, y) in ring(x0 - pad, y0 - pad, x1 + pad, y1 + pad, pad.max(1)) {
@@ -899,7 +850,6 @@ fn color_dist(a: [u8; 3], fg: Color32) -> u32 {
 }
 
 fn median_rgb(samples: &mut [[u8; 3]]) -> Color32 {
-    // Component-wise median, good enough for a plate / photo backdrop.
     let mut r: Vec<u8> = samples.iter().map(|s| s[0]).collect();
     let mut g: Vec<u8> = samples.iter().map(|s| s[1]).collect();
     let mut b: Vec<u8> = samples.iter().map(|s| s[2]).collect();
@@ -938,11 +888,9 @@ fn inspect_blank(screen: &str, findings: &mut Findings, w: usize, h: usize, buf:
 
 fn inspect_hover(h: &mut Harness, screen: &str, findings: &mut Findings) {
     let clicks = h.clickables();
-    // Cap the work on dense lists.
     let take = clicks.len().min(40);
     for w in clicks.into_iter().take(take) {
         let p = w.interact_rect.center();
-        // Skip if a later (front) clickable covers the centre.
         let covered = h.clickables().into_iter().any(|o| {
             o.id != w.id
                 && o.interact_rect.contains(p)
@@ -1076,7 +1024,6 @@ fn ux_programs_and_exceptions_counts_are_independent() {
     );
 }
 
-
 fn many_exc_cfg(n: usize) -> Config {
     let mut c = empty_cfg();
     c.add_exception(LONG_PATH);
@@ -1108,8 +1055,6 @@ fn find_back(h: &Harness) -> Option<WidgetRect> {
 }
 
 fn find_plus(h: &Harness) -> Option<WidgetRect> {
-    // The + square is 32×32, including when it is disabled (empty field).
-    // EN/RU cells on the same row are 32×28 and must not be mistaken for it.
     let header = st::HEADER;
     h.widgets()
         .into_iter()
@@ -1144,12 +1089,8 @@ fn inspect_usability(h: &mut Harness, screen: &str, findings: &mut Findings) {
     ux_title_plate_dot_inset(h, screen, findings);
     ux_collect_field_heights(h, screen, findings);
     ux_collect_input_cards(h, screen, findings);
-    // Tooltip-on-icon is checked in the expert review: egui tooltip timing is
-    // not reliable enough in the headless harness for a report-only flag.
 }
 
-/// Frost plates in the header (hover-only, ~32 px tall): the back chevron and
-/// the section-title plate must have a visible gap.
 fn ux_header_plate_gaps(h: &Harness, screen: &str, findings: &mut Findings) {
     if h.app.tab == Tab::Home || h.app.welcome_open {
         return;
@@ -1167,7 +1108,6 @@ fn ux_header_plate_gaps(h: &Harness, screen: &str, findings: &mut Findings) {
         .collect();
     plates.sort_by(|a, b| a.left().partial_cmp(&b.left()).unwrap_or(std::cmp::Ordering::Equal));
     plates.dedup_by(|a, b| (a.left() - b.left()).abs() < 2.0 && (a.width() - b.width()).abs() < 2.0);
-    // Back (leftmost) vs title: these used to touch at 512 px.
     if plates.len() >= 2 {
         let gap = plates[1].left() - plates[0].right();
         if gap < st::GAP - 0.5 {
@@ -1186,7 +1126,6 @@ fn ux_header_plate_gaps(h: &Harness, screen: &str, findings: &mut Findings) {
     }
 }
 
-/// Single-line text fields (password, add-word, add-program, …).
 fn ux_collect_field_heights(h: &Harness, screen: &str, findings: &mut Findings) {
     if h.app.welcome_open || h.app.tab == Tab::Home {
         return;
@@ -1199,7 +1138,6 @@ fn ux_collect_field_heights(h: &Harness, screen: &str, findings: &mut Findings) 
         if r.top() < st::HEADER || r.width() < 80.0 {
             continue;
         }
-        // Shared field visual is CTRL_H (28) inside a HIT (32) row.
         if r.height() < 24.0 || r.height() > 36.0 {
             continue;
         }
@@ -1257,8 +1195,6 @@ fn collect_paint(shape: &Shape, rects: &mut Vec<epaint::RectShape>, circles: &mu
     }
 }
 
-/// The colour dot inside the title plate must have at least as much inset on the
-/// left as the title/count has on the right.
 fn ux_title_plate_dot_inset(h: &Harness, screen: &str, findings: &mut Findings) {
     if h.app.tab == Tab::Home || h.app.welcome_open {
         return;
@@ -1305,7 +1241,6 @@ fn ux_title_plate_dot_inset(h: &Harness, screen: &str, findings: &mut Findings) 
     }
 }
 
-/// Group card around a single input row (dictionary add, vault password, …).
 fn ux_collect_input_cards(h: &Harness, screen: &str, findings: &mut Findings) {
     if h.app.welcome_open || h.app.tab == Tab::Home {
         return;
@@ -1385,8 +1320,6 @@ fn ux_input_cards_across(findings: &mut Findings) {
             ));
         }
     }
-    // Align tops only for input cards that sit directly under the header
-    // (dictionary, vault). Programs/Exceptions have a pane switcher first.
     let mut first: Vec<(String, f32, Rect)> = Vec::new();
     for (screen, _, top, rect) in rows {
         let expect = st::HEADER + st::INSET;
@@ -1470,7 +1403,6 @@ fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
     if let Some(plus) = find_plus(h) {
         let pr = plus.interact_rect;
         let y = pr.center().y;
-        // The add field is the wide widget on the same row, immediately left of +.
         let field = h
             .clickables()
             .into_iter()
@@ -1489,8 +1421,6 @@ fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
         if let Some(field) = field {
             let fr = field.interact_rect;
             let dy = (pr.center().y - fr.center().y).abs();
-            // On the Programs add row, EN/RU sits between the field and +;
-            // measure the gap to the nearest widget on the left.
             let nearest_left = h
                 .clickables()
                 .into_iter()
@@ -1521,8 +1451,6 @@ fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
         }
     }
 
-    // Destructive delete sitting next to the EN/RU control on a program row.
-    // A gap of at least INSET between the two is the intended spacing.
     if h.app.tab == Tab::Apps && h.app.apps_pane == AppsPane::Programs {
         for t in h.texts() {
             let name = t.text.trim();
@@ -1588,7 +1516,6 @@ fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
 }
 
 fn ux_primary_targets(h: &Harness, screen: &str, findings: &mut Findings) {
-    // Header nav dots (the five section marks) and any other primary control under 32 px.
     if !h.app.welcome_open && h.app.tab != Tab::Home {
         for w in h.clickables() {
             let r = w.interact_rect;
@@ -1658,7 +1585,6 @@ fn ux_label_clarity(h: &Harness, screen: &str, findings: &mut Findings) {
                 Some(t.rect),
             ));
         }
-        // Button labels must not be ellipsized (`Откр…`).
         if t.elided && t.font_size + 0.05 >= st::FONT_SM {
             let on_button = h.clickables().iter().any(|c| {
                 let r = c.interact_rect;
@@ -1732,7 +1658,6 @@ fn ux_alignment(h: &Harness, screen: &str, findings: &mut Findings) {
         return;
     }
     rows.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    // Compare left edges of labels that sit in the same visual column (within 40 px of the leftmost).
     let min_x = rows.iter().map(|r| r.0).fold(f32::MAX, f32::min);
     let col: Vec<f32> = rows.iter().map(|r| r.0).filter(|x| (*x - min_x).abs() < 40.0).collect();
     if col.len() < 3 {
@@ -1793,8 +1718,6 @@ fn ux_icon_tooltips(h: &mut Harness, screen: &str, findings: &mut Findings) {
             missing.push(w);
         }
     }
-    // If not a single tooltip appeared, the detector failed (egui tooltip
-    // timing) — do not flood the report with false positives.
     if shown == 0 {
         return;
     }
@@ -1818,12 +1741,10 @@ struct TaskDepth {
 fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
     let mut out = Vec::new();
 
-    // Add an exception: Home → Programs → Exceptions → type + Enter (field is focused).
     let mut h = Harness::new(app_with(empty_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
     let mut clicks = 0usize;
     assert!(h.click_home_square("Программы"));
     clicks += 1;
-    // section size after navigation; redraw at section size
     h.size = SEC;
     h.settle();
     if h.click_text("Исключения  ") || h.click_text("Исключения") {
@@ -1833,7 +1754,6 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
     h.press_key(Key::Enter, Modifiers::default());
     let mut ok = exc_in(&h.app.cfg, "hint.exe");
     if !ok {
-        // Fallback if focus did not land in the field.
         if h.find_text("программа или путь").is_some() && h.click_text("программа или путь") {
             clicks += 1;
         }
@@ -1850,7 +1770,6 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
             None,
         ));
     } else if h.app.status.is_empty() {
-        // presence of the chip is the feedback; ok
     }
     out.push(TaskDepth {
         name: "Add an exception",
@@ -1871,7 +1790,6 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
         ));
     }
 
-    // Change logo: Home → Settings → tile.
     let mut h = Harness::new(app_with(sample_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
     let mut clicks = 0usize;
     assert!(h.click_home_square("Настройки"));
@@ -1898,7 +1816,6 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
         ));
     }
 
-    // Change undo key: Home → Settings → keycap (starts capture) → F2.
     let mut h = Harness::new(app_with(sample_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
     let mut clicks = 0usize;
     assert!(h.click_home_square("Настройки"));
@@ -1936,7 +1853,6 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
         ));
     }
 
-    // Set layout for an existing app: Home → Programs → EN on a row.
     let mut h = Harness::new(app_with(sample_cfg(), Tab::Home, true), focus(), HOME, 1.0, false);
     let mut clicks = 0usize;
     assert!(h.click_home_square("Программы"));
@@ -1964,7 +1880,6 @@ fn measure_action_depths(findings: &mut Findings) -> Vec<TaskDepth> {
         ));
     }
 
-    // Empty add: the + is disabled while the field is empty.
     let mut h = default_sec(Tab::Apps, true, empty_cfg());
     let plus = find_plus(&h);
     if plus.as_ref().is_some_and(|w| w.enabled) {
@@ -2032,7 +1947,6 @@ fn write_issues_report(
             if items.is_empty() {
                 continue;
             }
-            // Group identical findings across matrix cells, and attach a highlight shot.
             let mut groups: Vec<(&Issue, Vec<&str>)> = Vec::new();
             for i in items {
                 if let Some(g) = groups.iter_mut().find(|(e, _)| e.kind == i.kind && e.detail == i.detail) {
@@ -2152,10 +2066,6 @@ fn annotate_and_save(
     write_png(path, w, h, &pix);
 }
 
-// ---------------------------------------------------------------------------
-// Scenario tests (always on)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn ux_add_program_set_lang_move_to_exceptions_dedupe_delete() {
     let mut h = default_sec(Tab::Apps, true, empty_cfg());
@@ -2166,7 +2076,6 @@ fn ux_add_program_set_lang_move_to_exceptions_dedupe_delete() {
     );
     assert!(h.click_text("программа или путь"), "click the add field");
     h.type_text("notepad.exe");
-    // Default mode is RU; switch the add-row to EN (the top-most "EN").
     assert!(h.click_text("EN"), "click EN on the add row");
     assert_eq!(h.app.app_mode, AppMode::En);
     assert!(h.click_plus(), "click plus to add");
@@ -2177,29 +2086,23 @@ fn ux_add_program_set_lang_move_to_exceptions_dedupe_delete() {
     );
     assert_eq!(lang_of(&h.app.cfg, "notepad.exe"), Some(Lang::En));
 
-    // Flip EN → RU on the row, then back.
     assert!(h.click_on_row("notepad.exe", "RU"), "set RU");
     assert_eq!(lang_of(&h.app.cfg, "notepad.exe"), Some(Lang::Ru));
     assert!(h.click_on_row("notepad.exe", "EN"), "set EN");
     assert_eq!(lang_of(&h.app.cfg, "notepad.exe"), Some(Lang::En));
 
-    // Move to exceptions (exception wins / drops the program entry).
     assert!(h.click_text("Исключения"), "switch to exceptions tab");
     assert_eq!(h.app.apps_pane, AppsPane::Exceptions);
     assert!(h.click_text("программа или путь") || h.find_text("notepad.exe").is_none());
-    // The add field on the exceptions pane uses the same hint.
     if h.find_text("программа или путь").is_some() {
         assert!(h.click_text("программа или путь"));
     }
     h.type_text("notepad.exe");
     assert!(h.click_plus() || h.click_text("Добавить") || true);
-    // plus on exceptions is add_line_plus — might be a plus or an "Добавить исключение" control.
     if !exc_in(&h.app.cfg, "notepad.exe") {
-        // Try Enter after focusing the field.
         h.press_key(Key::Enter, Modifiers::default());
     }
     if !exc_in(&h.app.cfg, "notepad.exe") {
-        // Last resort: the plus on this pane may be a text button.
         let _ = h.click_text("Добавить исключение");
     }
     assert!(
@@ -2213,7 +2116,6 @@ fn ux_add_program_set_lang_move_to_exceptions_dedupe_delete() {
         h.app.cfg.apps.keys().collect::<Vec<_>>()
     );
 
-    // Dedupe: adding the same exe again (different case / path) does not grow the list.
     let n = h.app.cfg.exception_apps.len();
     if h.find_text("программа или путь").is_some() {
         let _ = h.click_text("программа или путь");
@@ -2227,7 +2129,6 @@ fn ux_add_program_set_lang_move_to_exceptions_dedupe_delete() {
         "case-insensitive dedupe should keep one entry"
     );
 
-    // Delete.
     assert!(
         h.click_delete_on_row("notepad.exe") || h.click_delete_on_row("NOTEPAD"),
         "delete"
@@ -2289,7 +2190,6 @@ fn ux_app_suggest_arrows_tab_esc() {
     );
     assert_eq!(h.app.tab, Tab::Apps, "Tab must not leave the section");
 
-    // Re-open with a fresh query and close with Esc, staying on Programs.
     h.app.app_draft.clear();
     h.app.suggest_lock = None;
     h.app.app_draft_focus = true;
@@ -2416,7 +2316,6 @@ fn ux_exceptions_wrap_as_chips() {
     assert!(h.click_text("Исключения  ") || h.click_text("Исключения"));
     assert_eq!(h.app.apps_pane, AppsPane::Exceptions);
     assert!(h.find_text("программа или путь").is_some(), "add field stays on top");
-    // Names are shown as chips, not a vertical list: several distinct Y rows.
     let mut ys: Vec<i32> = h
         .texts()
         .into_iter()
@@ -2434,8 +2333,6 @@ fn ux_exceptions_wrap_as_chips() {
         h.texts().iter().map(|t| t.text.clone()).collect::<Vec<_>>()
     );
 
-    // Long names are truncated (the chip is narrower than the unclipped name would be)
-    // and still offer a tooltip via chip_with_tip.
     let long = h
         .texts()
         .into_iter()
@@ -2448,7 +2345,6 @@ fn ux_exceptions_wrap_as_chips() {
         );
     }
 
-    // Delete via the chip ×.
     let before = h.app.cfg.exception_apps.len();
     let sample = h
         .texts()
@@ -2463,7 +2359,6 @@ fn ux_exceptions_wrap_as_chips() {
         );
     }
 
-    // Empty pane: only the add field, no leftover list.
     let mut h = default_sec(Tab::Apps, true, empty_cfg());
     assert!(h.click_text("Исключения  ") || h.click_text("Исключения"));
     assert!(h.find_text("программа или путь").is_some());
@@ -2494,7 +2389,6 @@ fn ux_change_logo_updates_config() {
         LogoStyle::Artdeco,
         "config.logo should change"
     );
-    // The selected tile is still one of five; clicking it again is a no-op.
     let after = h.logo_tiles();
     assert_eq!(after.len(), 5);
 }
@@ -2508,7 +2402,6 @@ fn ux_toggle_undo_and_capture_key() {
         "toggle undo-on-backspace"
     );
     assert_ne!(h.app.cfg.undo_on_backspace, before, "toggle should flip");
-    // Flip back so the rest of the test is on a known state, then capture a key.
     assert!(h.click_text("Отмена исправления"));
     assert_eq!(h.app.cfg.undo_on_backspace, before);
 
@@ -2544,7 +2437,6 @@ fn ux_go_through_welcome() {
     assert!(h.app.welcome_open);
     assert!(h.find_text("Далее").is_some(), "welcome footer");
     assert!(h.find_text("Не показывать").is_some());
-    // Pick a different logo on the welcome row, then dismiss.
     let _ = h.click_logo_from_left(2);
     assert!(h.click_text("Не показывать"));
     assert!(h.app.welcome_dont_show);
@@ -2583,10 +2475,6 @@ fn ux_navigate_all_five_home_squares_and_back() {
         assert_eq!(h.app.tab, Tab::Home, "back from {title} should return home");
     }
 }
-
-// ---------------------------------------------------------------------------
-// Structural / contrast / hit / overlap checks (always on, report-only)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn ux_inspect_screens_report() {
@@ -2801,7 +2689,6 @@ fn ux_inspect_screens_report() {
                 shots.push((format!("{name} (annotated)"), marked));
             }
         }
-        // Cheap canary: the screen is not empty.
         assert!(
             h.widgets().iter().any(|w| w.rect.area() > 4.0) || !h.texts().is_empty(),
             "{name} rendered blank"
@@ -2831,10 +2718,6 @@ fn ux_inspect_screens_report() {
         println!("  depth {} = {} clicks ({})", d.name, d.clicks, d.notes);
     }
 }
-
-// ---------------------------------------------------------------------------
-// Visual regression (ignored, env-gated like render_ui_screenshots)
-// ---------------------------------------------------------------------------
 
 struct Cell {
     name: String,
@@ -2873,7 +2756,6 @@ fn matrix_cells() -> Vec<Cell> {
                     mac,
                 });
             }
-            // Section screens at min / default / large (skip large×every-tab to stay cheap-ish).
             let sec_size = |sz: &str| match sz {
                 "min" => SEC_MIN,
                 "large" => LARGE,
@@ -2920,7 +2802,6 @@ fn matrix_cells() -> Vec<Cell> {
             });
         }
     }
-    // Edge data, light/win/default only (keep the matrix bounded).
     for (tag, cfg, pane) in [
         ("empty", empty_cfg(), AppsPane::Programs),
         ("edge", edge_cfg(), AppsPane::Programs),
@@ -2964,7 +2845,6 @@ fn pixel_diff(a: &[u8], b: &[u8], w: usize, h: usize, tol: u8) -> (f32, Vec<u8>)
             diff[i * 3 + 1] = 30;
             diff[i * 3 + 2] = 30;
         } else {
-            // Dim the original so the red marks pop.
             diff[i * 3] = r2 / 3 + 20;
             diff[i * 3 + 1] = g2 / 3 + 20;
             diff[i * 3 + 2] = b2 / 3 + 20;
@@ -3179,7 +3059,6 @@ fn ux_home_and_apps_render_does_not_block_with_thirty_path_apps() {
         if std::thread::current().id() == caller {
             hcount.fetch_add(1, Ordering::SeqCst);
         }
-        // Long enough that a synchronous extract of 30 apps would blow the budget.
         std::thread::sleep(Duration::from_millis(800));
         None
     });

@@ -1,15 +1,8 @@
-//! File names typed in the wrong layout: `мфгдеюишт` is `vault.bin` typed with the
-//! Russian layout on (`ю` is the `.` key). A token converts when it becomes
-//! `name.ext` with a known extension and a name that reads as Latin.
-//!
-//! The other direction is a guard only: `vault.bin` typed correctly is never turned
-//! into Russian.
 
 use crate::dict;
 use crate::layout::{self, Lang};
 use crate::morph;
 
-/// Common file extensions (lowercase).
 pub const EXTENSIONS: &[&str] = &[
     "bin", "txt", "exe", "json", "md", "rs", "py", "js", "ts", "jsx", "tsx", "html", "htm", "css", "scss",
     "png", "jpg", "jpeg", "gif", "bmp", "ico", "icns", "tif", "tiff", "heic", "svg", "webp", "psd", "fig",
@@ -22,7 +15,6 @@ pub const EXTENSIONS: &[&str] = &[
     "ipynb", "plist", "chk", "bak", "tmp", "key", "pem", "crt", "torrent", "ttf", "otf", "woff", "woff2",
 ];
 
-/// Shortest extension that may trigger a conversion (one-letter ones are only guarded).
 const MIN_EXT_CONVERT: usize = 2;
 
 pub fn is_extension(ext: &str) -> bool {
@@ -30,7 +22,6 @@ pub fn is_extension(ext: &str) -> bool {
     EXTENSIONS.contains(&l.as_str())
 }
 
-/// Split off up to two trailing signs (`vault.bin,` / `vault.bin.`).
 fn split_tail(chars: &[char]) -> (&[char], &[char]) {
     let mut k = 0;
     while k < 2 && k < chars.len() && !chars[chars.len() - 1 - k].is_alphanumeric() {
@@ -39,7 +30,6 @@ fn split_tail(chars: &[char]) -> (&[char], &[char]) {
     chars.split_at(chars.len() - k)
 }
 
-/// Whether a Latin name part looks like a real file name. Returns `(plausible, has_word)`.
 fn latin_name(name: &str) -> (bool, bool) {
     if name.is_empty()
         || !name.chars().any(|c| c.is_ascii_alphabetic())
@@ -67,14 +57,12 @@ fn is_russian_word(w: &str) -> bool {
     !w.is_empty() && (d.is_word(w) || morph::form_rank(d, w).is_some())
 }
 
-/// `мфгдеюишт` → `vault.bin`: a Russian-layout token that is a file name in Latin.
 pub fn from_ru_layout(token: &str) -> Option<String> {
     if layout::detect_script(token) != Some(Lang::Ru) {
         return None;
     }
     let chars: Vec<char> = token.chars().collect();
     let (head, tail) = split_tail(&chars);
-    // `.` typed on the Russian layout is a dot too; everything else is re-keyed.
     let conv: String = head.iter().map(|&c| if c == '.' { '.' } else { layout::convert_char(c, Lang::Ru) }).collect();
     let (name, ext) = conv.rsplit_once('.')?;
     if ext.len() < MIN_EXT_CONVERT || !is_extension(ext) {
@@ -84,7 +72,6 @@ pub fn from_ru_layout(token: &str) -> Option<String> {
     if !plausible {
         return None;
     }
-    // The Russian text before the separator: a real Russian name (`отчет`) stays.
     let ru_name: String = head[..name.chars().count()].iter().collect();
     let ru_letters: String = ru_name.chars().filter(|c| c.is_alphabetic()).collect();
     if is_russian_word(&ru_letters) {
@@ -104,7 +91,6 @@ pub fn from_ru_layout(token: &str) -> Option<String> {
     Some(conv + &tail)
 }
 
-/// `vault.bin` typed in English: a file name, never converted to Russian.
 pub fn is_en_filename(token: &str) -> bool {
     if layout::detect_script(token) != Some(Lang::En) {
         return false;
@@ -116,8 +102,6 @@ pub fn is_en_filename(token: &str) -> bool {
     if !is_extension(ext) || !latin_name(name).0 {
         return false;
     }
-    // `.` is `ю` on the Russian layout: a real Russian word typed on EN (`k.,jdm` →
-    // любовь) must still convert, so only guard when the Russian reading is junk.
     let ru = layout::convert(&head, Lang::En);
     !(layout::detect_script(&ru) == Some(Lang::Ru) && ru.chars().all(char::is_alphabetic) && is_russian_word(&ru))
 }

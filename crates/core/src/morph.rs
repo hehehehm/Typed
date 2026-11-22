@@ -1,46 +1,20 @@
-//! Lightweight Russian inflection: the frequency list has only some word forms
-//! (`коррекция` but not `коррекцию`). A form counts as known when the same stem with
-//! another ending of the same paradigm is in the dictionary.
-//!
-//! No real morphology: paradigms are lists of endings that alternate in one declension
-//! or conjugation, each limited to stems ending in the right kind of letter (`точк-и`
-//! but `стол-ы`), so endings of different word classes never mix: `систем-ой` (noun)
-//! does not make `систем-ым` (adjective) a word.
-//!
-//! Evidence is counted in "siblings": a dictionary form with a telling ending (two+
-//! letters, one word class: `-ить`, `-ый`, `-ией`) counts 2, any other counts 1.
-//! - [`is_known_form`] protects what the user typed from being "fixed" (2 points);
-//! - [`candidate_rank`] decides whether a fix may produce a form that is not in the
-//!   list: 2 points and a 5+ letter stem.
 
 use crate::dict::Dictionary;
 
-/// Shortest stem for a fix that produces a form missing from the list.
 pub const MIN_STEM: usize = 5;
-/// Shortest stem at all (with two siblings).
 const MIN_STEM_SHORT: usize = 3;
-/// Shorter stems may only improve the rank of a word that is itself in the list
-/// (`точкой`, rare in subtitles, gets the rank of `точка`).
 const MIN_STEM_DIRECT: usize = 4;
-/// Points (a telling ending 2, another 1, the dictionary form +1) an unlisted fix needs.
 const STRICT_POINTS: usize = 3;
 
 #[derive(Clone, Copy)]
 enum StemEnd {
     Any,
-    /// Hard consonant other than к г х ж ш ч щ ц й.
     Hard,
-    /// к г х
     Velar,
-    /// ж ш ч щ ц
     Hush,
-    /// Any consonant but й.
     Consonant,
-    /// Consonant that is not ж ш ч щ.
     NotHush,
-    /// Vowel.
     Vowel,
-    /// Vowel other than и (`музе-й`, but `истори-й` belongs to `история`).
     VowelNotI,
 }
 
@@ -86,74 +60,50 @@ const fn v(stem: StemEnd, ends: &'static [&'static str]) -> Group {
     Group { class: Class::Verb, stem, ends }
 }
 
-/// An ending that identifies the paradigm well enough for one sibling to back a new
-/// form: two+ letters, one word class. Bare stems (`ошибок` is a plural, not a
-/// masculine noun) and one-letter endings (`ошибался` is not a noun in -я) are too weak.
 fn strong_ending(end: &str, last: char, class: Class) -> bool {
     end.chars().count() >= 2 && only_class(end, last, class)
 }
 
-/// `end` after a stem ending in `last` belongs to word class `class` only
-/// (`-ый` is always an adjective; `-ой` may be a noun or an adjective).
 fn only_class(end: &str, last: char, class: Class) -> bool {
     GROUPS.iter().filter(|g| g.stem.ok(last) && g.ends.contains(&end)).all(|g| g.class == class)
 }
 
 use StemEnd::*;
 
-/// Paradigms ("" = bare stem, e.g. `стол`, `слов`); the first ending of each is its
-/// dictionary form.
 const GROUPS: &[Group] = &[
-    // nouns in -ия / -ие (коррекция, коррекцию…; приложение, приложений…)
     n(Consonant, &["ия", "ии", "ию", "ией", "иею", "ий", "иям", "иями", "иях"]),
     n(Consonant, &["ие", "ия", "ию", "ием", "ии", "ий", "иям", "иями", "иях"]),
-    // feminine -а (система, системы…), velar (точка, точки…), hushing (задача…)
     n(Hard, &["а", "ы", "е", "у", "ой", "ою", "ам", "ами", "ах"]),
     n(Velar, &["а", "и", "е", "у", "ой", "ою", "ам", "ами", "ах"]),
     n(Hush, &["а", "и", "е", "у", "ой", "ей", "ею", "ам", "ами", "ах"]),
-    // feminine -я (неделя…) and -ь (тетрадь…)
     n(Consonant, &["я", "и", "е", "ю", "ей", "ею", "ям", "ями", "ях"]),
     n(Consonant, &["ь", "и", "ью", "ей", "ям", "ями", "ях"]),
-    // masculine hard (файл, файла…), velar (список, кнопок…), hushing (падеж…)
     n(Hard, &["", "а", "у", "ом", "е", "ы", "ов", "ам", "ами", "ах"]),
     n(Velar, &["", "а", "у", "ом", "е", "и", "ов", "ам", "ами", "ах"]),
     n(Hush, &["", "а", "у", "ом", "ем", "е", "и", "ей", "ев", "ам", "ами", "ах"]),
-    // masculine soft (пароль…) and -й (музей…)
     n(Consonant, &["ь", "я", "ю", "ем", "е", "и", "ей", "ям", "ями", "ях"]),
     n(VowelNotI, &["й", "я", "ю", "ем", "е", "и", "ев", "ям", "ями", "ях"]),
-    // neuter -о (слово, окно…) and soft -е (поле…)
     n(Hard, &["о", "", "а", "у", "ом", "е", "ам", "ами", "ах"]),
     n(Velar, &["о", "", "а", "у", "ом", "е", "и", "ам", "ами", "ах"]),
     n(Consonant, &["е", "я", "ю", "ем", "ей", "ям", "ями", "ях"]),
-    // adjectives / participles: hard, velar (русский), hushing (хороший), soft (последний)
     a(Hard, &["ый", "ой", "ая", "ое", "ые", "ого", "ому", "ым", "ую", "ых", "ыми", "ом", "ою"]),
     a(Velar, &["ий", "ой", "ая", "ое", "ие", "ого", "ому", "им", "ую", "их", "ими", "ом", "ою"]),
     a(Hush, &["ий", "ая", "ее", "ие", "его", "ему", "им", "ую", "их", "ими", "ей", "ем"]),
     a(Hush, &["ой", "ая", "ое", "ие", "ого", "ому", "им", "ую", "их", "ими", "ом"]),
     a(Consonant, &["ий", "яя", "ее", "ие", "его", "ему", "им", "юю", "их", "ими", "ей", "ем"]),
-    // verbs in -ить (оценить: оцени, оценю, оценишь, оценил…), hushing stems take у/ат
     v(NotHush, &["ить", "ю", "ишь", "ит", "им", "ите", "ят", "ил", "ила", "ило", "или", "и", "ь", "ьте", "ящий", "ивший", "енный"]),
     v(Hush, &["ить", "у", "ишь", "ит", "им", "ите", "ат", "ил", "ила", "ило", "или", "и", "ь", "ьте", "ащий", "ивший", "енный"]),
-    // verbs in -еть (смотреть: смотрю, смотришь…; уметь: умею…)
     v(Consonant, &["еть", "ю", "у", "ишь", "ит", "им", "ите", "ят", "ат", "ел", "ела", "ело", "ели", "и"]),
     v(Consonant, &["еть", "ею", "еешь", "еет", "еем", "еете", "еют", "ел", "ела", "ело", "ели", "ей", "ейте"]),
-    // verbs in -ать / -ять (делать: делай, делаю…; проверять)
     v(Any, &["ать", "аю", "аешь", "ает", "аем", "аете", "ают", "ал", "ала", "ало", "али", "ай", "айте", "ая", "ающий", "авший", "анный"]),
     v(Any, &["ять", "яю", "яешь", "яет", "яем", "яете", "яют", "ял", "яла", "яло", "яли", "яй", "яйте", "яя", "яющий", "явший", "янный"]),
-    // verbs in -овать / -евать (рисовать: рисую…)
     v(Any, &["овать", "ую", "уешь", "ует", "уем", "уете", "уют", "овал", "овала", "овало", "овали", "уй", "уйте"]),
     v(Any, &["евать", "юю", "юешь", "юет", "юем", "юете", "юют", "евал", "евала", "евало", "евали", "юй", "юйте"]),
-    // verbs in -нуть (нажать is irregular; толкнуть: толкну, толкнешь…)
     v(Any, &["нуть", "ну", "нешь", "нет", "нем", "нете", "нут", "нул", "нула", "нуло", "нули", "ни", "ните"]),
-    // present stems of the first conjugation (разбер-у, разбер-ешь…; откро-ю, откро-ешь…)
     v(Consonant, &["у", "ешь", "ет", "ем", "ете", "ут", "и", "ите"]),
     v(Vowel, &["ю", "ешь", "ет", "ем", "ете", "ют", "й", "йте"]),
 ];
 
-/// Best evidence that `w` (normalised) is `stem + ending` of some paradigm:
-/// `(siblings found, best sibling rank, stem length)`, the most siblings first.
-/// A sibling whose ending names the word class unambiguously (`системный` for
-/// `системным`) counts as two.
 fn evidence(d: &Dictionary, w: &str) -> Option<(usize, u32, usize)> {
     let chars: Vec<char> = w.chars().collect();
     let mut best: Option<(usize, u32, usize)> = None;
@@ -196,7 +146,6 @@ fn evidence(d: &Dictionary, w: &str) -> Option<(usize, u32, usize)> {
     best
 }
 
-/// Also try the word without the reflexive `-ся`/`-сь` (исправился → исправил).
 fn evidence_any(d: &Dictionary, w: &str) -> Option<(usize, u32, usize)> {
     let mut best = evidence(d, w);
     for refl in ["ся", "сь"] {
@@ -214,7 +163,6 @@ fn evidence_any(d: &Dictionary, w: &str) -> Option<(usize, u32, usize)> {
     best
 }
 
-/// Every ending of every paradigm, "" included, sorted and deduplicated.
 fn all_endings() -> &'static [&'static str] {
     static ENDS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
     ENDS.get_or_init(|| {
@@ -229,14 +177,11 @@ fn is_ending(s: &str) -> bool {
     all_endings().binary_search(&s).is_ok()
 }
 
-/// `stem + end` ends like an infinitive (`-ть`, `-ти`, `-чь`), so it backs no noun.
 fn looks_infinitive(stem: &str, end: &str) -> bool {
     let f = format!("{stem}{end}");
     f.ends_with("ть") || f.ends_with("ти") || f.ends_with("чь")
 }
 
-/// Best rank of `stem + end`, also as a reflexive verb (`разберу` is backed by
-/// `разберусь`).
 fn sibling_rank(d: &Dictionary, stem: &str, end: &str) -> Option<u32> {
     let mut f = String::with_capacity(stem.len() + end.len() + 4);
     f.push_str(stem);
@@ -253,8 +198,6 @@ fn sibling_rank(d: &Dictionary, stem: &str, end: &str) -> Option<u32> {
     best
 }
 
-/// `a` and `b` share a 4+ letter stem and differ only in paradigm endings
-/// (`удаляю` / `удалю`, `файлами` / `файлам`): two forms, not a typo and its fix.
 pub fn only_ending_differs(a: &str, b: &str) -> bool {
     let (av, bv): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
     let common = av.iter().zip(&bv).take_while(|(x, y)| x == y).count();
@@ -265,13 +208,6 @@ pub fn only_ending_differs(a: &str, b: &str) -> bool {
     })
 }
 
-/// `word` (any case) is a Russian dictionary word or a plausible form of one: the typed
-/// word must not be "fixed". Needs one sibling with a telling ending (`оценить` for
-/// `оцени`) or two with short ones; any stem of 3+ letters.
-/// Productive morphology of Russian obscenities (mat). These forms are real words of
-/// the language and must never be typo-corrected into a nearby dictionary word
-/// (`заебался` is not `забрался`). Built from a stem, an optional verbal prefix,
-/// an inflectional ending and an optional reflexive postfix — not a word list.
 const MAT_STEMS: &[&str] = &[
     "еб", "еба", "ебн", "ебуч", "ебл", "ебан",
     "бляд", "бля", "блят",
@@ -291,8 +227,6 @@ const MAT_PREFIXES: &[&str] = &[
     "",
 ];
 
-/// Endings that occur on mat stems but are missing from the regular paradigms
-/// (colloquial participles with one н, nouns in -ец/-ня/-ак, etc.).
 const MAT_EXTRA_ENDS: &[&str] = &[
     "аный", "аная", "аное", "аные", "аных", "аным", "аными", "аном", "аную",
     "еный", "еная", "еное", "еные",
@@ -316,9 +250,6 @@ fn mat_ending_ok(end: &str) -> bool {
     end.is_empty() || is_ending(end) || MAT_EXTRA_ENDS.contains(&end)
 }
 
-/// `word` (any case; `ё` folded) is a productive mat form: optional prefix, a mat
-/// stem, an inflectional ending, optional `-ся`/`-сь`. A hard or soft sign may sit
-/// between the prefix and the stem (`отъебись`).
 pub fn is_mat_form(word: &str) -> bool {
     let w = Dictionary::normalize(word);
     if w.chars().count() < 3 || !w.chars().all(|c| matches!(c, 'а'..='я' | 'ё') || c == 'ъ' || c == 'ь') {
@@ -352,9 +283,6 @@ fn mat_stem_with_ending(rest: &str) -> bool {
             if !mat_ending_ok(end) {
                 continue;
             }
-            // Two-letter stems (`еб`) plus a one-letter ending invent ordinary
-            // words (`отебе` ≠ от+еб+е). Empty or 2+ letter endings are real
-            // (`заеб`, `заебал`). Longer stems (`бляд`, `хуй`) take any ending.
             let stem_n = stem.chars().count();
             let end_n = end.chars().count();
             if stem_n <= 2 && end_n == 1 {
@@ -366,8 +294,6 @@ fn mat_stem_with_ending(rest: &str) -> bool {
     false
 }
 
-/// Productive expansion of prefix × stem × ending × reflexive for evals and
-/// audits. Includes both empty and typical endings (regular paradigms + extras).
 pub fn mat_forms() -> Vec<String> {
     let mut ends: Vec<&str> = all_endings().iter().copied().collect();
     ends.extend_from_slice(MAT_EXTRA_ENDS);
@@ -385,8 +311,6 @@ pub fn mat_forms() -> Vec<String> {
                     if stem.chars().count() <= 2 && end.chars().count() == 1 {
                         continue;
                     }
-                    // Hard sign after a prefix ending in a consonant, when the
-                    // stem starts with a vowel (`отъебался`).
                     let signs: &[&str] = if !prefix.is_empty()
                         && !"аеёиоуыэюя".contains(prefix.chars().last().unwrap_or(' '))
                         && "аеёиоуыэюя".contains(stem.chars().next().unwrap_or(' '))
@@ -417,13 +341,8 @@ pub fn is_known_form(d: &Dictionary, word: &str) -> bool {
         || evidence_any(d, &w).is_some_and(|(n, _, _)| n >= 2)
 }
 
-/// Rank to use for a fix candidate (normalised): listed words get the best rank among
-/// their forms; unlisted forms count only with [`STRICT_POINTS`] sibling points in one
-/// paradigm and a 4+ letter stem, so `системым` (only `системой` backs it) is rejected.
 pub fn candidate_rank(d: &Dictionary, w: &str) -> Option<u32> {
     match d.rank(w) {
-        // A listed form keeps its own rank unless it is in the rarer half of the list,
-        // where the best rank of its forms counts instead.
         Some(r) if r < crate::typo::TAIL_RANK => Some(r),
         Some(r) => Some(match evidence(d, w) {
             Some((_, sr, stem)) if stem >= MIN_STEM_DIRECT => r.min(sr),
@@ -436,10 +355,6 @@ pub fn candidate_rank(d: &Dictionary, w: &str) -> Option<u32> {
     }
 }
 
-/// Rank for an unlisted form `w` = stem + ending when the paradigm that explains the
-/// stem's dictionary forms best (most sibling points, at least [`STRICT_POINTS`])
-/// has that ending (all of them, on a tie). `автобус-ой` fails: `автобус, автобуса…` fit the masculine
-/// paradigm, which has `-ом`, better than the feminine one.
 fn paradigm_rank(d: &Dictionary, w: &str) -> Option<u32> {
     let chars: Vec<char> = w.chars().collect();
     let mut best: Option<u32> = None;
@@ -463,14 +378,11 @@ fn paradigm_rank(d: &Dictionary, w: &str) -> Option<u32> {
             let mut score = 0;
             let mut rank = u32::MAX;
             for (i, other) in group.ends.iter().enumerate().filter(|(_, o)| **o != end) {
-                // `настроит-ь` is a verb, not a noun in -ь.
                 if group.class != Class::Verb && looks_infinitive(&stem_s, other) {
                     continue;
                 }
                 if let Some(r) = sibling_rank(d, &stem_s, other) {
                     score += if strong_ending(other, last, group.class) { 2 } else { 1 };
-                    // The dictionary form (first ending: `коррекция`, `лесбиянка`)
-                    // tells the paradigm best.
                     if i == 0 && !other.is_empty() {
                         score += 1;
                     }
@@ -484,13 +396,9 @@ fn paradigm_rank(d: &Dictionary, w: &str) -> Option<u32> {
                 top = score;
                 winners.clear();
             }
-            // Verb forms are only recognised, never produced: their endings depend on
-            // stress and conjugation (`спрос-ьте`, `присл-ает` are not words).
             winners.push((group.class != Class::Verb && group.ends.contains(&end), rank));
         }
         if top >= STRICT_POINTS {
-            // Every best-fitting paradigm must have the ending: `лесбиянк-о` fails, the
-            // feminine paradigm fits as well as the neuter one and has no `-о`.
             if winners.iter().all(|(has, _)| *has) {
                 let r = winners.iter().map(|(_, r)| *r).min().unwrap_or(u32::MAX);
                 best = Some(best.map_or(r, |b| b.min(r)));
@@ -500,8 +408,6 @@ fn paradigm_rank(d: &Dictionary, w: &str) -> Option<u32> {
     best
 }
 
-/// Rank of `word` as a dictionary word or a known form of one (lenient), for callers
-/// that only ask "is this Russian".
 pub fn form_rank(d: &Dictionary, word: &str) -> Option<u32> {
     let w = Dictionary::normalize(word);
     if let Some(r) = d.rank(&w) {
@@ -513,14 +419,6 @@ pub fn form_rank(d: &Dictionary, word: &str) -> Option<u32> {
     evidence_any(d, &w).map(|e| e.1)
 }
 
-/// Same word with the typed word's ending: if `cand` = stem + ending of a paradigm and
-/// `typed` ends with another ending of that paradigm, return stem + typed ending.
-/// Used to keep the case of a typo fix (`коррекция` + typed `…цию` → `коррекцию`).
-///
-/// A form not in the list is usable only when `cand`'s ending belongs to that one
-/// paradigm for this stem (`системный`: only adjectives end in -ый) or the form has
-/// [`STRICT_POINTS`] sibling points: `системой` (noun or adjective?) must not give `системым`.
-/// Returns `(form, safe)`; an unsafe form still needs [`reinflect_ok`].
 pub fn reinflect(cand: &str, typed: &str) -> Vec<(String, bool)> {
     let c: Vec<char> = cand.chars().collect();
     let mut out = Vec::new();
@@ -537,8 +435,6 @@ pub fn reinflect(cand: &str, typed: &str) -> Vec<(String, bool)> {
             let stem: String = c[..c.len() - n].iter().collect();
             for other in group.ends.iter().filter(|o| *o != end && !o.is_empty()) {
                 if typed.ends_with(other) {
-                    // Safe when every paradigm that `cand`'s ending may belong to has the
-                    // new ending: `-ый` → `-ым` always; `-ой` (noun or adjective) not.
                     let safe = end.chars().count() >= 2
                         && GROUPS
                             .iter()
@@ -555,7 +451,6 @@ pub fn reinflect(cand: &str, typed: &str) -> Vec<(String, bool)> {
     out
 }
 
-/// Check for a `(form, safe)` pair from [`reinflect`].
 pub fn reinflect_ok(d: &Dictionary, form: &str, safe: bool) -> bool {
     safe || d.contains(form) || candidate_rank(d, form).is_some()
 }
@@ -575,7 +470,6 @@ mod tests {
         assert!(candidate_rank(d, "точкой").unwrap() < 5000, "via точка");
         assert!(!is_known_form(d, "кореркцию"));
         assert!(!is_known_form(d, "чтокой"));
-        // Verb forms: imperative and others of оценить.
         for w in ["оцени", "оцените", "оценю", "проверь", "исправьте"] {
             assert!(is_known_form(d, w), "{w}");
         }
@@ -584,7 +478,6 @@ mod tests {
     #[test]
     fn classes_do_not_mix() {
         let d = dict::get(Lang::Ru);
-        // система is a noun: no adjective ending on its stem.
         assert_eq!(candidate_rank(d, "системым"), None);
         assert_eq!(candidate_rank(d, "удалиите"), None);
         assert_eq!(candidate_rank(d, "посмеу"), None);
@@ -599,7 +492,6 @@ mod tests {
         assert!(ok("коррекция", "кореркцию", "коррекцию"));
         assert!(ok("программа", "прграммой", "программой"));
         assert!(ok("системный", "ситстемрым", "системным"));
-        // системой may be a noun: no adjective form from it.
         assert!(!ok("системой", "ситстемрым", "системым"));
     }
 
@@ -629,7 +521,6 @@ mod tests {
             assert!(is_mat_form(w), "mat form {w}");
             assert!(is_known_form(d, w), "known {w}");
         }
-        // Ordinary words that only share letters with a stem must not be tagged.
         for w in ["забрался", "собрался", "мудрый", "мудрость", "хлеб", "небо", "характер"] {
             assert!(!is_mat_form(w), "false mat {w}");
         }
@@ -642,51 +533,30 @@ mod tests {
     }
 }
 
-/// Productive Russian suffixes (before the case ending): an unknown word built with one of
-/// them on a known stem is a new word, not a typo (`хранилка`, `донатщик`, `ботоводство`).
-/// Single-letter suffixes (`-к`, `-ец`) are left out: a slip makes those too easily.
-/// Productive suffixes by what they attach to. Verbal (`храни(ть)` + `лк`): the base is an
-/// infinitive. Nominal (`донат` + `щик`): the base is a noun in the nominative. Adjectival
-/// (`мутн(ый)` + `ость`): the base is an adjective. Verb-making (`донат` + `ирова` + `ть`).
 const DERIV_VERBAL: &[&str] = &["лк", "льщик", "тель"];
 const DERIV_NOMINAL: &[&str] = &["щик", "чик", "ник", "шк", "ечк", "очк", "ушк", "юшк", "ищ", "изм", "ист", "ств", "ниц", "овщин", "ёнок", "онок", "ирова", "изирова"];
 const DERIV_ADJECTIVAL: &[&str] = &["ость", "еньк", "оньк"];
-/// Case and verb endings after a derivational suffix.
 const DERIV_ENDINGS: &[&str] = &[
     "", "а", "я", "и", "ы", "у", "ю", "е", "о", "ой", "ей", "ою", "ам", "ям", "ами", "ями", "ах", "ях", "ом", "ем", "ов", "ев", "ью", "ть", "ться", "л", "ла", "ли", "ло", "ет", "ют", "ешь", "ете", "ая", "ый", "ое", "ые",
 ];
-/// Prefixes that make new verbs of known ones (`перезалить`, `недогуглить`).
 const DERIV_PREFIXES: &[&str] = &[
     "пере", "недо", "пред", "раз", "рас", "под", "над", "при", "про", "анти", "супер", "псевдо", "мега", "микро", "полу", "само", "сверх",
 ];
-/// Infinitive and past endings: the verb forms a prefixed new verb is checked in.
 const DERIV_VERB_FORMS: &[&str] = &["ть", "ться", "л", "ла", "ли", "ло", "лся", "лась", "лись"];
 
 fn is_vowel(c: char) -> bool {
     "аеёиоуыэюя".contains(c)
 }
 
-/// `w` (normalised, unknown to the dictionaries) is regular word formation on known parts:
-/// a known base plus a productive suffix and an ending (`хранилка` = `храни(ть)` + `лк` +
-/// `а`; [`DERIV_VERBAL`], [`DERIV_NOMINAL`], [`DERIV_ADJECTIVAL`]; the base is an
-/// infinitive, a nominative noun or an adjective on a stem of 5+ letters), or a verb prefix plus a
-/// known infinitive or past form of 5+ letters (`перезалить`; `от` + `суда` is a slip of
-/// `отсюда`, not a new word). Such a word is left alone by the typo fixer (since 0.3.74).
 pub fn looks_derived(d: &Dictionary, w: &str) -> bool {
     derivation(d, w).is_some()
 }
 
-/// A correction `cand` of the derived word `w` stays within its formation: it keeps the
-/// prefix (`разудить` → `разбудить`) or the suffix (`поклоннников` → `поклонников`), so
-/// it fixes a slip inside the word instead of turning it into another lemma
-/// (`хранилка` → `хранила` drops `лк`, `блузочки` → `булочки` leaves the stem).
 pub fn keeps_derivation(d: &Dictionary, w: &str, cand: &str) -> bool {
     match derivation(d, w) {
         None => true,
         Some((_, affix, true)) => cand.starts_with(affix),
         Some((base, affix, false)) => {
-            // The stem the suffix was found on, without the base's completion.
-            // A slip at its seam may go (`пространн|ств|е` → `пространстве`).
             let stem = ["ть", "ый", "ой", "ий", "а", "я"].iter().find_map(|e| base.strip_suffix(e)).unwrap_or(&base);
             let head: String = stem.chars().take(stem.chars().count() - 1).collect();
             cand.starts_with(&head) && cand.contains(affix)
@@ -694,7 +564,6 @@ pub fn keeps_derivation(d: &Dictionary, w: &str, cand: &str) -> bool {
     }
 }
 
-/// The analysis behind [`looks_derived`]: `(base word, affix, affix is a prefix)`.
 pub fn derivation(d: &Dictionary, w: &str) -> Option<(String, &'static str, bool)> {
     if w.chars().count() < 6 {
         return None;
@@ -711,16 +580,10 @@ pub fn derivation(d: &Dictionary, w: &str) -> Option<(String, &'static str, bool
             for suf in sufs {
                 let Some(stem) = rest.strip_suffix(suf) else { continue };
                 let Some(last) = stem.chars().last() else { continue };
-                // 5+ letters: shorter stems complete to case forms (`лист|ниц|ы`
-                // would read `листа` + `ниц`).
                 if stem.chars().count() < 5 {
                     continue;
                 }
                 for e in stem_ends {
-                    // Verbal: `храни` + `ть`, a vowel before `ть`. Nominal and adjectival:
-                    // a consonant-final stem (`донат`, `мутн`), `-ий` only after a velar or
-                    // hissing letter (`горьк-ий`), so case forms (`залою`, `неприятий`) and
-                    // conjugated forms (`хранишь`) are not taken for bases.
                     let ok_shape = match *e {
                         "ть" => is_vowel(last),
                         "ий" => "гкхжшчщ".contains(last),

@@ -1,8 +1,3 @@
-//! Build the word n-gram FST map: `build_ngrams <ngrams.tsv> <out.fst> [max_bigrams] [max_trigrams]`.
-//! Input from `tools/ngrams/count.py` (`w1 [w2 [w3]]\tcount`). Keys are [`key_bytes`] words
-//! joined by a space, `<s>` (sentence start) is byte 0x01; the value is the count quantised
-//! to `round(4 · log2(count))` (see `ngram.rs`). Unigrams are all kept; bigrams / trigrams
-//! are pruned to the most frequent `max_*` entries. Key 0x02 holds the total token count.
 use layout_keeper_core::dict::key_bytes;
 use layout_keeper_core::ngram::quantise;
 

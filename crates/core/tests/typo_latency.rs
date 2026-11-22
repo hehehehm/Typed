@@ -1,5 +1,3 @@
-//! Worst-case time of one `typo::suggest` call (run with `--ignored --nocapture`, release),
-//! without and with a left context (the n-gram model scores every close candidate).
 use layout_keeper_core::{dict, layout::Lang, ngram::Context, typo};
 use std::time::Instant;
 
@@ -28,7 +26,6 @@ fn latency() {
         for (k, (w, _)) in list.iter().enumerate() {
             if k % 13 != 0 || w.chars().count() < 4 { continue; }
             let mut v: Vec<char> = w.chars().collect();
-            // a few slips + gibberish of the same length
             let i = 1 + k % (v.len() - 1);
             let c = v.remove(i);
             words.push(v.iter().collect());

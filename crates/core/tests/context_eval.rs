@@ -1,15 +1,3 @@
-//! In-sentence evaluation of the context model (run with
-//! `cargo test --release -p layout_keeper_core --test context_eval -- --ignored --nocapture`).
-//!
-//! Held-out sentences (`tests/data/heldout_{ru,en}.txt`, Tatoeba sentences whose id is a
-//! multiple of 50, never counted into the n-gram tables) are typed key by key through the
-//! engine (`fix_typos` on), with the context model on and off:
-//! * `clean` — the sentence as is: any change of the final text is a false positive.
-//! * `typo1`, `typo2`, `layout`, `layout+typo` — one dictionary word (3+ letters) of a
-//!   sentence that came through clean in both modes is corrupted (realistic slips, the other
-//!   layout, or both; corruptions that make a real word are skipped). `right` = the final
-//!   text is the original sentence, `wrong` = something else changed, the rest stayed.
-//!   `mid` = only targets with a previous word (where context can help).
 use layout_keeper_core::{dict, dict::Dictionary, layout, layout::Lang, ngram, typo, Engine, EngineOptions, Key};
 use std::fmt::Write as _;
 
@@ -71,14 +59,11 @@ fn level() -> typo::Level {
     }
 }
 
-/// Types `text` key by key (then Enter) and returns what the field holds.
 fn type_text(e: &mut Engine, text: &str) -> String {
     e.reset();
     let mut out: Vec<char> = Vec::new();
     let keys = text.chars().map(Key::Char).chain([Key::Boundary('\n')]);
     for k in keys {
-        // A typed character is in the field before the engine sees it; Enter is not
-        // (the replacement types it itself).
         if let Key::Char(c) = k { out.push(c); }
         match e.feed(k, false) {
             Some(r) => {
@@ -96,7 +81,6 @@ fn type_text(e: &mut Engine, text: &str) -> String {
     s
 }
 
-/// Word spans (char offsets) of `s`: runs of letters.
 fn words(s: &[char]) -> Vec<(usize, usize)> {
     let mut v = vec![];
     let mut i = 0;
@@ -112,8 +96,6 @@ fn words(s: &[char]) -> Vec<(usize, usize)> {
     v
 }
 
-/// Context of word `i` as the engine would see it: up to two previous words joined by
-/// spaces or commas, `<s>` after a sentence end or at the start.
 fn sentence_context(chars: &[char], ws: &[(usize, usize)], i: usize) -> ngram::Context {
     let mut v: Vec<String> = vec![];
     let mut j = i;
@@ -172,7 +154,7 @@ fn context_eval() {
             .collect();
         let mut clean_fp = [0u32; 2];
         let mut fp_examples: [Vec<String>; 2] = [vec![], vec![]];
-        let mut cells = [[[Cell::default(); 2]; 2]; 4]; // kind, all/mid, ctx on/off
+        let mut cells = [[[Cell::default(); 2]; 2]; 4];
         let mut diff_examples: Vec<String> = vec![];
         let mut wrong_examples: Vec<String> = vec![];
         let mut unknown = [0u32; 3];
@@ -193,8 +175,6 @@ fn context_eval() {
             if ok { usable.push(*s); }
         }
         for s in &usable {
-            // Per-sentence random streams: a sentence dropped from `usable` by a change in
-            // the engine must not shift the samples of all the following ones.
             let h = s.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
             let mut rng = Rng(0x5eed ^ lang as u64 ^ h);
             let mut pick_rng = Rng(0xe5 ^ lang as u64 ^ h.rotate_left(17));
@@ -207,8 +187,6 @@ fn context_eval() {
                 })
                 .collect();
             if cands.is_empty() { continue; }
-            // Unknown-word proxy in a real sentence: the word treated as unknown (a name or
-            // slang the lists miss) — would it be changed, with and without its context?
             for &ui in cands.iter().filter(|_| pick_rng.next(2) == 0) {
                 let (a, b) = ws[ui];
                 let w: String = chars[a..b].iter().collect();
@@ -236,19 +214,15 @@ fn context_eval() {
                     _ => slips(&w, 1, lang, &mut rng).map(|t| layout::convert(&t, lang)),
                 };
                 let Some(t) = t else { continue };
-                // A wrong-layout word followed by a sign would have that sign typed in the
-                // other layout too; keep to words followed by a space.
                 if kind.starts_with("layout") && chars.get(b) != Some(&' ') { continue; }
                 let back = if kind.starts_with("layout") { layout::convert(&t, lang.other()) } else { t.clone() };
                 if d.is_word(&Dictionary::normalize(&back)) && back.to_lowercase() != w.to_lowercase() { continue; }
                 if kind.starts_with("layout") && dict::get(lang.other()).is_word(&Dictionary::normalize(&t)) { continue; }
                 let typed: String = chars[..a].iter().chain(t.chars().collect::<Vec<_>>().iter()).chain(chars[b..].iter()).collect();
-                // Layout fixed, typo kept: half done.
                 let half: String = chars[..a].iter().copied().chain(back.chars()).chain(chars[b..].iter().copied()).collect();
                 let mut res = [String::new(), String::new()];
                 for (m, e) in engines.iter_mut().enumerate() {
                     let got = type_text(e, &typed);
-                    // ё and е are the same letter to the dictionaries.
                     let e = |x: &str| x.replace('ё', "е").replace('Ё', "Е");
                     let right = e(&got) == e(s);
                     let partial = !right && *kind == "layout+typo" && got == half;

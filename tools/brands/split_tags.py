@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""Tag frequent Russian words for the missing-space fixer (crates/core/src/split.rs).
 
-Writes crates/core/data/ru_split_tags.txt: frequent words (all ranked words of 4+ letters)
-that must not be the second half of a split, with a tag:
-  g  place names (`москвы`): fine after a preposition (`до москвы`);
-  n  proper names, organisations, words without a dictionary parse (`майли`, `аллена`): unknown
-     names glued like `камаро` → `к амаро` are the main false positives;
-  v  verb forms (`рулить`, `долбал`): `по`/`за`/`про`… are also verb prefixes
-     (`порулить`, `задолбал`), so these halves count only after `не` (`не знаю`).
-Tags come from the OpenCorpora dictionary via pymorphy3 (CC-BY-SA 3.0).
-Usage: <venv>/bin/python split_tags.py <repo root>
-"""
 import sys, pymorphy3
 REPO = sys.argv[1]
 m = pymorphy3.MorphAnalyzer()

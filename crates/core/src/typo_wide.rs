@@ -1,28 +1,3 @@
-//! Wider, scored typo search (since 0.3.72), tried when the strict rules in [`crate::typo`]
-//! leave a word alone and the level is not [`Level::Cautious`].
-//!
-//! * Budget by length (in tenths of an edit): 3–4 letters one slip, 5–8 two, 9+ three
-//!   ([`budget`]). Slips are weighted by how a hand makes them ([`wdist`]): a doubled or
-//!   dropped double letter and two swapped neighbours are cheap, a neighbour key is one
-//!   slip, a far key costs more than two (never in a one- or two-slip budget).
-//! * Candidates: words of the 40 000-word list that keep the first letter (or swap the
-//!   first two). Score = edit cost × [`EDIT_WEIGHT`] + ln(rank + [`RANK_OFFSET`]), minus a
-//!   bonus for keeping the typed last two letters (the case ending).
-//! * Spelling errors (since 0.3.74): a missing double letter ([`DOUBLE_MISSING`]) and
-//!   confused unstressed Russian vowels ([`VOWEL_COST`]) cost less than a slip, and real
-//!   forms outside the 40 000-word list reachable by up to two such errors compete as
-//!   rank [`SPELL_RANK`] (`стелаж` / `сталлежу` → `стеллаж` / `стеллажу`; not into
-//!   proper-name forms, not one lone vowel at the default level). A spelling fix one slip
-//!   ([`CLOSER_GAP`]) closer than a frequent word wins over it (`сталлеж`: not `стала`).
-//! * Ambiguity guard: the runner-up must score at least [`margin`] worse, otherwise the
-//!   word is left alone (`тта` is not guessed into `там`).
-//! * Same safety rules as the strict search: not just another ending of the same word,
-//!   rare candidates (rank 20 000+) keep the typed last two letters, Capitalised / UPPER
-//!   words (often names) need 5+ letters, a frequent target and a wider margin; 3–4 letter
-//!   words only go to frequent words.
-//!
-//! [`layout_typo`]: a token typed in the wrong layout whose other-layout reading is a typo
-//! (`ghbdtn` with a slip, `xnjj` → `что`).
 
 use crate::dict::{self, Dictionary};
 use crate::layout::{self, Lang};
@@ -30,16 +5,11 @@ use crate::morph;
 use crate::ngram::{self, Context};
 use crate::typo::{adjacent_keys_raw, en_affix_only, en_end_letter_only, en_known_form, first_letter_kept, match_case, sound_alike, tail_ok, Level, MAX_RANK, TAIL_RANK};
 
-/// Weight of one edit (in score units, natural log of frequency rank).
 pub const EDIT_WEIGHT: f64 = 3.0;
-/// Added to ranks before the log: the top words should not win by frequency alone.
 pub const RANK_OFFSET: f64 = 100.0;
-/// Weight of the context fit ([`ngram::fit`], about −4…+4) in the score.
 pub const CONTEXT_WEIGHT: f64 = 1.2;
-/// Score bonus for a candidate that keeps the typed last two letters.
 pub const TAIL_BONUS: f64 = 0.8;
 
-/// Edit budget for an `n`-letter word, in tenths of a slip.
 pub fn budget(n: usize, level: Level) -> u32 {
     match (level, n) {
         (_, 0..=2) => 0,
@@ -57,7 +27,6 @@ pub fn budget(n: usize, level: Level) -> u32 {
     }
 }
 
-/// How much worse the runner-up must score.
 pub fn margin(level: Level, capitalised: bool) -> f64 {
     let m = match level {
         Level::Aggressive => 1.1,
@@ -66,7 +35,6 @@ pub fn margin(level: Level, capitalised: bool) -> f64 {
     if capitalised { m + 0.8 } else { m }
 }
 
-/// Rank limit for targets of short typed words.
 fn short_rank_limit(n: usize) -> u32 {
     match n {
         0..=3 => 2_000,
@@ -76,13 +44,8 @@ fn short_rank_limit(n: usize) -> u32 {
 }
 
 const TRANSPOSE: u32 = 8;
-/// Letters only left out (`прграма` → `программа`) count without an unusual letter pair
-/// when the target is this frequent. The typed word must be a subsequence of the
-/// candidate: `загран` is not `заранее` (an extra `г`, not letters left out).
 pub const DROPPED_RANK: u32 = 10_000;
 
-/// One word is the other plus letters at the end (`yandx` / `yan`, `cоn` / `const`):
-/// another word, a name or a cut-off one, not a slip. A doubled last letter is a slip.
 fn extra_or_cut_end(typed: &[char], cand: &[char]) -> bool {
     let (long, short) = if typed.len() > cand.len() { (typed, cand) } else { (cand, typed) };
     if long.len() == short.len() || !long.starts_with(short) {
@@ -91,15 +54,11 @@ fn extra_or_cut_end(typed: &[char], cand: &[char]) -> bool {
     !long[short.len()..].iter().all(|&c| Some(&c) == short.last())
 }
 
-/// `short` is `long` with some letters left out, in order (`прграма` in `программа`).
 fn is_subsequence(short: &[char], long: &[char]) -> bool {
     let mut it = long.iter();
     short.iter().all(|c| it.any(|d| d == c))
 }
 
-/// Unit-cost Damerau (OSA) distance, or `max + 1` if greater. Used so the
-/// "letters left out" path cannot accept a 3-edit expansion like `загран` →
-/// `заранее` while still allowing a 2-slip typo such as `превт` → `привет`.
 fn unit_dist(a: &[char], b: &[char], max: usize) -> usize {
     let (n, m) = (a.len(), b.len());
     if n.abs_diff(m) > max {
@@ -129,11 +88,8 @@ fn unit_dist(a: &[char], b: &[char], max: usize) -> usize {
     prev[m]
 }
 
-/// Cost of at most one slip (tenths).
 pub const ONE_SLIP: u32 = 12;
 
-/// Letter pairs precomputed per language: neighbour keys and sound-alike letters (the
-/// DP asks millions of times; scanning the key rows each time was most of the cost).
 struct Pairs {
     adjacent: Vec<bool>,
     sound: Vec<bool>,
@@ -180,25 +136,15 @@ pub(crate) fn adjacent_fast(x: char, y: char, lang: Lang) -> bool {
     }
 }
 
-/// A doubled letter typed once (`стелаж`, `програма`): the most common spelling error,
-/// cheaper than any keyboard slip (7 up to 0.3.73).
 pub const DOUBLE_MISSING: u32 = 5;
-/// A letter typed twice (`адресс`, a key bounce): unchanged since 0.3.72 (4 and 5 were
-/// tried: more wrong fixes of keyboard slips, see docs/eval-0.3.74).
 pub const DOUBLE_EXTRA: u32 = 6;
-/// Two Russian vowels confused when unstressed (а/о, е/и, е/а, е/я, и/я, а/я; not е/э:
-/// `бекап` / `бэкап` are both in use), in words of 6+ letters, not at the last letter
-/// (11 up to 0.3.73 and for other vowel pairs; 15 up to 5 letters).
 pub const VOWEL_COST: u32 = 7;
 
-/// Unstressed vowels confused in Russian spelling.
 pub(crate) fn vowel_confusion(x: char, y: char, lang: Lang) -> bool {
     const GROUPS: [(char, char); 6] = [('а', 'о'), ('е', 'и'), ('е', 'а'), ('е', 'я'), ('и', 'я'), ('а', 'я')];
     lang == Lang::Ru && GROUPS.iter().any(|&(a, b)| (a, b) == (x, y) || (b, a) == (x, y))
 }
 
-/// `inner`: neither letter is the last of its word (a last vowel is mostly an ending:
-/// `ввести` / `ввесия` is not a spelling error).
 fn subst_cost(x: char, y: char, n: usize, inner: bool, lang: Lang) -> u32 {
     if inner && n > crate::typo::SHORT_SUBST_LEN && vowel_confusion(x, y, lang) {
         return VOWEL_COST;
@@ -219,7 +165,6 @@ fn subst_cost(x: char, y: char, n: usize, inner: bool, lang: Lang) -> u32 {
     }
 }
 
-/// Typed `a[i]` is an extra letter.
 fn del_cost(a: &[char], i: usize, lang: Lang) -> u32 {
     let c = a[i];
     let prev = i.checked_sub(1).map(|k| a[k]);
@@ -233,7 +178,6 @@ fn del_cost(a: &[char], i: usize, lang: Lang) -> u32 {
     }
 }
 
-/// Candidate letter `b[j]` is missing from the typed word.
 fn ins_cost(b: &[char], j: usize) -> u32 {
     let c = b[j];
     if (j > 0 && b[j - 1] == c) || b.get(j + 1) == Some(&c) {
@@ -243,13 +187,11 @@ fn ins_cost(b: &[char], j: usize) -> u32 {
     }
 }
 
-/// Keyboard-weighted Damerau (OSA) distance in tenths of a slip, or `max + 1` past `max`.
 pub fn wdist(a: &[char], b: &[char], max: u32, lang: Lang) -> u32 {
     let dels: Vec<u32> = (0..a.len()).map(|i| del_cost(a, i, lang)).collect();
     wdist_with(a, &dels, b, max, lang, &mut Scratch::default())
 }
 
-/// Reused rows for [`wdist_with`] (no allocation per candidate).
 #[derive(Default)]
 pub struct Scratch {
     prev2: Vec<u32>,
@@ -257,7 +199,6 @@ pub struct Scratch {
     cur: Vec<u32>,
 }
 
-/// [`wdist`] with the typed word's deletion costs precomputed.
 fn wdist_with(a: &[char], dels: &[u32], b: &[char], max: u32, lang: Lang, s: &mut Scratch) -> u32 {
     let (n, m) = (a.len(), b.len());
     for v in [&mut s.prev2, &mut s.prev, &mut s.cur] {
@@ -315,18 +256,12 @@ fn offer(best: &mut Option<Scored>, second: &mut Option<f64>, s: Scored) {
     }
 }
 
-/// Candidates this much costlier (tenths, one slip) than a spelling-error fix drop out.
 pub const CLOSER_GAP: u32 = 10;
 
-/// Minimum letters for a spelling-error fix into an unranked form.
 pub const SPELL_MIN_LEN: usize = 5;
-/// At most this many spelling operations (see [`spelling_variants`]).
 pub const SPELL_OPS: usize = 2;
-/// Rank an unranked real form competes with (the end of the frequency list).
 pub const SPELL_RANK: u32 = MAX_RANK;
 
-/// Two forms of one word, also reflexive ones (`бахнулись` / `бахнулась`,
-/// `ветвящаяся` / `ветвящееся`): not a spelling error and its fix.
 fn ending_variant(a: &str, b: &str) -> bool {
     morph::only_ending_differs(a, b)
         || ["ся", "сь"].iter().any(|r| match (a.strip_suffix(r), b.strip_suffix(r)) {
@@ -335,8 +270,6 @@ fn ending_variant(a: &str, b: &str) -> bool {
         })
 }
 
-/// The typed last two letters kept, or only an unstressed vowel before the last letter
-/// confused in a 6+ letter word (`сталлеж` → `стеллаж`).
 fn spell_tail_ok(typed: &[char], cand: &[char], lang: Lang) -> bool {
     let (n, m) = (typed.len(), cand.len());
     if n < 2 || m < 2 {
@@ -346,17 +279,11 @@ fn spell_tail_ok(typed: &[char], cand: &[char], lang: Lang) -> bool {
         || (n >= 6 && typed[n - 1] == cand[m - 1] && vowel_confusion(typed[n - 2], cand[m - 2], lang))
 }
 
-/// Real forms (full-form set) reachable from `w` by up to [`SPELL_OPS`] spelling
-/// operations, never at the first letter: a letter doubled (`стелаж` → `стеллаж`), a
-/// doubled letter made single (`адресс` → `адрес`), a confused unstressed vowel
-/// ([`vowel_confusion`]).
 fn spelling_variants(d: &Dictionary, w: &[char], lang: Lang) -> Vec<(String, bool)> {
     let vowels: &[char] = match lang {
         Lang::Ru => &['а', 'о', 'е', 'и', 'я'],
         Lang::En => &[],
     };
-    // Each letter is touched once (`бритвой` is not `братвой` through и → я → а), and
-    // the doubled pair is never the first two letters (`ввязали` / `вязали`: prefix).
     let step = |v: &[char], t: &[bool]| -> Vec<(Vec<char>, Vec<bool>, bool)> {
         let mut out = Vec::new();
         for i in 1..v.len() {
@@ -413,7 +340,6 @@ fn spelling_variants(d: &Dictionary, w: &[char], lang: Lang) -> Vec<(String, boo
     found
 }
 
-/// The scored search. `None` when nothing fits or the top two are too close.
 pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level, ctx: &Context) -> Option<String> {
     let chars: Vec<char> = word.chars().collect();
     let n = chars.len();
@@ -449,9 +375,6 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
     let pool = d.starting_with(&first).chain(d.starting_with(&swapped).filter(|_| lower[0] != lower[1]));
     let mut all: Vec<Scored> = Vec::new();
     let tail2 = &lower[n - 2..];
-    // Typos of two or more slips (and any fix of a Capitalised word) need a sign of a
-    // slip in the typed word: a letter pair unusual in the language (`ghbdtn`-style
-    // clusters, `тунт`). Rare real words and names are spelled with ordinary pairs.
     let odd = d.unseen_bigrams(&lower_s) >= 1;
     let dels: Vec<u32> = (0..n).map(|i| del_cost(&lower, i, lang)).collect();
     let mut scratch = Scratch::default();
@@ -474,9 +397,6 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
         if cost > max || cost == 0 {
             continue;
         }
-        // Candidates that may not win still compete: a two-letter word, another ending
-        // of the same word, a rare word with another ending, a rare target of a short
-        // word. They make the guess ambiguous (`нен`: `не` or `нее`).
         let ok = m >= 3
             && r < rank_limit
             && (r < TAIL_RANK || tail_ok(&lower, cand))
@@ -484,8 +404,6 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
             && !(lang == Lang::En && (en_affix_only(&lower_s, cand) || en_end_letter_only(&lower_s, cand)))
             && (odd || (cost <= ONE_SLIP && lowercase) || (lowercase && m > n && r < DROPPED_RANK && (is_subsequence(&lower, &cv) || unit_dist(&lower, &cv, 2) <= 2)) || (lowercase && level == Level::Aggressive))
             && !extra_or_cut_end(&lower, &cv)
-            // Past the default budget (Aggressive only) the word keeps its shape: at most
-            // one letter more or less (`зранилка` is not `заняла`, 2.9 slips and 2 letters).
             && (cost <= budget(n, Level::Normal) || m.abs_diff(n) <= 1);
         if m < 3 && r >= crate::engine::SHORT_WORD_MAX_RANK {
             continue;
@@ -499,10 +417,6 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
         }
         all.push(Scored { score, word: cand.to_string(), ok, cost, spell: false });
     }
-    // Spelling errors into real forms outside the frequency list (`стелаж` → `стеллаж`,
-    // `сталлежу` → `стеллажу`): only doubled / single letters and confused unstressed
-    // vowels, at most [`SPELL_OPS`] of them. These forms have no rank and compete as
-    // rank [`SPELL_RANK`].
     if lowercase && n >= SPELL_MIN_LEN && lang == Lang::Ru {
         for (cand, lone_vowel) in spelling_variants(d, &lower, lang) {
             if d.rank_exact(&cand).is_some() {
@@ -514,8 +428,6 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
             if cost > max || cost == 0 {
                 continue;
             }
-            // One confused vowel alone is how many real words and names differ
-            // (`азриэлю` / `азриелю`): into an unranked form only at the bold level.
             let ok = (!lone_vowel || level == Level::Aggressive)
                 && spell_tail_ok(&lower, &cv, lang)
                 && !(lang == Lang::Ru && ending_variant(&lower_s, &cand))
@@ -530,8 +442,6 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
             all.push(Scored { score, word: cand, ok, cost, spell: true });
         }
     }
-    // A spelling-error fix much closer than a frequent word (`сталлеж`: `стеллаж` at two
-    // confused vowels, `стала` at three slips) is not outvoted or blocked by it.
     if let Some(c) = all.iter().filter(|s| s.spell && s.ok).map(|s| s.cost).min() {
         all.retain(|s| s.cost < c + CLOSER_GAP);
     }
@@ -553,7 +463,6 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
     Some(match_case(word, &best.word))
 }
 
-/// Minimum letters for a wrong-layout + typo fix.
 pub fn layout_typo_min_len(level: Level) -> usize {
     match level {
         Level::Aggressive => 3,
@@ -561,13 +470,10 @@ pub fn layout_typo_min_len(level: Level) -> usize {
     }
 }
 
-/// `conv` (letters only, the token re-read in `dst`) is not a word of `dst` but a typo of
-/// one: the fix. The caller checks the typed side (unknown, no typo fix of its own).
 pub fn layout_typo(conv: &str, dst: Lang, level: Level) -> Option<String> {
     layout_typo_ctx(conv, dst, level, &Context::none())
 }
 
-/// [`layout_typo`] with the words typed before (in `dst`).
 pub fn layout_typo_ctx(conv: &str, dst: Lang, level: Level, ctx: &Context) -> Option<String> {
     if level == Level::Cautious || conv.chars().count() < layout_typo_min_len(level) {
         return None;
@@ -582,10 +488,6 @@ pub fn layout_typo_ctx(conv: &str, dst: Lang, level: Level, ctx: &Context) -> Op
     crate::typo::suggest_ctx(conv, dst, level, ctx)
 }
 
-/// The typed side of a wrong-layout + typo fix looks foreign to its own language: it has
-/// a letter pair unusual there (`xnjj`: `xn`), more than its other-layout reading has in
-/// the other language. Unknown names and slang of the typed language usually don't, and
-/// stay.
 pub fn looks_foreign(typed_letters: &str, src: Lang) -> bool {
     let odd = dict::get(src).unseen_bigrams(typed_letters);
     let conv = layout::convert(typed_letters, src);
@@ -593,8 +495,6 @@ pub fn looks_foreign(typed_letters: &str, src: Lang) -> bool {
     odd >= 1 && dict::get(src.other()).unseen_bigrams(&conv_letters) < odd
 }
 
-/// Audit helper: `t`, a real word of `lang` treated as an unknown one, read in the other
-/// layout and typo-fixed there (what [`layout_typo`] would do to an unknown name).
 #[doc(hidden)]
 pub fn layout_typo_as_unknown(t: &str, lang: Lang) -> Option<String> {
     layout_typo_as_unknown_level(t, lang, Level::default())
@@ -628,23 +528,17 @@ mod tests {
         assert_eq!(suggest("teh", Lang::En).as_deref(), Some("the"));
         assert_eq!(suggest("adn", Lang::En).as_deref(), Some("and"));
         assert_eq!(suggest("чот", Lang::Ru).as_deref(), Some("что"));
-        // Ambiguous or too far: left alone.
         assert_eq!(suggest("тта", Lang::Ru), None);
-        // Capitalised 3–4 letter tokens are mostly names and abbreviations.
         assert_eq!(suggest("Teh", Lang::En), None);
     }
 
     #[test]
     fn more_slips_in_longer_words() {
-        // Two slips from 5 letters.
         assert_eq!(suggest("превт", Lang::Ru).as_deref(), Some("привет"));
         assert_eq!(suggest("првте", Lang::Ru).as_deref(), Some("привет"));
         assert_eq!(suggest("сгоднч", Lang::Ru).as_deref(), Some("сегодня"));
         assert_eq!(suggest("wierd", Lang::En).as_deref(), Some("weird"));
-        // The «double error» case: fixed only because the scored check clearly supports
-        // it (one close frequent word, the runner-up far behind).
         assert_eq!(suggest("ввесия", Lang::Ru).as_deref(), Some("версия"));
-        // The strict rules alone (Level::Cautious) leave all of these.
         for (w, l) in [("превт", Lang::Ru), ("сгоднч", Lang::Ru), ("wierd", Lang::En), ("ввесия", Lang::Ru)] {
             assert_eq!(crate::typo::suggest_level(w, l, Level::Cautious), None, "{w}");
         }
@@ -652,8 +546,6 @@ mod tests {
 
     #[test]
     fn spelling_errors() {
-        // A doubled letter typed once or twice, confused unstressed vowels (since 0.3.74),
-        // also into forms outside the frequency list (`стеллаж`), at every wide level.
         let cases = [
             ("стелаж", "стеллаж"),
             ("стелажу", "стеллажу"),
@@ -673,13 +565,10 @@ mod tests {
             }
             assert_eq!(crate::typo::suggest_level("adress", Lang::En, level).as_deref(), Some("address"));
         }
-        // Not into a proper-name form, not across a prefix (`вв-`), not another ending
-        // of the same word.
         let d = dict::get(Lang::Ru);
         for (w, not) in [("азриэлю", "азриелю"), ("ввязали", "вязали"), ("бахнулись", "бахнулась"), ("бритвой", "братвой")] {
             assert_ne!(crate::typo::suggest_as_unknown_level(d, w, Lang::Ru, Level::Normal).as_deref(), Some(not), "{w}");
         }
-        // One confused vowel alone into an unranked form only at the bold level.
         assert!(spelling_variants(d, &"стелаж".chars().collect::<Vec<_>>(), Lang::Ru).iter().any(|(w, lone)| w == "стеллаж" && !lone));
     }
 
@@ -716,19 +605,15 @@ mod tests {
             let l = layout::detect_script(w).unwrap();
             assert_eq!(suggest(w, l), None, "{w}");
         }
-        // Letters added at the end make another word or a name, not a slip.
         assert_eq!(suggest("Yandx", Lang::En), None);
     }
 
     #[test]
     fn clipped_colloquial_words_stay() {
-        // `загран` used to become `заранее` (weighted cost 1.9, three unweighted
-        // edits: not letters left out of a frequent word).
         for w in ["загран", "универ", "препод", "инфа", "проц", "видос", "клава", "инет", "конфа", "собес", "курсач", "училка"] {
             assert_eq!(suggest(w, Lang::Ru), None, "{w}");
             assert_eq!(crate::typo::suggest_level(w, Lang::Ru, Level::Aggressive), None, "{w} aggressive");
         }
-        // True missing letters still fix.
         assert_eq!(suggest("програма", Lang::Ru).as_deref(), Some("программа"));
     }
 
@@ -736,10 +621,7 @@ mod tests {
     fn layout_and_typo() {
         assert_eq!(layout_typo("чтоо", Lang::Ru, Level::Normal).as_deref(), Some("что"));
         assert_eq!(layout_typo("чтоо", Lang::Ru, Level::Cautious), None);
-        // A real word is not "fixed".
         assert_eq!(layout_typo("привет", Lang::Ru, Level::Normal), None);
-        // The typed side must look foreign: `xnjj` has `xn`, a real-looking English
-        // name does not.
         assert!(looks_foreign("xnjj", Lang::En));
         assert!(!looks_foreign("bizon", Lang::En));
     }

@@ -1,4 +1,3 @@
-//! Audit of the typo fixer: correctly spelled words must stay, realistic typos must be fixed.
 use layout_keeper_core::{layout::Lang, typo};
 
 const RU_OK: &str = "
@@ -79,7 +78,6 @@ really thanks please hello world because something nothing everything
 working worked works rename renamed delete deleted deleting
 ";
 
-/// (typo, expected fix)
 const RU_FIX: &[(&str, &str)] = &[
     ("поечаток", "опечаток"),
     ("пирвет", "привет"),
@@ -110,7 +108,6 @@ const RU_FIX: &[(&str, &str)] = &[
     ("тллюминатора", "иллюминатора"),
     ("тиллюминатора", "иллюминатора"),
 ];
-
 
 const EN_FIX: &[(&str, &str)] = &[
     ("becuase", "because"),

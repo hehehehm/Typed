@@ -1,12 +1,3 @@
-//! Exhaustive typist false-positive / typo-recovery sweep across ranked words,
-//! all full forms (RU+EN), productive mat forms, n-grams (clean + space/merge
-//! errors), hyphenated words (clean + segment typos), single-edit typo types
-//! (subst/omit/insert/double/transpose across lower/Title/CAPS), hand-shift ±1,
-//! and layout conversion across all cases.
-//!
-//! ```text
-//! SWEEP_OUT=/tmp/typist_sweep.txt cargo test --release -p layout_keeper_core --test typist_sweep -- --ignored --nocapture
-//! ```
 use layout_keeper_core::{
     dict, engine::Decision, layout, morph, ngram, split, typo, Config, Engine, EngineOptions, Lang,
 };
@@ -296,7 +287,6 @@ fn hyphen_from_corpora() -> Vec<String> {
             }
         }
     }
-    // Plausible Russian/English compounds (must stay untouched).
     for w in [
         "кошко-мальчик", "кошко-девочка", "мальчик-с-пальчик", "красно-белый", "нейро-сеть",
         "псевдо-код", "мини-офис", "веб-сайт", "онлайн-курс", "видео-звонок", "аудио-книга",
@@ -362,8 +352,6 @@ enum EditKind {
     Transpose,
 }
 
-/// Apply one deterministic realistic typo near the middle of `w`.
-/// Returns `None` if `w` is too short or the mutated form happens to be a valid word.
 fn make_edit(w: &str, lang: Lang, kind: EditKind) -> Option<String> {
     let cs: Vec<char> = w.chars().collect();
     let n = cs.len();
@@ -420,7 +408,6 @@ fn make_edit(w: &str, lang: Lang, kind: EditKind) -> Option<String> {
     if d.is_word(&lower) || morph::is_known_form(d, &lower) {
         return None;
     }
-    // Also skip if converted form is a valid word of the other language.
     let other_conv = layout::convert(&lower, lang);
     if dict::get(lang.other()).is_word(&other_conv) {
         return None;
@@ -496,7 +483,6 @@ fn sweep_layout_convert(rows: &[&Recall], src: Lang, words: &[String]) {
     });
 }
 
-/// All productive mat forms (3 cases = ~2.12M) + hyphenated corpus words.
 #[test]
 #[ignore]
 fn typist_sweep_mat_and_hyphen_smoke() {
@@ -547,7 +533,6 @@ fn typist_sweep() {
     let t_all = Instant::now();
     let mut report = String::new();
 
-    // 1. All ranked words (RU+EN) × 3 cases
     section(1);
     let t0 = Instant::now();
     let mut ranked: Vec<(Lang, String, u32)> = Vec::new();
@@ -586,7 +571,6 @@ fn typist_sweep() {
     });
     println!("fp_ranked done in {:.1}s", t0.elapsed().as_secs_f64());
 
-    // 2. All full forms (RU+EN, all morph forms) × 3 cases (~11.92M)
     section(2);
     let t0 = Instant::now();
     let mut forms: Vec<(Lang, String)> = Vec::new();
@@ -619,7 +603,6 @@ fn typist_sweep() {
     });
     println!("fp_full_forms ({forms_total} lemmas) done in {:.1}s", t0.elapsed().as_secs_f64());
 
-    // 3. All productive mat forms × 3 cases (~2.12M)
     section(3);
     let t0 = Instant::now();
     let mat = morph::mat_forms();
@@ -628,7 +611,6 @@ fn typist_sweep() {
     sweep_tokens(&b_mat, &mat, true);
     println!("fp_mat ({mat_total} forms) done in {:.1}s", t0.elapsed().as_secs_f64());
 
-    // 4. Hyphenated words (corpora + particles + compound stems) × 3 cases
     section(4);
     let t0 = Instant::now();
     let hy = hyphen_from_corpora();
@@ -636,7 +618,6 @@ fn typist_sweep() {
     sweep_tokens(&b_hy, &hy, true);
     println!("fp_hyphen ({} words) done in {:.1}s", hy.len(), t0.elapsed().as_secs_f64());
 
-    // 5. All corpus bi/trigrams clean FP (~783k)
     section(5);
     let t0 = Instant::now();
     let mut ngrams_all: Vec<(Lang, Vec<String>)> = Vec::new();
@@ -670,7 +651,6 @@ fn typist_sweep() {
     });
     println!("fp_ngram_phrase ({ngrams_total}) done in {:.1}s", t0.elapsed().as_secs_f64());
 
-    // 6. Single-letter prep valid & glued (lower + CAPS) + all RU prep bigrams
     section(6);
     let t0 = Instant::now();
     let b_space_g = Recall::new("space_glued_prep");
@@ -708,7 +688,6 @@ fn typist_sweep() {
             }
         }
     });
-    // Also check all RU corpus bigrams starting with single-letter prep when glued.
     let ru_prep_bi: Vec<(String, String)> = ngrams_all
         .iter()
         .filter(|(l, p)| *l == Lang::Ru && p.len() == 2 && PREPS.contains(&p[0].as_str()) && p[1].chars().count() >= 3)
@@ -731,7 +710,6 @@ fn typist_sweep() {
     });
     println!("space_prep done in {:.1}s", t0.elapsed().as_secs_f64());
 
-    // 7. Corpus bigrams/trigrams for space/merge errors (sampled 10% across all bi/tri)
     section(7);
     let t0 = Instant::now();
     let bi_all: Vec<&Vec<String>> = ngrams_all.iter().filter(|(_, p)| p.len() == 2).map(|(_, p)| p).collect();
@@ -784,7 +762,6 @@ fn typist_sweep() {
             }
         }
     });
-    // Extra-space inside a word (5% of len>=5 ranked words): checks whether splitting leaves second half mangled.
     let extra_space_src: Vec<(Lang, String)> = ranked
         .iter()
         .filter(|(_, w, _)| w.chars().count() >= 5 && w.chars().all(|c| c.is_alphabetic()))
@@ -814,7 +791,6 @@ fn typist_sweep() {
         t0.elapsed().as_secs_f64()
     );
 
-    // 8. Hand-shift ±1: 100% ranked words (lower) + 25% Title/CAPS + 5% mat_forms
     section(8);
     let t0 = Instant::now();
     let r_shift_ranked = Recall::new("typo_hand_shift_ranked (100% lower)");
@@ -847,9 +823,7 @@ fn typist_sweep() {
     run_shift(&r_shift_mat, &mat_sample);
     println!("hand_shift done in {:.1}s", t0.elapsed().as_secs_f64());
 
-    // 9. Single-edit typo types (all 5: SubstNb, Omit, InsertNb, Double, Transpose)
     section(9);
-    //    Stratified 25% of all 80,455 ranked words × 3 cases (lower/Title/CAPS)
     let t0 = Instant::now();
     let ranked_edit = strided(&ranked, 4);
     let r_sub = Recall::new("typo1_subst_nb (25%x3)");
@@ -891,7 +865,6 @@ fn typist_sweep() {
     });
     println!("typo_single_edit done in {:.1}s", t0.elapsed().as_secs_f64());
 
-    // 10. Hyphen typos (particles + corpus hyphen segments, 3 cases)
     section(10);
     let t0 = Instant::now();
     let r_hy_typo = Recall::new("typo_hyphen (3 cases)");
@@ -913,7 +886,6 @@ fn typist_sweep() {
             }
         }
     }
-    // Left-segment typos on hyphen_from_corpora (Russian/English len>=4 heads).
     for hw in &hy {
         let Some((a, b)) = hw.split_once('-') else { continue };
         let Some(lang) = layout::detect_script(a) else { continue };
@@ -932,7 +904,6 @@ fn typist_sweep() {
     });
     println!("typo_hyphen done in {:.1}s", t0.elapsed().as_secs_f64());
 
-    // 11. Layout conversion recall (100% ranked RU+EN, lower/Title/CAPS + 2-3 letter)
     section(11);
     let t0 = Instant::now();
     let ru_words: Vec<String> = dict::get(Lang::Ru).iter().map(|(w, _)| w.to_string()).collect();
@@ -1024,8 +995,6 @@ fn typist_sweep() {
     }
 }
 
-/// Dump every wrong-layout typing of ranked words (all cases) as TSV
-/// `typed\tgot\texpected` to `SWEEP_DUMP` for cross-version diffs.
 #[test]
 #[ignore]
 fn typist_sweep_dump_layout() {

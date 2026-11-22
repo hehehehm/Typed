@@ -1,4 +1,3 @@
-//! Bundled window / tray / welcome marks. Each style is a full-bleed rounded square.
 
 use eframe::egui;
 use layout_keeper_core::LogoStyle;
@@ -80,7 +79,6 @@ pub fn texture(ctx: &egui::Context, style: LogoStyle) -> egui::TextureHandle {
     )
 }
 
-/// Same mark as `texture`, with its own alpha faded to 0 from 85% of its height.
 pub fn texture_faded(ctx: &egui::Context, style: LogoStyle) -> egui::TextureHandle {
     let icon = eframe::icon_data::from_png_bytes(png(style)).expect("bundled logo png");
     let w = icon.width as usize;

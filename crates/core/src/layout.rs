@@ -1,12 +1,7 @@
-//! Physical-key layout maps: US QWERTY <-> Russian ЙЦУКЕН (Windows/macOS/X11 "ru" standard).
-//!
-//! Every pair is "the character the same physical key produces" in each layout,
-//! so converting a string is a lossless re-interpretation of the keys pressed.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Input language / keyboard layout handled by LayoutKeeper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Lang {
@@ -42,7 +37,6 @@ impl fmt::Display for Lang {
     }
 }
 
-/// (US char, RU char) produced by the same physical key, unshifted and shifted.
 const PAIRS: &[(char, char)] = &[
     ('`', 'ё'), ('~', 'Ё'),
     ('q', 'й'), ('w', 'ц'), ('e', 'у'), ('r', 'к'), ('t', 'е'), ('y', 'н'),
@@ -57,22 +51,17 @@ const PAIRS: &[(char, char)] = &[
     ('J', 'О'), ('K', 'Л'), ('L', 'Д'), (':', 'Ж'), ('"', 'Э'),
     ('Z', 'Я'), ('X', 'Ч'), ('C', 'С'), ('V', 'М'), ('B', 'И'), ('N', 'Т'),
     ('M', 'Ь'), ('<', 'Б'), ('>', 'Ю'), ('?', ','),
-    // Shifted digit row where the layouts differ.
     ('@', '"'), ('#', '№'), ('$', ';'), ('^', ':'), ('&', '?'),
 ];
 
-/// Character produced in Russian layout by the key that gives `c` in US layout.
 pub fn en_to_ru(c: char) -> Option<char> {
     PAIRS.iter().find(|p| p.0 == c).map(|p| p.1)
 }
 
-/// Character produced in US layout by the key that gives `c` in Russian layout.
 pub fn ru_to_en(c: char) -> Option<char> {
     PAIRS.iter().find(|p| p.1 == c).map(|p| p.0)
 }
 
-/// Map one character typed in layout `from` to what the same key gives in the other layout.
-/// Characters that are identical in both layouts (digits, space, `-`, `=` …) pass through.
 pub fn convert_char(c: char, from: Lang) -> char {
     match from {
         Lang::En => en_to_ru(c),
@@ -81,13 +70,10 @@ pub fn convert_char(c: char, from: Lang) -> char {
     .unwrap_or(c)
 }
 
-/// Re-interpret the whole string as if it had been typed in the other layout.
 pub fn convert(s: &str, from: Lang) -> String {
     s.chars().map(|c| convert_char(c, from)).collect()
 }
 
-/// Convert layout-dependent punctuation without turning literal punctuation into letters.
-/// For example, EN `?` becomes RU `,`, but EN `,` stays `,` rather than becoming `б`.
 pub fn convert_punctuation(s: &str, from: Lang) -> String {
     s.chars().map(|c| {
         let mapped = convert_char(c, from);
@@ -95,10 +81,6 @@ pub fn convert_punctuation(s: &str, from: Lang) -> String {
     }).collect()
 }
 
-/// Flip a selected text to the other layout ("convert selection" hotkey).
-/// The source layout is the script with more letters; words already in the other
-/// script stay as they are. Returns the new text and the layout it is now in,
-/// or `None` when there is nothing to convert.
 pub fn convert_text(text: &str) -> Option<(String, Lang)> {
     let lat = text.chars().filter(|&c| is_latin_letter(c)).count();
     let cyr = text.chars().filter(|&c| is_cyrillic_letter(c)).count();
@@ -137,7 +119,6 @@ pub fn is_cyrillic_letter(c: char) -> bool {
     matches!(c, 'а'..='я' | 'А'..='Я' | 'ё' | 'Ё')
 }
 
-/// Script of a token judged by its letters only; `None` for no letters or mixed scripts.
 pub fn detect_script(s: &str) -> Option<Lang> {
     let lat = s.chars().filter(|&c| is_latin_letter(c)).count();
     let cyr = s.chars().filter(|&c| is_cyrillic_letter(c)).count();
@@ -149,8 +130,6 @@ pub fn detect_script(s: &str) -> Option<Lang> {
     }
 }
 
-/// True when `c` is (or, on the same key in the other layout, would be) a letter.
-/// Such characters belong to a word even if they look like punctuation (`,` = `б`).
 pub fn is_word_char(c: char) -> bool {
     if c.is_alphanumeric() {
         return true;
@@ -158,8 +137,6 @@ pub fn is_word_char(c: char) -> bool {
     en_to_ru(c).is_some_and(|r| r.is_alphabetic()) || ru_to_en(c).is_some_and(|e| e.is_alphabetic())
 }
 
-/// For text injection by physical key: which US-layout character (key + shift)
-/// produces `c` when layout `target` is active. `None` if no single key does.
 pub fn us_key_for(c: char, target: Lang) -> Option<char> {
     match target {
         Lang::En => (c.is_ascii_graphic() || c == ' ').then_some(c),
@@ -167,7 +144,6 @@ pub fn us_key_for(c: char, target: Lang) -> Option<char> {
             if let Some(e) = ru_to_en(c) {
                 Some(e)
             } else if en_to_ru(c).is_none() && (c.is_ascii_graphic() || c == ' ') {
-                // Same character on the same key in both layouts (digits, '-', '=', '!' …).
                 Some(c)
             } else {
                 None
@@ -176,8 +152,6 @@ pub fn us_key_for(c: char, target: Lang) -> Option<char> {
     }
 }
 
-/// Physical unshifted US key rows, including punctuation keys that are letters
-/// on ЙЦУКЕН (`жэхъ`, `бю`, `[];',./`).
 const PHYS_ROWS: [&str; 4] = [
     "`1234567890-=",
     "qwertyuiop[]",
@@ -220,7 +194,6 @@ fn apply_us_shift(phys: char, shift: bool) -> char {
     phys
 }
 
-/// The key `dir` columns away on the same physical row (`dir` is −1 or +1).
 pub fn shift_phys(phys: char, dir: i32) -> Option<char> {
     if dir == 0 {
         return Some(phys);
@@ -237,8 +210,6 @@ pub fn shift_phys(phys: char, dir: i32) -> Option<char> {
     None
 }
 
-/// What `c` (produced in `from`) would have been if the same hand motion had hit
-/// the key `dir` columns away, read in layout `to`.
 pub fn shift_char(c: char, from: Lang, to: Lang, dir: i32) -> Option<char> {
     let us = us_key_for(c, from)?;
     let (phys, shift) = unshift_us(us);
@@ -250,7 +221,6 @@ pub fn shift_char(c: char, from: Lang, to: Lang, dir: i32) -> Option<char> {
     })
 }
 
-/// [`shift_char`] for every character of `s`. `None` if any key would fall off the row.
 pub fn shift_token(s: &str, from: Lang, to: Lang, dir: i32) -> Option<String> {
     if dir != 1 && dir != -1 {
         return None;
@@ -327,31 +297,25 @@ mod tests {
         assert_eq!(convert_punctuation(",.?№;:\"", Lang::Ru), "?/&#$^@");
     }
 
-
     #[test]
     fn convert_selected_text() {
         assert_eq!(convert_text("ghbdtn? rfr ltkf"), Some(("привет, как дела".into(), Lang::Ru)));
         assert_eq!(convert_text("руддщ цщкдв"), Some(("hello world".into(), Lang::En)));
-        // Words already in the other script are kept.
         assert_eq!(convert_text("ghbdtn Москва"), Some(("привет Москва".into(), Lang::Ru)));
         assert_eq!(convert_text("line1\nyt nfr\t"), Some(("дшту1\nне так\t".into(), Lang::Ru)));
         assert_eq!(convert_text("123 !!"), None);
     }
 
-
     #[test]
     fn hand_shift_one_column() {
-        // Hands one key to the right of "привет" / "hello".
         assert_eq!(shift_token("привет", Lang::Ru, Lang::Ru, 1).as_deref(), Some("ротань"));
         assert_eq!(shift_token("ротань", Lang::Ru, Lang::Ru, -1).as_deref(), Some("привет"));
         assert_eq!(shift_token("hello", Lang::En, Lang::En, 1).as_deref(), Some("jr;;p"));
         assert_eq!(shift_token("jr;;p", Lang::En, Lang::En, -1).as_deref(), Some("hello"));
-        // The same motion typed in the other layout.
         assert_eq!(shift_token("hello", Lang::En, Lang::Ru, 1).as_deref(), Some("окжжз"));
         assert_eq!(shift_token("окжжз", Lang::Ru, Lang::En, -1).as_deref(), Some("hello"));
         assert_eq!(shift_token("привет", Lang::Ru, Lang::En, 1).as_deref(), Some("hjnfym"));
         assert_eq!(shift_token("hjnfym", Lang::En, Lang::Ru, -1).as_deref(), Some("привет"));
-        // A key on the edge cannot move off the row.
         assert_eq!(shift_token("фыва", Lang::Ru, Lang::Ru, -1), None);
         assert_eq!(shift_phys('q', -1), None);
         assert_eq!(shift_phys('p', 1), Some('['));

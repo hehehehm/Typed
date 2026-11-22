@@ -1,7 +1,3 @@
-//! Installed and running apps, for add-field autocomplete and path tooltips.
-//!
-//! Scanning (Start Menu shortcuts, registry, running processes, `/Applications`)
-//! always happens on a background thread. The UI only reads a cached snapshot.
 
 use crate::app_id::{basename, has_path, is_hidden_app};
 use std::path::{Path, PathBuf};
@@ -14,14 +10,10 @@ const MAX_SUGGEST: usize = 8;
 const MIN_QUERY: usize = 2;
 const RESCAN: Duration = Duration::from_secs(5 * 60);
 
-/// One installed, running, or already-remembered application.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppEntry {
-    /// Full path when known, otherwise a bare exe / bundle id.
     pub id: String,
-    /// File name (`cs2.exe`, `Photoshop.exe`, `Safari.app`).
     pub exe: String,
-    /// Human name (`Counter-Strike 2`, `Adobe Photoshop`).
     pub display_name: String,
 }
 
@@ -43,12 +35,10 @@ impl AppEntry {
     }
 }
 
-/// Cached catalog plus a background scanner.
 pub struct AppCatalog {
     entries: Arc<Mutex<Vec<AppEntry>>>,
     rx: Receiver<Vec<AppEntry>>,
     tx_req: Sender<ScanReq>,
-    /// When true, [`inject`] owns the list and no OS scan is started (tests).
     frozen: bool,
     last_scan: Option<Instant>,
     started: bool,
@@ -88,7 +78,6 @@ impl AppCatalog {
         }
     }
 
-    /// Replace the catalog and never start an OS scan (headless tests / shots).
     #[cfg(test)]
     pub fn inject(&mut self, entries: Vec<AppEntry>) {
         self.frozen = true;
@@ -99,7 +88,6 @@ impl AppCatalog {
         }
     }
 
-    /// Start (or refresh) a background scan. Never blocks.
     pub fn ensure_scan(&mut self) {
         if self.frozen {
             return;
@@ -117,7 +105,6 @@ impl AppCatalog {
         }
     }
 
-    /// Pull a finished scan and request a repaint when new data arrives.
     pub fn poll(&mut self, ctx: &eframe::egui::Context) {
         let mut got = false;
         while let Ok(list) = self.rx.try_recv() {
@@ -135,7 +122,6 @@ impl AppCatalog {
         self.entries.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
-    /// Full path for `id` when the catalog knows one; `None` if only a name is known.
     pub fn resolve_path(&self, id: &str) -> Option<String> {
         if has_path(id) {
             return Some(id.to_string());
@@ -151,7 +137,6 @@ impl AppCatalog {
             .next()
     }
 
-    /// Up to [`MAX_SUGGEST`] matches for the typed query, plus already-known apps.
     pub fn suggest(&self, query: &str, known: &[AppEntry]) -> Vec<AppEntry> {
         suggestions(query, &self.snapshot(), known)
     }
@@ -188,7 +173,6 @@ pub fn suggest_for(
     scored
 }
 
-/// Public helper used by the UI: entries only, already capped.
 pub fn suggestions(query: &str, catalog: &[AppEntry], known: &[AppEntry]) -> Vec<AppEntry> {
     suggest_for(query, catalog, known, MAX_SUGGEST)
         .into_iter()
@@ -310,7 +294,6 @@ fn scan_installed() -> Vec<AppEntry> {
     out
 }
 
-/// MS-SHLLINK: read a local target path from a `.lnk` file (no COM).
 pub fn parse_lnk_path(bytes: &[u8]) -> Option<String> {
     if bytes.len() < 0x4c {
         return None;
@@ -448,7 +431,6 @@ mod win {
             start_menu(out);
             app_paths(out);
             uninstall(out);
-            // S_OK (0) or S_FALSE (1, already initialized): only uninit if we initialized.
             if hr == 0 {
                 CoUninitialize();
             }
@@ -738,7 +720,6 @@ mod win {
         }
     }
 
-    /// IShellLinkW fallback when the `.lnk` has no LinkInfo local path.
     fn com_resolve_lnk(path: &Path) -> Option<String> {
         unsafe { com_resolve_lnk_inner(path) }
     }
@@ -768,7 +749,6 @@ mod win {
             lpVtbl: *const IUnknownVtbl,
         }
 
-        // IPersistFile: IUnknown + GetClassID + IsDirty + Load + Save + SaveCompleted + GetCurFile
         #[repr(C)]
         struct IPersistFileVtbl {
             query_interface: unsafe extern "system" fn(
@@ -786,7 +766,6 @@ mod win {
             get_cur_file: unsafe extern "system" fn(*mut IUnknown, *mut *mut u16) -> i32,
         }
 
-        // IShellLinkW: IUnknown + GetPath as the first method.
         #[repr(C)]
         struct IShellLinkWVtbl {
             query_interface: unsafe extern "system" fn(
@@ -803,7 +782,6 @@ mod win {
                 *mut core::ffi::c_void,
                 u32,
             ) -> i32,
-            // remaining methods unused
         }
 
         let mut link: *mut IUnknown = ptr::null_mut();
@@ -1046,16 +1024,15 @@ mod tests {
 
     #[test]
     fn parse_minimal_lnk_local_path() {
-        // Hand-built LinkInfo with a LocalBasePath, no IDList.
         let path = br"C:\Games\cs2.exe";
         let mut bytes = vec![0u8; 0x4c];
         bytes[0..4].copy_from_slice(&0x4cu32.to_le_bytes());
-        bytes[0x14..0x18].copy_from_slice(&2u32.to_le_bytes()); // HasLinkInfo
+        bytes[0x14..0x18].copy_from_slice(&2u32.to_le_bytes());
         let mut info = vec![0u8; 0x1c + path.len() + 1];
         let size = info.len() as u32;
         info[0..4].copy_from_slice(&size.to_le_bytes());
         info[4..8].copy_from_slice(&0x1cu32.to_le_bytes());
-        info[8..12].copy_from_slice(&1u32.to_le_bytes()); // VolumeIDAndLocalBasePath
+        info[8..12].copy_from_slice(&1u32.to_le_bytes());
         info[16..20].copy_from_slice(&0x1cu32.to_le_bytes());
         info[0x1c..0x1c + path.len()].copy_from_slice(path);
         bytes.extend_from_slice(&info);

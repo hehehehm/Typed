@@ -1,6 +1,3 @@
-//! Lists corpus words missing from the dictionaries that the typo fixer would change
-//! without context but keeps after their most frequent previous word:
-//! `ctx_scan <ngrams.tsv> <ru|en> [limit]` (debug helper for the context model).
 use layout_keeper_core::{dict, dict::Dictionary, layout::Lang, ngram::Context, typo, Engine, EngineOptions};
 use std::collections::HashMap;
 fn main() {

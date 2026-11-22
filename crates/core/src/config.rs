@@ -1,8 +1,3 @@
-//! Local JSON configuration: remembered per-app layouts, exceptions, hotkey, autocorrect switches.
-//!
-//! Stored at `<user config dir>/typed/config.json`
-//! (Linux `~/.config`, macOS `~/Library/Application Support`, Windows `%APPDATA%`).
-//! The file contains app identifiers and layout codes only — never typed text.
 
 use crate::engine::EngineOptions;
 use crate::layout::Lang;
@@ -14,7 +9,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-/// A key that can take part in a user-chosen hotkey.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyCode {
     Pause,
@@ -23,18 +17,12 @@ pub enum HotkeyCode {
     Enter,
     Escape,
     Backspace,
-    /// `A`–`Z`.
     Letter(char),
-    /// `0`–`9`.
     Digit(u8),
-    /// `F1`–`F12`.
     F(u8),
-    /// Press both Shift keys together (Punto Switcher style).
     BothShifts,
 }
 
-/// User-chosen key combination, stored as `"Ctrl+Shift+K"`.
-/// Old values `Pause`, `CtrlAltSpace` and `ShiftShift` still parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hotkey {
     pub ctrl: bool,
@@ -44,7 +32,7 @@ pub struct Hotkey {
     pub key: HotkeyCode,
 }
 
-#[allow(non_upper_case_globals)] // Pause / ShiftShift / CtrlAltSpace keep the old enum names.
+#[allow(non_upper_case_globals)]
 impl Hotkey {
     pub const fn new(ctrl: bool, alt: bool, shift: bool, meta: bool, key: HotkeyCode) -> Self {
         Self { ctrl, alt, shift, meta, key }
@@ -55,12 +43,9 @@ impl Hotkey {
     pub const CtrlAltSpace: Self = Self::new(true, true, false, false, HotkeyCode::Space);
     pub const CTRL_SHIFT_K: Self = Self::new(true, false, true, false, HotkeyCode::Letter('K'));
     pub const CTRL_SHIFT_V: Self = Self::new(true, false, true, false, HotkeyCode::Letter('V'));
-    /// Default "undo the last autocorrection" (Ctrl+Option+Z on macOS). Ctrl+Shift+Z is
-    /// Redo in many apps, so it is not used.
     pub const CTRL_ALT_Z: Self = Self::new(true, true, false, false, HotkeyCode::Letter('Z'));
     pub const CTRL_ALT_BACKSPACE: Self = Self::new(true, true, false, false, HotkeyCode::Backspace);
     pub const SHIFT_PAUSE: Self = Self::new(false, false, true, false, HotkeyCode::Pause);
-    /// Default "undo the last correction immediately after it": a bare Backspace.
     pub const BACKSPACE: Self = Self::new(false, false, false, false, HotkeyCode::Backspace);
 
     pub fn is_plain_backspace(self) -> bool {
@@ -71,7 +56,6 @@ impl Hotkey {
         matches!(self.key, HotkeyCode::BothShifts)
     }
 
-    /// Does this combination match a physical key plus the current modifiers?
     pub fn matches(self, key: HotkeyCode, ctrl: bool, alt: bool, shift: bool, meta: bool) -> bool {
         !self.is_both_shifts()
             && self.key == key
@@ -81,15 +65,10 @@ impl Hotkey {
             && self.meta == meta
     }
 
-    /// Like [`matches`], but extra Shift does not block a combo that does not include Shift
-    /// (so Pause still converts a word while the user is holding Shift to capitalize).
     pub fn matches_relaxed_shift(self, key: HotkeyCode, ctrl: bool, alt: bool, shift: bool, meta: bool) -> bool {
         self.matches(key, ctrl, alt, if self.shift { shift } else { false }, meta)
     }
 
-    /// Letters, digits and ordinary keys need Ctrl, Alt or Win/Cmd so they are
-    /// not stolen from normal typing. Pause, function keys, Backspace and
-    /// Shift+Shift are fine alone.
     pub fn is_safe(self) -> bool {
         if self.is_both_shifts() || matches!(self.key, HotkeyCode::Pause | HotkeyCode::F(_) | HotkeyCode::Backspace) {
             return true;
@@ -100,7 +79,6 @@ impl Hotkey {
 
 impl Default for Hotkey {
     fn default() -> Self {
-        // Macs have no Pause key and Ctrl+Option+Space is a system input-source shortcut.
         if cfg!(target_os = "macos") {
             Hotkey::ShiftShift
         } else {
@@ -234,19 +212,14 @@ impl<'de> Deserialize<'de> for Hotkey {
     }
 }
 
-/// Default apps where LayoutKeeper never touches input (case-insensitive substring of app id).
 pub fn default_exceptions() -> Vec<String> {
     [
-        // Password managers
         "keepass", "1password", "bitwarden", "lastpass", "dashlane", "enpass", "pass-", "seahorse",
         "com.apple.keychainaccess",
-        // Terminals / consoles (commands are not words)
         "terminal", "konsole", "xterm", "alacritty", "kitty", "wezterm", "foot", "tilix", "terminator",
         "urxvt", "iterm", "warp", "ghostty", "putty", "mobaxterm", "cmd.exe", "powershell", "pwsh", "conhost",
         "windowsterminal", "mintty",
-        // Remote desktops / VMs (the remote side has its own layout)
         "mstsc", "remmina", "vncviewer", "virtualbox", "vmware", "parallels",
-        // Games commonly use WASD; layout switching there is harmful
         "steam_app_",
     ]
     .into_iter()
@@ -254,12 +227,9 @@ pub fn default_exceptions() -> Vec<String> {
     .collect()
 }
 
-
-/// User-facing app mark shown in the window, tray and shortcuts picker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogoStyle {
-    /// Clean photo of a beach. The default, and the installed .ico / .icns.
     Beach,
     Artdeco,
     Ukiyoe,
@@ -292,109 +262,63 @@ impl<'de> Deserialize<'de> for LogoStyle {
             "ukiyoe" => LogoStyle::Ukiyoe,
             "poster" => LogoStyle::Poster,
             "porthole" => LogoStyle::Porthole,
-            // Older marks (suprematism, geometry, …) fall back to the default beach.
             _ => LogoStyle::Beach,
         })
     }
 }
 
-/// Bump when the welcome screen itself changes and should be shown once more.
 pub const CURRENT_WELCOME_GEN: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
-    /// Remembered layout per application id
-    /// (Windows: lowercase exe path; macOS: bundle id; Linux: WM_CLASS or process name).
     pub apps: BTreeMap<String, Lang>,
-    /// Fill in a default for apps that have none yet, from the layout the user picks there.
-    /// Never overwrites an existing assignment (only `set-app` / the GUI change those).
-    /// Always on at runtime; the field is kept so old `config.json` files still parse.
     pub auto_learn: bool,
-    /// Automatically fix words typed in the wrong layout.
     pub autocorrect: bool,
-    /// Convert single letters toward the focused app's assigned language.
-    /// Always on at runtime; the field is kept for config compatibility.
     #[serde(default = "default_convert_single_letters")]
     pub convert_single_letters: bool,
-    /// Fix one-letter typos (поечаток → опечаток). Always on at runtime;
-    /// the field is kept for config compatibility.
     #[serde(default = "default_true")]
     pub fix_typos: bool,
-    /// Never autocorrect or hotkey-convert in these apps (substring match, case-insensitive).
-    /// Layout memory still applies: assigned defaults are saved and restored on focus.
     pub exception_apps: Vec<String>,
-    /// Manual convert hotkey.
     pub hotkey: Hotkey,
-    /// Global shortcut that brings the settings / vault window to the front.
     #[serde(default = "default_summon_hotkey")]
     pub summon_hotkey: Hotkey,
     pub skip_urls_emails: bool,
     pub skip_tokens_with_digits: bool,
-    /// Minimum letters in a word for autocorrect.
     pub min_word_len: usize,
-    /// Lock the vault window after this many idle minutes (1..=120). Not a secret.
     pub vault_idle_minutes: u32,
-    /// User words / abbreviations for autocorrect (single tokens, Latin or Cyrillic).
-    /// They override built-in words: with `exe` here, `учу` typed in RU becomes `exe`.
     #[serde(default)]
     pub custom_words: Vec<String>,
-    /// Light (white) settings window. Default is the dark style.
     #[serde(default)]
     pub light_theme: bool,
-    /// Window, tray and Alt-Tab mark. Default is the beach photograph.
     #[serde(default, alias = "logo_style")]
     pub logo: LogoStyle,
-    /// Skip the first-launch welcome screen.
     #[serde(default)]
     pub hide_welcome: bool,
-    /// Which welcome revision the user has already been shown. Older configs are 0,
-    /// so a redesigned welcome can appear once even if hide_welcome is already set.
     #[serde(default)]
     pub welcome_gen: u32,
-    /// How many times each remembered app became focused. Used to sort the list.
     #[serde(default)]
     pub app_launches: BTreeMap<String, u32>,
-    /// Apps the user moved into the collapsed «hidden and system» group of the list
-    /// (normalised ids). Visual only: their layout is still applied on focus.
     #[serde(default)]
     pub hidden_apps: Vec<String>,
-    /// Undo the last autocorrection: the typed word comes back and joins `never_correct`.
     #[serde(default = "default_undo_hotkey")]
     pub undo_hotkey: Hotkey,
-    /// Undo the last correction with the key in [`Self::undo_key`] when it is pressed
-    /// immediately after that correction (before any other key). Shown in Settings.
     #[serde(default = "default_true")]
     pub undo_on_backspace: bool,
-    /// Key that undoes the last correction immediately after it. Default Backspace
-    /// keeps the historical behaviour. Missing in old `config.json` files (`serde` default).
     #[serde(default = "default_undo_key")]
     pub undo_key: Hotkey,
-    /// Words the user undid: never autocorrected again (normalised, lowercase).
     #[serde(default)]
     pub never_correct: Vec<String>,
-    /// How hard the typo fixer tries: `cautious` (the 0.3.71 rules), `normal` (default
-    /// since 0.3.72: shorter words, more slips per word) or `aggressive`.
     #[serde(default)]
     pub typo_level: crate::typo::Level,
-    /// Words whose typo fix the user undid twice: never typo-fixed again (normalised).
-    /// A wrong-layout reading still converts.
     #[serde(default)]
     pub never_typo_fix: Vec<String>,
-    /// Corrections undone once with Backspace (internal; `typo:` prefix for typo-only
-    /// undos). A second undo moves the word to `never_correct` / `never_typo_fix`.
     #[serde(default)]
     pub undone_once: Vec<String>,
-    /// Let the previous words (word n-grams) choose and veto typo fixes (since 0.3.72).
-    /// Always on at runtime; the field is kept for config compatibility.
     #[serde(default = "default_true")]
     pub use_context: bool,
-    /// Insert a missing space after a glued Russian function word (`вофисе` → `в офисе`).
-    /// Always on at runtime; the field is kept for config compatibility.
     #[serde(default = "default_true")]
     pub fix_missing_spaces: bool,
-    /// Windows: start Typed with administrator rights (a «Typed» Task Scheduler task at
-    /// sign-in), so layouts also switch in apps that run as administrator.
     #[serde(default)]
     pub run_as_admin: bool,
 }
@@ -440,8 +364,6 @@ fn default_convert_single_letters() -> bool {
 }
 
 fn default_undo_hotkey() -> Hotkey {
-    // New configs store the same default as `undo_key` (Backspace). Older files that
-    // already saved Ctrl+Alt+Z keep that combo as a second, anytime undo.
     Hotkey::BACKSPACE
 }
 
@@ -474,10 +396,6 @@ fn migrate_legacy_dir(old_dir: &Path, new_dir: &Path) {
 }
 
 impl Config {
-    /// `<config dir>/typed/config.json`, or `./typed.json` as a last resort.
-    /// `LAYOUT_KEEPER_CONFIG` overrides the path.
-    /// On first run, copies `config.json`, `vault.bin` and `typed.chk` from the
-    /// legacy `<config dir>/layout-keeper/` folder if the new files are missing.
     pub fn default_path() -> PathBuf {
         if let Some(p) = std::env::var_os("LAYOUT_KEEPER_CONFIG") {
             return PathBuf::from(p);
@@ -499,7 +417,6 @@ impl Config {
         }
     }
 
-    /// Load from `path`; a missing file yields defaults (and is created).
     pub fn load_or_create(path: &Path) -> io::Result<Config> {
         match std::fs::read_to_string(path) {
             Ok(s) => Self::from_json(&s),
@@ -522,7 +439,6 @@ impl Config {
         serde_json::to_string_pretty(self).expect("config serializes")
     }
 
-    /// Atomic save: write a temp file next to it, then rename.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(dir) = path.parent() {
             if !dir.as_os_str().is_empty() {
@@ -558,9 +474,6 @@ impl Config {
         self.apps.iter().find(|(k, _)| exe_name(k) == exe).map(|(_, l)| *l)
     }
 
-    /// Remember `lang` for the app. Returns true if something changed.
-    /// Keys are canonical (basename of a path, otherwise the normalised id);
-    /// any other key for the same exe is dropped.
     pub fn set_layout(&mut self, app_id: &str, lang: Lang) -> bool {
         let key = storage_app_id(app_id);
         let exe = exe_name(&key);
@@ -580,8 +493,6 @@ impl Config {
         changed | (self.apps.insert(key, lang) != Some(lang))
     }
 
-    /// If `app_id` is a full path and the same exe is stored as a bare name (or a
-    /// different path), keep the path so the settings list can show a real icon.
     pub fn prefer_app_path(&mut self, app_id: &str) -> bool {
         let key = storage_app_id(app_id);
         if !is_path_id(&key) {
@@ -624,13 +535,11 @@ impl Config {
         changed
     }
 
-    /// The user hid this app in the settings list.
     pub fn is_user_hidden(&self, app_id: &str) -> bool {
         let id = normalize_app_id(app_id);
         self.hidden_apps.iter().any(|h| *h == id)
     }
 
-    /// Hide (or show again) the app in the settings list. Returns true if something changed.
     pub fn set_user_hidden(&mut self, app_id: &str, hidden: bool) -> bool {
         let id = normalize_app_id(app_id);
         let had = self.hidden_apps.iter().any(|h| *h == id);
@@ -663,8 +572,6 @@ impl Config {
         changed
     }
 
-    /// Put `app_id` on the exceptions list (Typed fully off) and drop the same exe
-    /// from the layout list. Returns true if something changed.
     pub fn add_exception(&mut self, app_id: &str) -> bool {
         let key = storage_app_id(app_id);
         if key.is_empty() {
@@ -691,8 +598,6 @@ impl Config {
         self.exception_apps.len() != before
     }
 
-    /// Collapse path/name and case duplicates. If the same exe is in both lists,
-    /// the exception wins. Idempotent; called when a config is loaded.
     pub fn dedupe_app_lists(&mut self) {
         let mut apps: BTreeMap<String, Lang> = BTreeMap::new();
         for (k, lang) in std::mem::take(&mut self.apps) {
@@ -703,7 +608,6 @@ impl Config {
             let exe = exe_name(&key);
             if !exe.is_empty() {
                 if let Some(existing) = apps.keys().find(|e| exe_name(e) == exe).cloned() {
-                    // Prefer a full path over a bare exe name; last lang wins.
                     if is_path_id(&key) && !is_path_id(&existing) {
                         apps.remove(&existing);
                         apps.insert(key, lang);
@@ -721,8 +625,6 @@ impl Config {
             if e.trim().is_empty() {
                 continue;
             }
-            // Short default tokens (`terminal`, `powershell`) stay as-is so
-            // substring matching keeps working; path entries keep the path for icons.
             let key = storage_app_id(&e);
             let exe = exe_name(&key);
             let dedupe_key = if exe.is_empty() { key.clone() } else { exe };
@@ -740,7 +642,6 @@ impl Config {
             }
             exceptions.push(key);
         }
-        // Exception wins: drop the same exe from the layout list.
         apps.retain(|k, _| {
             let exe = exe_name(k);
             !exceptions.iter().any(|e| {
@@ -755,7 +656,6 @@ impl Config {
         self.app_launches.get(&normalize_app_id(app_id)).copied().unwrap_or(0)
     }
 
-    /// Count one focus of a remembered app. Returns the new total.
     pub fn record_launch(&mut self, app_id: &str) -> u32 {
         let id = normalize_app_id(app_id);
         let entry = self.app_launches.entry(id).or_insert(0);
@@ -783,12 +683,10 @@ impl Config {
         }
     }
 
-    /// Layout memory for new apps is always on; `auto_learn` is only kept in the file.
     pub fn learns_layouts(&self) -> bool {
         true
     }
 
-    /// Add a never-typo-fix word (normalised); `false` if it was already there or empty.
     pub fn add_never_typo(&mut self, word: &str) -> bool {
         let key = crate::engine::never_key(word);
         if key.is_empty() || self.never_typo_fix.iter().any(|w| crate::engine::never_key(w) == key) {
@@ -798,7 +696,6 @@ impl Config {
         true
     }
 
-    /// Apply one learning event from the engine; `true` if the config changed.
     pub fn apply_learn(&mut self, l: &crate::engine::Learned) -> bool {
         use crate::engine::Learned;
         match l {
@@ -817,7 +714,6 @@ impl Config {
                     return false;
                 }
                 self.undone_once.push(key.clone());
-                // Bounded: only recent single undos matter.
                 if self.undone_once.len() > UNDONE_ONCE_MAX {
                     self.undone_once.remove(0);
                 }
@@ -826,7 +722,6 @@ impl Config {
         }
     }
 
-    /// Add a never-correct word (normalised); `false` if it was already there or empty.
     pub fn add_never_correct(&mut self, word: &str) -> bool {
         let key = crate::engine::never_key(word);
         if key.is_empty() || self.never_correct.iter().any(|w| crate::engine::never_key(w) == key) {
@@ -837,15 +732,12 @@ impl Config {
     }
 }
 
-/// At most this many remembered single undos.
 pub const UNDONE_ONCE_MAX: usize = 200;
 
-/// App ids are compared case-insensitively (Windows paths, WM_CLASS variations).
 pub fn normalize_app_id(id: &str) -> String {
     id.trim().to_lowercase()
 }
 
-/// Last path component (`C:\Foo\Bar.EXE` → `bar.exe`); the whole id if there is no slash.
 pub fn exe_name(id: &str) -> String {
     let t = id.trim().trim_end_matches(['/', '\\']);
     t.rsplit(['/', '\\']).next().unwrap_or(t).to_lowercase()
@@ -1039,7 +931,6 @@ mod tests {
         assert!(c.set_user_hidden("CHAT", true));
         assert!(!c.set_user_hidden("chat", true));
         assert!(c.is_user_hidden("Chat"));
-        // Hiding is visual only: the layout stays assigned.
         assert_eq!(c.layout_for("chat"), Some(Lang::Ru));
         let back = Config::from_json(&c.to_json()).unwrap();
         assert!(back.is_user_hidden("chat"));
@@ -1084,7 +975,6 @@ mod tests {
         assert!(!saved.convert_single_letters && !saved.fix_missing_spaces && !saved.undo_on_backspace);
         let o = saved.engine_options();
         assert!(o.fix_typos && o.use_context && o.convert_single_letters && o.fix_missing_spaces);
-        // Undo-on-key is the one always-on flag that became a real setting.
         assert!(!o.undo_on_backspace);
         assert!(saved.learns_layouts());
         assert_eq!(Config::from_json(&saved.to_json()).unwrap(), saved);
@@ -1097,8 +987,6 @@ mod tests {
         assert_eq!(fresh.undo_key, Hotkey::BACKSPACE);
         assert_eq!(fresh.undo_hotkey, Hotkey::BACKSPACE);
         assert_eq!(fresh.engine_options().undo_on_backspace, true);
-        // An older file that already saved the previous default combo still loads;
-        // the new field falls back to Backspace, so immediate Backspace undo stays.
         let old = Config::from_json(r#"{"undo_hotkey":"Ctrl+Alt+Z"}"#).unwrap();
         assert_eq!(old.undo_hotkey, Hotkey::CTRL_ALT_Z);
         assert_eq!(old.undo_key, Hotkey::BACKSPACE);
@@ -1116,7 +1004,6 @@ mod tests {
         assert_eq!(Config::from_json("{}").unwrap().logo, LogoStyle::Beach);
         let named = Config::from_json(r#"{"logo":"ukiyoe"}"#).unwrap();
         assert_eq!(named.logo, LogoStyle::Ukiyoe);
-        // Previous field name and the old water / suprematism / geometry marks.
         let alias = Config::from_json(r#"{"logo_style":"water"}"#).unwrap();
         assert_eq!(alias.logo, LogoStyle::Beach);
         let old = Config::from_json(r#"{"logo_style":"suprematism"}"#).unwrap();
@@ -1143,18 +1030,15 @@ mod tests {
         assert!(c.apps.keys().any(|k| k.contains("google") && k.ends_with("chrome.exe")));
         assert_eq!(c.layout_for(r"C:\Program Files\Google\Chrome\Application\chrome.exe"), Some(Lang::En));
         assert_eq!(c.layout_for("CHROME.EXE"), Some(Lang::En));
-        // Same exe in both lists: exception wins.
         assert!(c.layout_for("layout-keeper.exe").is_none());
         assert!(c.is_exception(r"C:\Program Files\Typed\layout-keeper.exe"));
         assert_eq!(c.exception_apps.iter().filter(|e| exe_name(e) == "innosetup-6.7.1.tmp").count(), 1);
         assert_eq!(c.exception_apps.iter().filter(|e| exe_name(e) == "layout-keeper.exe").count(), 1);
         assert!(c.exception_apps.iter().any(|e| e == "powershell"));
-        // Adding again is a no-op; a path for a new exe is kept as the path (icons).
         let mut c = c;
         assert!(!c.add_exception("layout-keeper.exe"));
         assert!(c.add_exception(r"C:\Temp\Foo.EXE"));
         assert!(c.exception_apps.iter().any(|e| exe_name(e) == "foo.exe" && e.contains("temp")));
-        // Paths win over a previously stored bare exe name.
         let mut c = Config::default();
         assert!(c.set_layout("chrome.exe", Lang::En));
         assert!(c.prefer_app_path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"));

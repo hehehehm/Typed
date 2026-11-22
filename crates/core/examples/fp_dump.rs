@@ -1,6 +1,3 @@
-//! `cargo run --release --example fp_dump -- ru|en [normal|aggressive]`: the unknown-word
-//! FP proxy of `correction_eval` (every 97th unranked full form, or every `STRIDE`th), one
-//! line per change.
 use layout_keeper_core::{dict, layout, layout::Lang, typo};
 fn main() {
     use fst::{IntoStreamer, Streamer};

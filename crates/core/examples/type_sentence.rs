@@ -1,5 +1,3 @@
-//! `cargo run --release --example type_sentence -- "text" ...`: types each text key by key
-//! through the engine (typo fixing on, context on) at every level and prints the result.
 use layout_keeper_core::{typo, Engine, EngineOptions, Key};
 fn type_text(e: &mut Engine, text: &str) -> String {
     e.reset();

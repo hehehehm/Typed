@@ -1,13 +1,3 @@
-//! Holdout measurement of the typo fixer (run with `--ignored --nocapture`).
-//!
-//! * Synthetic slips: every 7th ranked word of 5+ letters gets one realistic slip (neighbour
-//!   key, swap, dropped or doubled letter, never in the first letter). Counted: fixed right,
-//!   fixed WRONG, left alone. Slips that are themselves real words are skipped.
-//! * Rare-word slips (since 0.3.69): the same for forms of the full-form set that are not
-//!   in the 40 000-word list (`приветственный`).
-//! * Unknown words: real forms outside the ranked list treated as unknown
-//!   (`typo::suggest_as_unknown`, as if they were names / slang we don't know). Every
-//!   change is a false correction.
 use fst::{IntoStreamer, Streamer};
 use layout_keeper_core::{dict, layout::Lang, typo};
 
@@ -140,9 +130,6 @@ fn holdout() {
     }
 }
 
-
-/// First-letter neighbour-key slips (`шлавный` → `главный`, since 0.3.69): every 3rd ranked
-/// word of 5+ letters with its first letter replaced by a neighbour key.
 fn run_first_slips(lang: Lang) -> String {
     let d = dict::get(lang);
     let mut words: Vec<(String, u32)> = d.iter().map(|(w, r)| (w.to_string(), r)).collect();
@@ -170,9 +157,6 @@ fn run_first_slips(lang: Lang) -> String {
         100.0 * wrong as f64 / total as f64)
 }
 
-/// Layout switched mid-word (since 0.3.69): every 7th ranked word of 5+ letters with a
-/// run from letter 2+ typed in the other layout (`приdtn`). And the false-positive side:
-/// Latin words with a Russian case ending (`gitом`, `Windowsе`), which must stay.
 fn run_mixed(lang: Lang) -> String {
     use layout_keeper_core::engine::{Decision, Engine, EngineOptions};
     let e = Engine::new(EngineOptions { fix_typos: true, ..Default::default() });

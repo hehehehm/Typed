@@ -1,5 +1,4 @@
 #!/bin/sh
-# Downloads the n-gram sources into the current directory (about 0.9 GB).
 set -e
 curl -fLO https://downloads.tatoeba.org/exports/per_language/rus/rus_sentences.tsv.bz2
 curl -fLO https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2

@@ -1,6 +1,3 @@
-//! Brand list audit: a brand must never stand in the way of a real word typed in the
-//! wrong layout, and brands typed in the wrong layout should convert.
-//! `cargo run --release -p layout_keeper_core --example brands_audit`
 use layout_keeper_core::{dict, engine::{Decision, Engine, EngineOptions}, layout::{self, Lang}};
 
 fn main() {
@@ -8,8 +5,6 @@ fn main() {
     for lang in [Lang::Ru, Lang::En] {
         let other = lang.other();
         let od = dict::get(other);
-        // 1. every ranked word typed in the other layout: its junk reading is not a brand there,
-        //    and the engine still converts it (when it did not hit another rule).
         let list = match lang { Lang::Ru => include_str!("../data/ru.txt"), Lang::En => include_str!("../data/en.txt") };
         let (mut n, mut collide, mut blocked) = (0, Vec::new(), Vec::new());
         for w in list.lines().map(str::trim).filter(|w| w.chars().count() >= 4) {
@@ -21,7 +16,6 @@ fn main() {
         }
         println!("{lang:?} ranked words typed in the {other:?} layout: {n}; reading is a {other:?} brand: {} {:?}; conversion blocked: {} {:?}",
             collide.len(), &collide[..collide.len().min(10)], blocked.len(), &blocked[..blocked.len().min(10)]);
-        // 2. brands typed in the wrong layout
         let d = dict::get(lang);
         let brands: Vec<&str> = dict::brands_list(lang).lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect();
         let (mut tot, mut conv, mut kept) = (0, 0, 0);

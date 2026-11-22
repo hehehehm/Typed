@@ -1,6 +1,3 @@
-//! `cargo run --release --example short_audit -- [src_min_rank] [dst_max_rank]`: 2–3 letter
-//! words of each frequency list whose other-layout reading is a top word of the other list
-//! (the short-token rule of 0.3.74): `src rank → reading rank`, with the engine's decision.
 use layout_keeper_core::{dict, engine::Decision, layout, layout::Lang, Engine, EngineOptions};
 fn main() {
     let a: Vec<u32> = std::env::args().skip(1).filter_map(|s| s.parse().ok()).collect();

@@ -1,11 +1,9 @@
-# Автосборка Typed: на каждый тег vX.Y.Z собирает Setup.exe и .dmg
-# и прикрепляет их к релизу на https://github.com/hehehehm/typed/releases
 name: Release
 
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch: {}   # ручной запуск из вкладки Actions (без релиза, только артефакты)
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -49,7 +47,7 @@ jobs:
 
   macos:
     needs: [no-comments]
-    runs-on: macos-latest   # Apple Silicon
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
