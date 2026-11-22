@@ -111,6 +111,13 @@ struct App {
     /// Last check whether the daemon runs as administrator, and when it was made.
     #[cfg_attr(not(windows), allow(dead_code))]
     daemon_admin: (Option<bool>, bool, Option<Instant>),
+    /// Installed / running apps for autocomplete and path tooltips.
+    catalog: crate::app_catalog::AppCatalog,
+    /// Autocomplete dropdown under the add-app field is visible.
+    suggest_open: bool,
+    suggest_sel: usize,
+    /// After a pick, hide suggestions until the draft changes.
+    suggest_lock: Option<String>,
 }
 
 type AdminJobResult = Arc<Mutex<Option<Result<(), String>>>>;
@@ -133,6 +140,21 @@ enum AppMode {
 enum AppsPane {
     Programs,
     Exceptions,
+}
+
+#[derive(Debug, Clone)]
+enum SuggestPick {
+    None,
+    Fill(String),
+    Submit(String),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SuggestKey {
+    Up,
+    Down,
+    Tab,
+    Enter,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -247,10 +269,176 @@ impl App {
         true
     }
 
+
+    fn known_app_entries(&self) -> Vec<crate::app_catalog::AppEntry> {
+        use crate::app_catalog::AppEntry;
+        let mut v = Vec::with_capacity(self.cfg.apps.len() + self.cfg.exception_apps.len());
+        for id in self.cfg.apps.keys() {
+            v.push(AppEntry::new(id, ""));
+        }
+        for id in &self.cfg.exception_apps {
+            v.push(AppEntry::new(id, ""));
+        }
+        v
+    }
+
+    /// Consume suggestion keys *before* the text field is drawn, so Tab/Enter
+    /// are not stolen by focus movement or the field itself.
+    fn consume_suggest_key(&mut self, ctx: &egui::Context) -> Option<SuggestKey> {
+        if !self.suggest_open {
+            return None;
+        }
+        let none = egui::Modifiers::NONE;
+        if ctx.input_mut(|i| i.consume_key(none, egui::Key::ArrowDown)) {
+            return Some(SuggestKey::Down);
+        }
+        if ctx.input_mut(|i| i.consume_key(none, egui::Key::ArrowUp)) {
+            return Some(SuggestKey::Up);
+        }
+        if ctx.input_mut(|i| i.consume_key(none, egui::Key::Tab)) {
+            return Some(SuggestKey::Tab);
+        }
+        if ctx.input_mut(|i| i.consume_key(none, egui::Key::Enter)) {
+            return Some(SuggestKey::Enter);
+        }
+        None
+    }
+
+    /// Keyboard + popup for the add-app field. `Submit` means accept a suggestion and add it.
+    fn app_suggest(&mut self, ui: &mut egui::Ui, field: &egui::Response, accent: egui::Color32, key: Option<SuggestKey>) -> SuggestPick {
+        let draft = self.app_draft.trim().to_string();
+        if self.suggest_lock.as_deref() == Some(draft.as_str()) {
+            self.suggest_open = false;
+            return SuggestPick::None;
+        }
+        if self.suggest_lock.as_ref().is_some_and(|l| l != &draft) {
+            self.suggest_lock = None;
+        }
+        let known = self.known_app_entries();
+        let items = self.catalog.suggest(&self.app_draft, &known);
+        let q_ok = draft.chars().count() >= 2;
+        if !q_ok || items.is_empty() {
+            self.suggest_open = false;
+            self.suggest_sel = 0;
+            return SuggestPick::None;
+        }
+        let hover = ui.ctx().input(|i| i.pointer.hover_pos());
+        let popup_rect = ui.ctx().memory(|m| m.area_rect(egui::Id::new("typed-app-suggest")));
+        let over_popup = hover.is_some_and(|p| popup_rect.is_some_and(|r| r.expand(6.0).contains(p)));
+        if !field.has_focus() && !field.lost_focus() && !over_popup {
+            self.suggest_open = false;
+            return SuggestPick::None;
+        }
+        self.suggest_open = true;
+        if self.suggest_sel >= items.len() {
+            self.suggest_sel = 0;
+        }
+
+        let mut pick = SuggestPick::None;
+        match key {
+            Some(SuggestKey::Down) => {
+                self.suggest_sel = (self.suggest_sel + 1) % items.len();
+            }
+            Some(SuggestKey::Up) => {
+                self.suggest_sel = if self.suggest_sel == 0 { items.len() - 1 } else { self.suggest_sel - 1 };
+            }
+            Some(SuggestKey::Tab) => {
+                pick = SuggestPick::Fill(items[self.suggest_sel].id.clone());
+            }
+            Some(SuggestKey::Enter) => {
+                pick = SuggestPick::Submit(items[self.suggest_sel].id.clone());
+            }
+            None => {}
+        }
+
+        let screen = ui.ctx().screen_rect();
+        let row_h = st::HIT;
+        let pad = st::PAD;
+        let height = row_h * items.len() as f32 + pad;
+        let width = field.rect.width().max(st::HIT * 6.0).min((screen.width() - st::MARGIN * 2.0).max(st::HIT * 4.0));
+        let left = field.rect.left().clamp(screen.left() + st::PAD, (screen.right() - width - st::PAD).max(screen.left() + st::PAD));
+        let below = field.rect.bottom() + st::GAP;
+        let pos = if below + height <= screen.bottom() - st::PAD {
+            egui::pos2(left, below)
+        } else {
+            egui::pos2(left, (field.rect.top() - st::GAP - height).max(screen.top() + st::PAD))
+        };
+
+        let t = st::theme(!self.cfg.light_theme);
+        let sel = self.suggest_sel;
+        let mut clicked = None;
+        let mut hover_sel = None;
+        let icons = &mut self.icons;
+        egui::Area::new(egui::Id::new("typed-app-suggest"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .constrain_to(ui.ctx().screen_rect())
+            .show(ui.ctx(), |ui| {
+                ui.set_max_width(width);
+                ui.set_min_width(width);
+                let frame = egui::Frame::none()
+                    .fill(t.surface)
+                    .stroke(st::hair(t.line))
+                    .rounding(st::RADIUS)
+                    .inner_margin(egui::Margin::symmetric(st::GAP, st::GAP));
+                frame.show(ui, |ui| {
+                    ui.set_width((width - st::GAP * 2.0).max(st::HIT));
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (i, e) in items.iter().enumerate() {
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), st::HIT), egui::Sense::click());
+                        let hover = resp.hovered() || i == sel;
+                        if hover {
+                            ui.painter().rect_filled(
+                                rect,
+                                st::RADIUS_SM,
+                                if i == sel { st::mix(t.surface_hover, accent, 0.18) } else { t.surface_hover },
+                            );
+                        }
+                        if resp.hovered() {
+                            hover_sel = Some(i);
+                        }
+                        if resp.clicked() {
+                            clicked = Some(i);
+                        }
+                        let mut child = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(rect)
+                                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                        );
+                        child.spacing_mut().item_spacing.x = st::PAD;
+                        child.add_space(st::GAP);
+                        icons.show(&mut child, &e.id);
+                        let name = if e.display_name.is_empty() { e.exe.as_str() } else { e.display_name.as_str() };
+                        child.add(egui::Label::new(egui::RichText::new(name).color(t.ink)).truncate());
+                        if e.exe != name {
+                            child.add(egui::Label::new(egui::RichText::new(&e.exe).small().color(t.muted)).truncate());
+                        }
+                    }
+                });
+            });
+        if let Some(i) = hover_sel {
+            self.suggest_sel = i;
+        }
+        if let Some(i) = clicked {
+            pick = SuggestPick::Fill(items[i].id.clone());
+        }
+        match &pick {
+            SuggestPick::Fill(id) | SuggestPick::Submit(id) => {
+                self.app_draft = id.clone();
+                self.suggest_open = false;
+                self.suggest_sel = 0;
+                self.suggest_lock = Some(id.clone());
+            }
+            SuggestPick::None => {}
+        }
+        pick
+    }
+
     fn apps_tab(&mut self, ui: &mut egui::Ui) {
         let accent = Tab::Apps.color();
         let t = st::cur(ui);
         let mut changed = false;
+        let suggest_key = self.consume_suggest_key(ui.ctx());
 
         // Программы | Исключения at the top of the section; each pane has its own
         // add button and the header count follows the open pane.
@@ -282,6 +470,7 @@ impl App {
                 let mut go = false;
                 let can_add = !self.app_draft.trim().is_empty();
                 let focus = self.app_draft_focus;
+                let mut field_resp = None;
                 st::group(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.set_min_height(st::ROW);
@@ -291,8 +480,7 @@ impl App {
                         if focus {
                             r.request_focus();
                         }
-                        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        go |= can_add && enter && (r.has_focus() || r.lost_focus());
+                        field_resp = Some(r);
                         // EN/RU here only picks the layout for the next add; it must not submit.
                         let _ = st::segment_strip(
                             ui,
@@ -312,6 +500,16 @@ impl App {
                 if focus {
                     self.app_draft_focus = false;
                 }
+                if let Some(r) = field_resp {
+                    match self.app_suggest(ui, &r, accent, suggest_key) {
+                        SuggestPick::Submit(_) => go = true,
+                        SuggestPick::Fill(_) => {}
+                        SuggestPick::None => {
+                            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            go |= can_add && enter && (r.has_focus() || r.lost_focus());
+                        }
+                    }
+                }
                 if go {
                     changed |= self.add_app_entry();
                 }
@@ -330,6 +528,10 @@ impl App {
                 entries.sort_by(|a, b| basename(&a.0).to_lowercase().cmp(&basename(&b.0).to_lowercase()).then_with(|| a.0.cmp(&b.0)));
 
                 let mut act: Option<(String, Option<AppMode>)> = None;
+                let tips: std::collections::HashMap<String, String> = entries
+                    .iter()
+                    .filter_map(|(id, _)| self.catalog.resolve_path(id).map(|p| (id.clone(), p)))
+                    .collect();
                 if !entries.is_empty() {
                     ui.add_space(st::PAD);
                     st::group_title(ui, "Раскладка", Some(entries.len()), "EN / RU — раскладка при переключении в программу");
@@ -343,10 +545,14 @@ impl App {
                             st::line_row(
                                 ui,
                                 |ui| {
-                                    icons.show(ui, &id);
+                                    let ir = icons.show(ui, &id);
                                     let name = basename(&id);
                                     let shown = if name.is_empty() { id.as_str() } else { name };
-                                    ui.add(egui::Label::new(egui::RichText::new(shown).color(t.ink)).truncate()).on_hover_text(&id);
+                                    let label = ui.add(egui::Label::new(egui::RichText::new(shown).color(t.ink)).truncate());
+                                    if let Some(tip) = tips.get(&id) {
+                                        ir.on_hover_text(tip);
+                                        label.on_hover_text(tip);
+                                    }
                                 },
                                 |ui| {
                                     if delete_icon_button(ui).clicked() {
@@ -383,19 +589,48 @@ impl App {
             }
             AppsPane::Exceptions => {
                 let focus = self.app_draft_focus;
+                let mut go = false;
+                let can_add = !self.app_draft.trim().is_empty();
+                let mut field_resp = None;
                 st::group(ui, |ui| {
                     egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::GAP)).show(ui, |ui| {
-                        if st::add_line_plus_focus(ui, &mut self.app_draft, "программа или путь", "Добавить исключение", accent, focus) {
-                            changed |= self.add_app_entry();
-                        }
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = st::PAD;
+                            let fw = (ui.available_width() - st::HIT - st::PAD).max(st::HIT * 2.0);
+                            let r = st::field_bg(ui, &mut self.app_draft, "программа или путь", fw, accent);
+                            if focus {
+                                r.request_focus();
+                            }
+                            field_resp = Some(r);
+                            ui.add_enabled_ui(can_add, |ui| {
+                                go |= st::plus_square(ui, accent, "Добавить исключение").clicked();
+                            });
+                        });
                     });
                 });
                 if focus {
                     self.app_draft_focus = false;
                 }
+                if let Some(r) = field_resp {
+                    match self.app_suggest(ui, &r, accent, suggest_key) {
+                        SuggestPick::Submit(_) => go = true,
+                        SuggestPick::Fill(_) => {}
+                        SuggestPick::None => {
+                            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            go |= can_add && enter && (r.has_focus() || r.lost_focus());
+                        }
+                    }
+                }
+                if go {
+                    changed |= self.add_app_entry();
+                }
 
                 let mut entries: Vec<String> = self.cfg.exception_apps.clone();
                 entries.sort_by(|a, b| basename(a).to_lowercase().cmp(&basename(b).to_lowercase()).then_with(|| a.cmp(b)));
+                let exc_tips: std::collections::HashMap<String, String> = entries
+                    .iter()
+                    .filter_map(|id| self.catalog.resolve_path(id).map(|p| (id.clone(), p)))
+                    .collect();
                 let mut remove = None;
                 if !entries.is_empty() {
                     ui.add_space(st::PAD);
@@ -406,8 +641,11 @@ impl App {
                                 for id in &entries {
                                     let name = basename(id);
                                     let shown = if name.is_empty() { id.as_str() } else { name };
-                                    let tip = if shown != id.as_str() { id.as_str() } else { shown };
-                                    if st::chip_with_tip(ui, shown, None, Some(tip)) {
+                                    let resolved = exc_tips.get(id);
+                                    let tip = resolved.map(String::as_str).or_else(|| {
+                                        (shown != id.as_str()).then_some(id.as_str())
+                                    });
+                                    if st::chip_with_tip(ui, shown, None, tip) {
                                         remove = Some(id.clone());
                                     }
                                 }
@@ -893,6 +1131,9 @@ impl App {
             }
             if tab == Tab::Apps {
                 self.app_draft_focus = true;
+                self.catalog.ensure_scan();
+            } else {
+                self.suggest_open = false;
             }
         }
     }
@@ -1221,13 +1462,21 @@ impl App {
                 self.save();
             }
         }
-        if !capturing && !self.welcome_open && self.tab != Tab::Home && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.go(Tab::Home);
+        if !capturing && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.suggest_open {
+                self.suggest_open = false;
+            } else if !self.welcome_open && self.tab != Tab::Home {
+                self.go(Tab::Home);
+            }
         }
     }
 
     fn draw(&mut self, ctx: &egui::Context, focus: &Focus) {
         self.handle_shortcuts(ctx);
+        if self.tab == Tab::Apps {
+            self.catalog.ensure_scan();
+        }
+        self.catalog.poll(ctx);
         self.expire_pending_delete(ctx);
         self.apply_theme(ctx);
         if self.grow_for_section {
@@ -1666,6 +1915,10 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         sea_textures: [None, None],
         admin_job: None,
         daemon_admin: (None, true, None),
+        catalog: crate::app_catalog::AppCatalog::new(),
+        suggest_open: false,
+        suggest_sel: 0,
+        suggest_lock: None,
         // Windows: the tray icon belongs to the daemon (see `tray`).
         tray: if cfg!(windows) { None } else { crate::tray::start(logo_index) },
         allow_close: false,

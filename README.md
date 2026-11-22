@@ -97,6 +97,11 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.83
+
+- **Полный путь по наведению.** В списке «Программы» и на чипах исключений при наведении на имя показывается полный путь к exe, если он известен. Если известно только короткое имя, подсказка его не дублирует.
+- **Подсказки при добавлении.** В поле «программа или путь» (и в раскладке, и в исключениях) появляются до восьми вариантов из запущенных процессов, ярлыков меню «Пуск», установленных программ и уже известных приложений. «counter» предлагает `cs2.exe` (Counter-Strike 2), «photoshop» — `Photoshop.exe`. Стрелки, Enter, Tab, клик и Esc. Сканирование идёт в фоне и не блокирует окно.
+
 ## Что нового в 0.3.82
 
 - **Окно больше не зависает.** В 0.3.81 смена рендерера на wgpu (LowPower + vsync) на Windows могла повесить окно настроек («Не отвечает», 0% CPU) сразу после открытия. Вернули glow, как в 0.3.80; экономия GPU по-прежнему за счёт перерисовки только по событиям, без цикла 200 мс. Иконки программ извлекаются в фоновом потоке и не блокируют интерфейс.
@@ -966,6 +971,11 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.83
+
+- Hovering a name in Programs (or an exception chip) shows the full exe path when it is known. If only a short name is known, the tooltip is omitted so it does not repeat the label.
+- The add-app field (layout list and Exceptions) offers up to eight suggestions from running processes, Start Menu shortcuts, installed programs, and already-known apps. Typing `counter` suggests `cs2.exe` (Counter-Strike 2); `photoshop` suggests `Photoshop.exe`. Arrow keys, Enter, Tab, click and Esc. The scan runs on a background thread and never blocks the UI.
 
 ### New in 0.3.82
 

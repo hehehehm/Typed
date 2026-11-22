@@ -179,13 +179,13 @@ impl IconCache {
     }
 
     /// Draw the icon (or placeholder) for `id`.
-    pub fn show(&mut self, ui: &mut egui::Ui, id: &str) {
+    pub fn show(&mut self, ui: &mut egui::Ui, id: &str) -> egui::Response {
         use crate::ui_style as st;
-        let (cell, _) = ui.allocate_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE), egui::Sense::hover());
+        let (cell, resp) = ui.allocate_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE), egui::Sense::hover());
         let rect = egui::Rect::from_center_size(cell.center(), egui::Vec2::splat(st::CAP_H));
         if let Some(tex) = self.get(ui.ctx(), id) {
             egui::Image::new(&tex).maintain_aspect_ratio(true).paint_at(ui, rect);
-            return;
+            return resp;
         }
         let t = st::cur(ui);
         let p = ui.painter();
@@ -193,6 +193,7 @@ impl IconCache {
         p.rect_stroke(rect.shrink(0.5), st::RADIUS_SM + 1.0, st::hair(t.line));
         let letter = basename(id).chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
         p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, st::font_sm(), t.ink);
+        resp
     }
 
     /// Drop GPU textures (the window is being closed). CPU images stay cached.

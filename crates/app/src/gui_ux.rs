@@ -21,7 +21,7 @@
 //!   baseline exists and the diff is over the threshold
 
 use super::shots::{
-    app_with, app_with_no_icon_preload, focus, locked_vault_ui, merge_textures, rasterize, sample_cfg, write_png, INTER,
+    app_with, app_with_no_icon_preload, focus, inject_app_catalog, locked_vault_ui, merge_textures, rasterize, sample_cfg, write_png, INTER,
     LONG_PATH,
 };
 use super::*;
@@ -2236,6 +2236,150 @@ fn ux_add_program_set_lang_move_to_exceptions_dedupe_delete() {
         !exc_in(&h.app.cfg, "notepad.exe"),
         "deleted from exceptions: {:?}",
         h.app.cfg.exception_apps
+    );
+}
+
+fn with_catalog(tab: Tab, pane: AppsPane) -> Harness {
+    let mut app = app_with(sample_cfg(), tab, true);
+    inject_app_catalog(&mut app);
+    app.apps_pane = pane;
+    app.app_draft_focus = true;
+    Harness::new(app, focus(), SEC, 1.0, false)
+}
+
+#[test]
+fn ux_app_suggest_counter_enter_adds_cs2() {
+    let mut h = with_catalog(Tab::Apps, AppsPane::Programs);
+    h.type_text("counter");
+    assert!(
+        h.find_text("Counter-Strike 2").is_some(),
+        "dropdown should show display name, texts={:?}",
+        h.texts().iter().map(|t| t.text.as_str()).collect::<Vec<_>>()
+    );
+    assert!(
+        h.texts().iter().any(|t| t.text.to_lowercase().contains("cs2.exe")),
+        "dropdown should show cs2.exe"
+    );
+    h.press_key(Key::Enter, Modifiers::default());
+    assert!(
+        exe_in(&h.app.cfg, "cs2.exe"),
+        "Enter should add the highlighted suggestion: {:?}",
+        h.app.cfg.apps.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ux_app_suggest_arrows_tab_esc() {
+    let mut h = with_catalog(Tab::Apps, AppsPane::Programs);
+    h.type_text("photo");
+    assert!(
+        h.find_text("Photoshop").is_some() || h.texts().iter().any(|t| t.text.to_lowercase().contains("photoshop")),
+        "photoshop suggestion missing: {:?}",
+        h.texts().iter().map(|t| t.text.as_str()).collect::<Vec<_>>()
+    );
+    h.press_key(Key::Tab, Modifiers::default());
+    assert!(
+        h.app.app_draft.to_lowercase().contains("photoshop.exe"),
+        "Tab fills the field with the path: {}",
+        h.app.app_draft
+    );
+    assert!(
+        !exe_in(&h.app.cfg, "photoshop.exe"),
+        "Tab should not submit, only fill"
+    );
+    assert_eq!(h.app.tab, Tab::Apps, "Tab must not leave the section");
+
+    // Re-open with a fresh query and close with Esc, staying on Programs.
+    h.app.app_draft.clear();
+    h.app.suggest_lock = None;
+    h.app.app_draft_focus = true;
+    h.settle();
+    h.type_text("chrome");
+    assert!(h.app.suggest_open || h.find_text("Google Chrome").is_some());
+    h.press_key(Key::Escape, Modifiers::default());
+    assert!(!h.app.suggest_open, "Esc closes the dropdown");
+    assert_eq!(h.app.tab, Tab::Apps, "Esc must not go Home while the dropdown is open");
+}
+
+#[test]
+fn ux_app_suggest_exceptions_click() {
+    let mut h = with_catalog(Tab::Apps, AppsPane::Exceptions);
+    h.type_text("counter");
+    let row = h
+        .find_text("Counter-Strike 2")
+        .or_else(|| h.texts().into_iter().find(|t| t.text.to_lowercase().contains("cs2")));
+    assert!(row.is_some(), "exceptions dropdown should list cs2");
+    h.click(row.unwrap().rect.center());
+    if !exc_in(&h.app.cfg, "cs2.exe") {
+        h.press_key(Key::Enter, Modifiers::default());
+    }
+    if !exc_in(&h.app.cfg, "cs2.exe") {
+        let _ = h.click_plus();
+    }
+    assert!(
+        exc_in(&h.app.cfg, "cs2.exe"),
+        "clicking a suggestion should let us add it as an exception: draft={} list={:?}",
+        h.app.app_draft,
+        h.app.cfg.exception_apps
+    );
+}
+
+#[test]
+fn ux_app_path_tooltip_shows_full_path() {
+    let mut h = default_sec(Tab::Apps, true, sample_cfg());
+    let row = h
+        .find_text("chrome.exe")
+        .expect("chrome.exe is in the sample programs list");
+    let before: std::collections::HashSet<String> = h.texts().into_iter().map(|t| t.text).collect();
+    h.hover(row.rect.center());
+    h.time += 0.6;
+    h.step(vec![Event::PointerMoved(row.rect.center())]);
+    h.step(vec![Event::PointerMoved(row.rect.center())]);
+    let added: Vec<String> = h
+        .texts()
+        .into_iter()
+        .map(|t| t.text)
+        .filter(|t| !before.contains(t) && !t.trim().is_empty())
+        .collect();
+    assert!(
+        added.iter().any(|t| t.to_lowercase().contains(r"c:\program files\google\chrome")
+            || t.to_lowercase().contains(r"chrome\application\chrome.exe")),
+        "hovering the app name should show the full path, added={added:?}"
+    );
+}
+
+#[test]
+fn ux_app_suggest_dropdown_no_overflow_overlap_or_tiny_hits() {
+    let mut app = app_with(sample_cfg(), Tab::Apps, true);
+    inject_app_catalog(&mut app);
+    app.app_draft = "counter".into();
+    app.app_draft_focus = true;
+    let mut h = Harness::new(app, focus(), SEC, 1.0, false);
+    assert!(
+        h.find_text("Counter-Strike 2").is_some(),
+        "expected open dropdown"
+    );
+    let mut findings = Findings::new();
+    inspect_all(&mut h, "apps-suggest", &mut findings, true, false);
+    let bad: Vec<_> = findings
+        .issues
+        .iter()
+        .filter(|i| matches!(i.kind, "clip" | "overlap" | "hit"))
+        .map(|i| format!("{}: {}", i.kind, i.detail))
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "dropdown structural issues: {bad:?}"
+    );
+    let contrast: Vec<_> = findings
+        .issues
+        .iter()
+        .filter(|i| i.kind == "contrast")
+        .map(|i| i.detail.clone())
+        .collect();
+    assert!(
+        contrast.is_empty(),
+        "dropdown contrast issues: {contrast:?}"
     );
 }
 

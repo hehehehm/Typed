@@ -32,6 +32,7 @@ pub static AmdPowerXpressRequestHighPerformance: u32 = 0;
 
 
 mod app_id;
+mod app_catalog;
 mod brand;
 mod controller;
 mod gui;

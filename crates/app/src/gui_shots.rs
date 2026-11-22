@@ -8,7 +8,7 @@
 //!   (default `/tmp/typed-ui-shots`).
 
 use super::*;
-use eframe::egui::{epaint, Color32, ImageData, Pos2, Rect, TextureId};
+use eframe::egui::{self, epaint, Color32, Event, ImageData, Pos2, Rect, Shape, TextureId};
 use std::collections::HashMap;
 
 pub(super) const LONG_PATH: &str = r"c:\users\hehehehm\appdata\local\temp\3m40e6uivkbbnon1nlp\setup.tmp";
@@ -109,7 +109,24 @@ fn app_with_icons(cfg: Config, tab: Tab, light: bool, preload: bool) -> App {
         sea_textures: [None, None],
         admin_job: None,
         daemon_admin: (None, true, None),
+        catalog: crate::app_catalog::AppCatalog::new(),
+        suggest_open: false,
+        suggest_sel: 0,
+        suggest_lock: None,
     }
+}
+
+pub(super) fn inject_app_catalog(app: &mut App) {
+    use crate::app_catalog::AppEntry;
+    let entries = vec![
+        AppEntry::new(r"C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe", "Counter-Strike 2"),
+        AppEntry::new(r"C:\Program Files\Adobe\Adobe Photoshop 2025\Photoshop.exe", "Adobe Photoshop 2025"),
+        AppEntry::new(r"C:\Program Files\Google\Chrome\Application\chrome.exe", "Google Chrome"),
+    ];
+    for e in &entries {
+        app.icons.preload_mock(&e.id);
+    }
+    app.catalog.inject(entries);
 }
 
 pub(super) fn focus() -> Focus {
@@ -222,6 +239,18 @@ fn shots(with_vault: bool) -> Vec<Shot> {
         a.apps_pane = AppsPane::Exceptions;
         v.push(Shot { name: name("14-mac-exceptions"), app: a, focus: focus(), size: sec_sz, mac: true });
     }
+    for light in [true, false] {
+        let sfx = |s: &'static str| -> &'static str {
+            if light { s } else { Box::leak(format!("{s}-dark").into_boxed_str()) }
+        };
+        let mut a = app_with(sample_cfg(), Tab::Apps, light);
+        inject_app_catalog(&mut a);
+        a.app_draft = "counter".into();
+        a.app_draft_focus = true;
+        v.push(Shot { name: sfx("17-apps-suggest"), app: a, focus: focus(), size: sec_sz, mac: false });
+        let a = app_with(sample_cfg(), Tab::Apps, light);
+        v.push(Shot { name: sfx("17-apps-path-tooltip"), app: a, focus: focus(), size: sec_sz, mac: false });
+    }
     v
 }
 
@@ -246,9 +275,35 @@ fn native_shots() -> Vec<Shot> {
     v
 }
 
+fn find_shape_text(out: &egui::FullOutput, needle: &str) -> Option<Pos2> {
+    fn walk(shape: &Shape, needle: &str, found: &mut Option<Rect>) {
+        match shape {
+            Shape::Vec(v) => {
+                for s in v {
+                    walk(s, needle, found);
+                }
+            }
+            Shape::Text(ts) => {
+                if ts.galley.text().contains(needle) {
+                    *found = Some(ts.visual_bounding_rect());
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = None;
+    for cs in &out.shapes {
+        walk(&cs.shape, needle, &mut found);
+    }
+    found.map(|r| r.center())
+}
+
 fn run(shot: &mut Shot, ppp: f32) -> (egui::Context, egui::FullOutput, HashMap<TextureId, egui::ColorImage>) {
     let ctx = egui::Context::default();
     ctx.set_pixels_per_point(ppp);
+    ctx.style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+    });
     st::set_mac_preview(shot.mac);
     if shot.mac {
         st::install_fonts_with(&ctx, st::font_file(INTER));
@@ -257,13 +312,23 @@ fn run(shot: &mut Shot, ppp: f32) -> (egui::Context, egui::FullOutput, HashMap<T
     }
     let mut textures: HashMap<TextureId, egui::ColorImage> = HashMap::new();
     let mut last = None;
-    for frame in 0..4 {
+    let mut hover: Option<Pos2> = None;
+    let want_tip = shot.name.contains("path-tooltip");
+    for frame in 0..8 {
+        let mut events = Vec::new();
+        if let Some(p) = hover {
+            events.push(Event::PointerMoved(p));
+        }
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, shot.size)),
             time: Some(frame as f64 * 0.1),
+            events,
             ..Default::default()
         };
         let out = ctx.run(input, |ctx| shot.app.draw(ctx, &shot.focus));
+        if want_tip && hover.is_none() {
+            hover = find_shape_text(&out, "chrome.exe");
+        }
         for (id, delta) in &out.textures_delta.set {
             let img = match &delta.image {
                 ImageData::Color(c) => (**c).clone(),
