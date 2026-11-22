@@ -97,6 +97,12 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.84
+
+- **Дефисные слова и частицы.** Опечатки в частицах и частях дефисных слов исправляются («все-атки» → «все-таки», «все-тоо» → «все-то», «яркко-голубом» → «ярко-голубом»), при этом сложные слова с валидной основой и вторым словом («кошко-мальчик», «нейро-сеть») не ломаются.
+- **Пробел после однобуквенных предлогов и соседние клавиши.** Слитные «врот», «ВРОТ» разделяются («в рот», «В РОТ»), а не склеиваются опечаткой; «услушу» выбирает соседнюю клавишу («услугу»), а не дальнюю.
+- **Мат и короткие капс-аббревиатуры.** Продуктивные формы русского мата (включая капс вроде «ЗАЕБАЛСЯ») защищены от ложной смены раскладки; трёхбуквенные капс-слова на другой раскладке («AJY» → «ФОН») переводятся, а двухбуквенные капс-аббревиатуры (`FP`, `СЗ`) и однобуквенные в английской фразе (`that he d`, `that i d`) больше не портятся.
+
 ## Что нового в 0.3.83
 
 - **Полный путь по наведению.** В списке «Программы» и на чипах исключений при наведении на имя показывается полный путь к exe, если он известен. Если известно только короткое имя, подсказка его не дублирует.
@@ -971,6 +977,12 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.84
+
+- **Hyphenated words and particles.** Typos in Russian hyphen particles and stems are fixed («все-атки» → «все-таки», «все-тоо» → «все-то», «яркко-голубом» → «ярко-голубом»), while plausible compound stems with a valid second word («кошко-мальчик», «нейро-сеть») stay untouched.
+- **Single-letter prepositions and direct key neighbours.** Glued prepositions split cleanly in both lowercase and CAPS («врот» → «в рот», «ВРОТ» → «В РОТ») without typo-merging; direct-neighbour key substitutions beat diagonal ones («услушу» → «услугу»).
+- **Productive profanity guard and short CAPS handling.** Productive Russian profanity forms (including CAPS) are preserved; 3-letter wrong-layout CAPS words convert (`AJY` → `ФОН`), while 2-letter CAPS acronyms (`FP`, `СЗ`) and lone letters inside multi-word English phrases (`that he d`, `that i d`) stay intact.
 
 ### New in 0.3.83
 

@@ -714,8 +714,9 @@ impl Engine {
                             && (dict::get(src).contains(p)
                                 || crate::ngram::get(src).count(&[p, &lc]) > 0.0)
                     };
-                    let multi_ctx = ctx.prev.as_deref().is_some_and(ok_ctx)
-                        || ctx.prev2.as_deref().is_some_and(ok_ctx);
+                    let multi_ctx = o.preferred_lang != Some(dst)
+                        && (ctx.prev.as_deref().is_some_and(ok_ctx)
+                            || ctx.prev2.as_deref().is_some_and(ok_ctx));
                     if conv_word && !typed_word && !multi_ctx {
                         return Decision::Convert { text: converted, target: dst, reason: SINGLE_WORD_REASON };
                     }

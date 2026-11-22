@@ -744,12 +744,33 @@ fn typist_sweep() {
             }
         }
     });
+    // Extra-space inside a word (5% of len>=5 ranked words): checks whether splitting leaves second half mangled.
+    let extra_space_src: Vec<(Lang, String)> = ranked
+        .iter()
+        .filter(|(_, w, _)| w.chars().count() >= 5 && w.chars().all(|c| c.is_alphabetic()))
+        .step_by(20)
+        .map(|(l, w, _)| (*l, w.clone()))
+        .collect();
+    let r_extra_space = Recall::new("space_extra_inside (5% ranked)");
+    par_chunks(&extra_space_src, 128, |chunk| {
+        let mut e = Engine::new(opts());
+        for (_, w) in chunk {
+            let cs: Vec<char> = w.chars().collect();
+            let mid = cs.len() / 2;
+            let a: String = cs[..mid].iter().collect();
+            let b: String = cs[mid..].iter().collect();
+            let typed = format!("{a} {b}");
+            let got = field_after_with(&mut e, &typed);
+            r_extra_space.check(&typed, &got, w);
+        }
+    });
     println!(
-        "space_merge bi={}/{} tri={}/{} done in {:.1}s",
+        "space_merge bi={}/{} tri={}/{} extra_space={} done in {:.1}s",
         bi_sample.len(),
         bi_all.len(),
         tri_sample.len(),
         tri_all.len(),
+        extra_space_src.len(),
         t0.elapsed().as_secs_f64()
     );
 
@@ -927,7 +948,7 @@ fn typist_sweep() {
     report.push_str("=== TYPO & SPACE RECOVERY SWEEPS ===\n");
     for r in [
         &b_space_g, &b_space_g_caps, &b_prep_bi,
-        &r_bi_glued, &r_bi_nb, &r_tri_glued,
+        &r_bi_glued, &r_bi_nb, &r_tri_glued, &r_extra_space,
         &r_shift_ranked, &r_shift_title, &r_shift_caps, &r_shift_mat,
         &r_sub, &r_omit, &r_ins, &r_dbl, &r_trn,
         &r_case_l, &r_case_t, &r_case_c,
