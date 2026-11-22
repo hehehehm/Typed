@@ -21,7 +21,7 @@
 //!   baseline exists and the diff is over the threshold
 
 use super::shots::{
-    app_with, focus, locked_vault_ui, merge_textures, rasterize, sample_cfg, write_png, INTER,
+    app_with, app_with_no_icon_preload, focus, locked_vault_ui, merge_textures, rasterize, sample_cfg, write_png, INTER,
     LONG_PATH,
 };
 use super::*;
@@ -3020,4 +3020,53 @@ fn ux_edge_two_hundred_apps_overflow() {
         "200-app list is wider than the window by {}",
         h.app.content_overflow
     );
+}
+
+#[test]
+fn ux_home_and_apps_render_does_not_block_with_thirty_path_apps() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let caller = std::thread::current().id();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hcount = hits.clone();
+    let hook: Arc<dyn Fn(&str) -> Option<egui::ColorImage> + Send + Sync> = Arc::new(move |_id: &str| {
+        if std::thread::current().id() == caller {
+            hcount.fetch_add(1, Ordering::SeqCst);
+        }
+        // Long enough that a synchronous extract of 30 apps would blow the budget.
+        std::thread::sleep(Duration::from_millis(800));
+        None
+    });
+
+    let mut cfg = empty_cfg();
+    for i in 0..30 {
+        cfg.set_layout(
+            &format!(r"C:\Program Files\Vendor{i}\App\app{i}.exe"),
+            if i % 2 == 0 { Lang::En } else { Lang::Ru },
+        );
+    }
+    assert_eq!(cfg.apps.len(), 30);
+
+    let t0 = Instant::now();
+    let mut home_app = app_with_no_icon_preload(cfg.clone(), Tab::Home, false);
+    home_app.icons.set_extract(Some(hook.clone()));
+    let mut home = Harness::new(home_app, focus(), HOME, 1.0, false);
+    assert!(home.last.is_some(), "home screen must paint");
+    let mut apps_app = app_with_no_icon_preload(cfg, Tab::Apps, false);
+    apps_app.icons.set_extract(Some(hook));
+    let mut apps = Harness::new(apps_app, focus(), SEC, 1.0, false);
+    assert!(apps.last.is_some(), "apps screen must paint");
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(1000),
+        "home/apps render blocked for {elapsed:?} with 30 path apps (icon extract must be async)"
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "icon extraction ran on the UI / test thread"
+    );
+    let _ = (home.app.tab, apps.app.tab);
 }

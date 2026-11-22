@@ -1,5 +1,9 @@
 use eframe::egui;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
 pub use crate::app_id::basename;
 
@@ -71,12 +75,51 @@ pub fn eye_icon_button(ui: &mut egui::Ui, revealed: bool) -> egui::Response {
     response.on_hover_text(if revealed { "Скрыть" } else { "Показать" })
 }
 
-/// Texture cache keyed by app id. `None` = extraction failed, use the placeholder.
-#[derive(Default)]
+/// Texture cache keyed by app id. `None` in `map` / `cpu` = extraction failed, use the placeholder.
+/// Extraction never runs on the UI thread: a background worker does it and sends the pixels back.
 pub struct IconCache {
     map: HashMap<String, Option<egui::TextureHandle>>,
+    /// Finished CPU images (including failed extracts). Survives `evict`.
+    cpu: HashMap<String, Option<egui::ColorImage>>,
     /// Colour images waiting to be uploaded on first `show` (shots / tests).
     pending: HashMap<String, egui::ColorImage>,
+    inflight: HashSet<String>,
+    tx: Sender<String>,
+    rx: Receiver<(String, Option<egui::ColorImage>)>,
+    /// Per-cache extract override (tests). Not global, so parallel tests do not clash.
+    #[cfg(test)]
+    extract: std::sync::Arc<std::sync::Mutex<Option<ExtractFn>>>,
+}
+
+#[cfg(test)]
+type ExtractFn = std::sync::Arc<dyn Fn(&str) -> Option<egui::ColorImage> + Send + Sync>;
+
+impl Default for IconCache {
+    fn default() -> Self {
+        let (tx, req_rx) = mpsc::channel();
+        let (res_tx, rx) = mpsc::channel();
+        #[cfg(test)]
+        let extract: std::sync::Arc<std::sync::Mutex<Option<ExtractFn>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        #[cfg(test)]
+        let hook = extract.clone();
+        let _ = thread::Builder::new().name("typed-icons".into()).spawn(move || {
+            #[cfg(test)]
+            icon_worker(req_rx, res_tx, hook);
+            #[cfg(not(test))]
+            icon_worker(req_rx, res_tx);
+        });
+        Self {
+            map: HashMap::new(),
+            cpu: HashMap::new(),
+            pending: HashMap::new(),
+            inflight: HashSet::new(),
+            tx,
+            rx,
+            #[cfg(test)]
+            extract,
+        }
+    }
 }
 
 impl IconCache {
@@ -86,14 +129,53 @@ impl IconCache {
         self.pending.insert(id.to_string(), mock_icon(id));
     }
 
+    /// Make this cache's worker call `f` instead of `load_rgba` (other caches are unchanged).
+    #[cfg(test)]
+    pub fn set_extract(&self, f: Option<ExtractFn>) {
+        if let Ok(mut g) = self.extract.lock() {
+            *g = f;
+        }
+    }
+
+    fn drain(&mut self) -> bool {
+        let mut got = false;
+        while let Ok((id, img)) = self.rx.try_recv() {
+            self.inflight.remove(&id);
+            self.cpu.insert(id, img);
+            got = true;
+        }
+        got
+    }
+
+    /// Upload any finished extracts; request a repaint if new icons arrived.
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        if self.drain() {
+            ctx.request_repaint();
+        }
+    }
+
     pub fn get(&mut self, ctx: &egui::Context, id: &str) -> Option<egui::TextureHandle> {
+        self.drain();
         if let Some(t) = self.map.get(id) {
             return t.clone();
         }
-        let img = self.pending.remove(id).or_else(|| load_rgba(id));
-        let tex = img.map(|img| ctx.load_texture(format!("icon:{id}"), img, egui::TextureOptions::LINEAR));
-        self.map.insert(id.to_string(), tex.clone());
-        tex
+        if let Some(img) = self.pending.remove(id) {
+            let tex = ctx.load_texture(format!("icon:{id}"), img.clone(), egui::TextureOptions::LINEAR);
+            self.cpu.insert(id.to_string(), Some(img));
+            self.map.insert(id.to_string(), Some(tex.clone()));
+            return Some(tex);
+        }
+        if let Some(opt) = self.cpu.get(id) {
+            let tex = opt.clone().map(|img| {
+                ctx.load_texture(format!("icon:{id}"), img, egui::TextureOptions::LINEAR)
+            });
+            self.map.insert(id.to_string(), tex.clone());
+            return tex;
+        }
+        if self.inflight.insert(id.to_string()) {
+            let _ = self.tx.send(id.to_string());
+        }
+        None
     }
 
     /// Draw the icon (or placeholder) for `id`.
@@ -113,10 +195,50 @@ impl IconCache {
         p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, st::font_sm(), t.ink);
     }
 
-    /// Drop GPU textures (the window is being closed). Images can be reloaded later.
+    /// Drop GPU textures (the window is being closed). CPU images stay cached.
     pub fn evict(&mut self) {
         self.map.clear();
     }
+}
+
+fn icon_worker_loop(req_rx: Receiver<String>, res_tx: Sender<(String, Option<egui::ColorImage>)>, extract: impl Fn(&str) -> Option<egui::ColorImage>) {
+    #[cfg(windows)]
+    unsafe {
+        // SHGetFileInfo / ExtractIconEx want an STA apartment.
+        let _ = windows_sys::Win32::System::Com::CoInitializeEx(
+            std::ptr::null_mut(),
+            windows_sys::Win32::System::Com::COINIT_APARTMENTTHREADED as u32,
+        );
+    }
+    while let Ok(id) = req_rx.recv() {
+        let img = extract(&id);
+        if res_tx.send((id, img)).is_err() {
+            break;
+        }
+    }
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::System::Com::CoUninitialize();
+    }
+}
+
+#[cfg(not(test))]
+fn icon_worker(req_rx: Receiver<String>, res_tx: Sender<(String, Option<egui::ColorImage>)>) {
+    icon_worker_loop(req_rx, res_tx, load_rgba);
+}
+
+#[cfg(test)]
+fn icon_worker(
+    req_rx: Receiver<String>,
+    res_tx: Sender<(String, Option<egui::ColorImage>)>,
+    hook: std::sync::Arc<std::sync::Mutex<Option<ExtractFn>>>,
+) {
+    icon_worker_loop(req_rx, res_tx, move |id| {
+        match hook.lock().ok().and_then(|g| g.clone()) {
+            Some(f) => f(id),
+            None => load_rgba(id),
+        }
+    });
 }
 
 /// A stable, colourful 32×32 mark derived from the id (for shots and tests).
@@ -385,5 +507,36 @@ mod tests {
         if let Some(p) = cache_path(&id) {
             let _ = std::fs::remove_file(p);
         }
+    }
+
+    #[test]
+    fn get_does_not_extract_on_the_caller_thread() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        let caller = std::thread::current().id();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        let ctx = egui::Context::default();
+        let mut cache = IconCache::default();
+        cache.set_extract(Some(Arc::new(move |_id: &str| {
+            if std::thread::current().id() == caller {
+                h.fetch_add(1, Ordering::SeqCst);
+            }
+            thread::sleep(Duration::from_millis(800));
+            None
+        })));
+        let t0 = Instant::now();
+        for i in 0..30 {
+            let id = format!(r"C:\Program Files\Vendor{i}\app{i}.exe");
+            assert!(cache.get(&ctx, &id).is_none(), "first get must be a miss (async)");
+        }
+        assert!(
+            t0.elapsed() < Duration::from_millis(400),
+            "IconCache::get blocked for {:?}",
+            t0.elapsed()
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "extraction ran on the caller thread");
+        cache.set_extract(None);
     }
 }

@@ -97,6 +97,10 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.82
+
+- **Окно больше не зависает.** В 0.3.81 смена рендерера на wgpu (LowPower + vsync) на Windows могла повесить окно настроек («Не отвечает», 0% CPU) сразу после открытия. Вернули glow, как в 0.3.80; экономия GPU по-прежнему за счёт перерисовки только по событиям, без цикла 200 мс. Иконки программ извлекаются в фоновом потоке и не блокируют интерфейс.
+
 ## Что нового в 0.3.81
 
 - **Меньше нагрузки на видеокарту.** Окно настроек больше не перерисовывается само по себе каждые 200 мс: только по вводу или пока на экране есть тост. Предпочитается встроенная / энергосберегающая видеокарта. На Windows при закрытии окна процесс настроек завершается и освобождает GPU; в трее остаётся лёгкий демон (раскладка и хуки) — это второй процесс в диспетчере, он нужен.
@@ -961,6 +965,10 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.82
+
+- The 0.3.81 switch to the wgpu renderer (LowPower + vsync) could hang the settings window on Windows ("Not Responding", 0% CPU) right after opening. The glow renderer from 0.3.80 is restored; GPU savings still come from painting only on input/events, not from a 200 ms loop. App icon extraction runs on a background thread and never blocks the UI.
 
 ### New in 0.3.81
 

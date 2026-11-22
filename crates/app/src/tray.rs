@@ -125,10 +125,9 @@ pub fn clear_repaint_ctx() {
 }
 
 pub fn wake_gui() {
-    if let Ok(slot) = REPAINT.lock() {
-        if let Some(ctx) = slot.as_ref() {
-            ctx.request_repaint();
-        }
+    let ctx = REPAINT.lock().ok().and_then(|slot| slot.clone());
+    if let Some(ctx) = ctx {
+        ctx.request_repaint();
     }
 }
 

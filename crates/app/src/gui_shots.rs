@@ -58,12 +58,23 @@ fn many_exceptions_cfg(n: usize) -> Config {
 }
 
 pub(super) fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
+    app_with_icons(cfg, tab, light, true)
+}
+
+/// Like `app_with`, but skip mock preloads so icon extraction goes through the real async path.
+pub(super) fn app_with_no_icon_preload(cfg: Config, tab: Tab, light: bool) -> App {
+    app_with_icons(cfg, tab, light, false)
+}
+
+fn app_with_icons(cfg: Config, tab: Tab, light: bool, preload: bool) -> App {
     let dir = tmp_dir();
     let mut cfg = cfg;
     cfg.light_theme = light;
     let mut icons = IconCache::default();
-    for id in cfg.apps.keys().chain(cfg.exception_apps.iter()) {
-        icons.preload_mock(id);
+    if preload {
+        for id in cfg.apps.keys().chain(cfg.exception_apps.iter()) {
+            icons.preload_mock(id);
+        }
     }
     App {
         path: dir.join("config.json"),

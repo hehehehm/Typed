@@ -1422,7 +1422,7 @@ fn lang_name(l: Lang) -> &'static str {
 }
 
 impl eframe::App for App {
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.on_exit_impl();
     }
 
@@ -1520,6 +1520,7 @@ impl eframe::App for App {
         if let Some(d) = self.visible_repaint_delay() {
             ctx.request_repaint_after(d);
         }
+        self.icons.poll(ctx);
         let focus = self.focus.lock().map(|f| f.clone()).unwrap_or_default();
         self.vault.tick(ctx, self.cfg.vault_idle_minutes);
         self.draw(ctx, &focus);
@@ -1697,13 +1698,11 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
             vp.with_icon(egui::IconData::default())
         }
     };
-    let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
-    wgpu_options.power_preference = eframe::wgpu::PowerPreference::LowPower;
+    // glow (as in 0.3.80): wgpu LowPower + vsync Fifo hung the Windows GUI
+    // ("Не отвечает", 0% CPU) after the first home-screen frame.
     let opts = eframe::NativeOptions {
         viewport,
         vsync: true,
-        renderer: eframe::Renderer::Wgpu,
-        wgpu_options,
         hardware_acceleration: eframe::HardwareAcceleration::Preferred,
         ..Default::default()
     };

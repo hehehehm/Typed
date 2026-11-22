@@ -16,7 +16,7 @@ layout_keeper_core = { path = "../core" }
 zeroize = "1"
 log = "0.4"
 env_logger = "0.11"
-eframe = { version = "0.29", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 png = "0.17"
 arboard = { version = "3", default-features = false }
 qrcodegen = "1.8"
@@ -41,6 +41,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_Graphics_Gdi",
   "Win32_Storage_FileSystem",
   "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Com",
 ] }
 
 [target.'cfg(unix)'.dependencies]
