@@ -562,7 +562,7 @@ impl Config {
     /// Keys are canonical (basename of a path, otherwise the normalised id);
     /// any other key for the same exe is dropped.
     pub fn set_layout(&mut self, app_id: &str, lang: Lang) -> bool {
-        let key = canonical_app_id(app_id);
+        let key = storage_app_id(app_id);
         let exe = exe_name(&key);
         let mut changed = false;
         if !exe.is_empty() {
@@ -578,6 +578,50 @@ impl Config {
             }
         }
         changed | (self.apps.insert(key, lang) != Some(lang))
+    }
+
+    /// If `app_id` is a full path and the same exe is stored as a bare name (or a
+    /// different path), keep the path so the settings list can show a real icon.
+    pub fn prefer_app_path(&mut self, app_id: &str) -> bool {
+        let key = storage_app_id(app_id);
+        if !is_path_id(&key) {
+            return false;
+        }
+        let exe = exe_name(&key);
+        if exe.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        let app_keys: Vec<String> = self
+            .apps
+            .keys()
+            .filter(|k| exe_name(k) == exe && *k != &key)
+            .cloned()
+            .collect();
+        for k in app_keys {
+            if let Some(lang) = self.apps.remove(&k) {
+                self.apps.insert(key.clone(), lang);
+                changed = true;
+            }
+        }
+        if self.apps.contains_key(&exe) && exe != key {
+            if let Some(lang) = self.apps.remove(&exe) {
+                self.apps.insert(key.clone(), lang);
+                changed = true;
+            }
+        }
+        let exc_keys: Vec<String> = self
+            .exception_apps
+            .iter()
+            .filter(|e| exe_name(e) == exe && *e != &key)
+            .cloned()
+            .collect();
+        if !exc_keys.is_empty() {
+            self.exception_apps.retain(|e| exe_name(e) != exe);
+            self.exception_apps.push(key);
+            changed = true;
+        }
+        changed
     }
 
     /// The user hid this app in the settings list.
@@ -622,7 +666,7 @@ impl Config {
     /// Put `app_id` on the exceptions list (Typed fully off) and drop the same exe
     /// from the layout list. Returns true if something changed.
     pub fn add_exception(&mut self, app_id: &str) -> bool {
-        let key = canonical_app_id(app_id);
+        let key = storage_app_id(app_id);
         if key.is_empty() {
             return false;
         }
@@ -652,23 +696,45 @@ impl Config {
     pub fn dedupe_app_lists(&mut self) {
         let mut apps: BTreeMap<String, Lang> = BTreeMap::new();
         for (k, lang) in std::mem::take(&mut self.apps) {
-            let key = canonical_app_id(&k);
+            let key = storage_app_id(&k);
             if key.is_empty() {
                 continue;
             }
-            apps.insert(key, lang); // last one wins if two different langs
+            let exe = exe_name(&key);
+            if !exe.is_empty() {
+                if let Some(existing) = apps.keys().find(|e| exe_name(e) == exe).cloned() {
+                    // Prefer a full path over a bare exe name; last lang wins.
+                    if is_path_id(&key) && !is_path_id(&existing) {
+                        apps.remove(&existing);
+                        apps.insert(key, lang);
+                    } else {
+                        apps.insert(existing, lang);
+                    }
+                    continue;
+                }
+            }
+            apps.insert(key, lang);
         }
         let mut seen = std::collections::HashSet::new();
-        let mut exceptions = Vec::new();
+        let mut exceptions: Vec<String> = Vec::new();
         for e in std::mem::take(&mut self.exception_apps) {
             if e.trim().is_empty() {
                 continue;
             }
             // Short default tokens (`terminal`, `powershell`) stay as-is so
-            // substring matching keeps working; path entries collapse to the exe name.
-            let key = if is_path_id(&e) { canonical_app_id(&e) } else { normalize_app_id(&e) };
+            // substring matching keeps working; path entries keep the path for icons.
+            let key = storage_app_id(&e);
             let exe = exe_name(&key);
             let dedupe_key = if exe.is_empty() { key.clone() } else { exe };
+            if let Some(i) = exceptions.iter().position(|old| {
+                let oe = exe_name(old);
+                (!oe.is_empty() && oe == exe_name(&key)) || old == &key
+            }) {
+                if is_path_id(&key) && !is_path_id(&exceptions[i]) {
+                    exceptions[i] = key;
+                }
+                continue;
+            }
             if !seen.insert(dedupe_key) {
                 continue;
             }
@@ -790,6 +856,7 @@ fn is_path_id(id: &str) -> bool {
 }
 
 /// Basename of a path, otherwise the normalised id (bundle id, WM_CLASS, bare exe).
+/// Used for matching; storage uses [`storage_app_id`] so icon extraction can keep the path.
 pub fn canonical_app_id(id: &str) -> String {
     let n = normalize_app_id(id);
     if is_path_id(&n) {
@@ -797,6 +864,17 @@ pub fn canonical_app_id(id: &str) -> String {
     } else {
         n
     }
+}
+
+/// Id stored in `apps` / `exception_apps`: keep a full path when we have one,
+/// otherwise the normalised bare id.
+pub fn storage_app_id(id: &str) -> String {
+    let n = normalize_app_id(id);
+    n.trim_end_matches(['/', '\\']).to_string()
+}
+
+pub fn is_path_app_id(id: &str) -> bool {
+    is_path_id(id)
 }
 
 #[cfg(test)]
@@ -1062,6 +1140,7 @@ mod tests {
             ]
         }"#).unwrap();
         assert_eq!(c.apps.len(), 1);
+        assert!(c.apps.keys().any(|k| k.contains("google") && k.ends_with("chrome.exe")));
         assert_eq!(c.layout_for(r"C:\Program Files\Google\Chrome\Application\chrome.exe"), Some(Lang::En));
         assert_eq!(c.layout_for("CHROME.EXE"), Some(Lang::En));
         // Same exe in both lists: exception wins.
@@ -1070,10 +1149,17 @@ mod tests {
         assert_eq!(c.exception_apps.iter().filter(|e| exe_name(e) == "innosetup-6.7.1.tmp").count(), 1);
         assert_eq!(c.exception_apps.iter().filter(|e| exe_name(e) == "layout-keeper.exe").count(), 1);
         assert!(c.exception_apps.iter().any(|e| e == "powershell"));
-        // Adding again is a no-op; a path for a new exe is stored as the basename.
+        // Adding again is a no-op; a path for a new exe is kept as the path (icons).
         let mut c = c;
         assert!(!c.add_exception("layout-keeper.exe"));
         assert!(c.add_exception(r"C:\Temp\Foo.EXE"));
-        assert!(c.exception_apps.iter().any(|e| e == "foo.exe"));
+        assert!(c.exception_apps.iter().any(|e| exe_name(e) == "foo.exe" && e.contains("temp")));
+        // Paths win over a previously stored bare exe name.
+        let mut c = Config::default();
+        assert!(c.set_layout("chrome.exe", Lang::En));
+        assert!(c.prefer_app_path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"));
+        assert!(c.apps.keys().any(|k| k.ends_with("chrome.exe") && k.contains("google")));
+        assert_eq!(c.layout_for("chrome.exe"), Some(Lang::En));
+        assert_eq!(c.apps.len(), 1);
     }
 }

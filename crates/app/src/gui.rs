@@ -1345,6 +1345,37 @@ impl App {
                 self.content_overflow = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
             });
     }
+
+    fn on_exit_impl(&mut self) {
+        self.icons.evict();
+        self.logo_textures = Default::default();
+        self.logo_fade_textures = Default::default();
+        self.sea_textures = Default::default();
+        self.qr.clear();
+        crate::tray::clear_repaint_ctx();
+        self.vault.lock();
+        // Windows (since 0.3.69): the settings process exits on every close / minimize
+        // and the daemon (with the tray icon) keeps running; the tray's «Выход» stops both.
+        // That 1–2 MB process without a GPU is the daemon (hooks, engine, tray) and is required.
+        // macOS / Linux: the window is the app (macOS) or there is no tray (Linux), so
+        // quitting it stops the key handling too, as before.
+        #[cfg(not(windows))]
+        crate::platform::stop_daemon();
+    }
+
+    /// Timed repaint only while a toast or unlocked-vault idle lock actually needs it.
+    fn visible_repaint_delay(&self) -> Option<std::time::Duration> {
+        if let Some((_, at)) = &self.pending_delete {
+            let left = UNDO_DELETE_FOR.saturating_sub(at.elapsed());
+            if !left.is_zero() {
+                return Some(left);
+            }
+        }
+        if self.vault.is_unlocked() {
+            return Some(std::time::Duration::from_secs(60));
+        }
+        None
+    }
 }
 
 const SECTIONS: [Tab; 5] = [Tab::Apps, Tab::Words, Tab::Vault, Tab::Settings, Tab::Donate];
@@ -1391,14 +1422,8 @@ fn lang_name(l: Lang) -> &'static str {
 }
 
 impl eframe::App for App {
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.vault.lock();
-        // Windows (since 0.3.69): the settings process exits on every close / minimize
-        // and the daemon (with the tray icon) keeps running; the tray's «Выход» stops both.
-        // macOS / Linux: the window is the app (macOS) or there is no tray (Linux), so
-        // quitting it stops the key handling too, as before.
-        #[cfg(not(windows))]
-        crate::platform::stop_daemon();
+    fn on_exit(&mut self) {
+        self.on_exit_impl();
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -1409,8 +1434,8 @@ impl eframe::App for App {
             self.apply_logo(ctx);
             self.chrome_ready = true;
         }
+        crate::tray::set_repaint_ctx(ctx.clone());
         if let Some(tray) = &self.tray {
-            tray.set_repaint(ctx.clone());
             while let Some(cmd) = tray.try_recv() {
                 match cmd {
                     crate::tray::TrayCmd::Show => {
@@ -1434,6 +1459,7 @@ impl eframe::App for App {
         let can_hide = self.tray.as_ref().is_some_and(|t| t.is_active()) && !self.allow_close;
         if can_hide && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.icons.evict();
             hide_window(ctx);
             self.ui_visible = false;
             self.vault.lock();
@@ -1451,6 +1477,7 @@ impl eframe::App for App {
         // re-sending the hide commands every frame woke eframe again and again (≈6% CPU
         // while minimized, 0% while open).
         if can_hide && minimized && self.ui_visible {
+            self.icons.evict();
             hide_window(ctx);
             self.ui_visible = false;
             self.vault.lock();
@@ -1488,7 +1515,11 @@ impl eframe::App for App {
             }
             return;
         }
-        ctx.request_repaint_after(Duration::from_millis(200));
+        // No periodic repaint: the window is event-driven. A 200 ms loop here kept a
+        // discrete NVIDIA GPU at ~14% / ~80 °C with the settings window merely open.
+        if let Some(d) = self.visible_repaint_delay() {
+            ctx.request_repaint_after(d);
+        }
         let focus = self.focus.lock().map(|f| f.clone()).unwrap_or_default();
         self.vault.tick(ctx, self.cfg.vault_idle_minutes);
         self.draw(ctx, &focus);
@@ -1575,18 +1606,34 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
         // Poll the focused window off the UI thread; skip our own window so the
         // "assign current app" buttons target the app the user came from.
         let focus = focus.clone();
-        std::thread::spawn(move || loop {
-            let (app, layout) = platform::probe();
-            if let Ok(mut f) = focus.lock() {
-                match app {
-                    Some(a) if !is_self(&a) => {
-                        f.app = Some(a);
-                        f.layout = layout;
+        let watch = path.clone();
+        std::thread::spawn(move || {
+            let mut last_mtime = mtime(&watch);
+            loop {
+                let (app, layout) = platform::probe();
+                let mut changed = false;
+                if let Ok(mut f) = focus.lock() {
+                    match app {
+                        Some(a) if !is_self(&a) => {
+                            if f.app.as_deref() != Some(a.as_str()) || f.layout != layout {
+                                changed = true;
+                            }
+                            f.app = Some(a);
+                            f.layout = layout;
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                let m = mtime(&watch);
+                if m.is_some() && m != last_mtime {
+                    last_mtime = m;
+                    changed = true;
+                }
+                if changed {
+                    crate::tray::wake_gui();
+                }
+                std::thread::sleep(Duration::from_millis(500));
             }
-            std::thread::sleep(Duration::from_millis(500));
         });
     }
     let welcome_open = !cfg.hide_welcome || cfg.welcome_gen < layout_keeper_core::config::CURRENT_WELCOME_GEN;
@@ -1650,8 +1697,14 @@ pub fn run(open_vault: bool, start_hidden: bool) -> Result<(), String> {
             vp.with_icon(egui::IconData::default())
         }
     };
+    let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
+    wgpu_options.power_preference = eframe::wgpu::PowerPreference::LowPower;
     let opts = eframe::NativeOptions {
         viewport,
+        vsync: true,
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options,
+        hardware_acceleration: eframe::HardwareAcceleration::Preferred,
         ..Default::default()
     };
     eframe::run_native(
@@ -1794,5 +1847,51 @@ mod qr_tests {
             let img = super::qr_image(a);
             assert!(img.size[0] >= 25 && img.size[0] == img.size[1]);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod idle_repaint_tests {
+    use super::*;
+    use eframe::egui;
+
+    #[test]
+    fn idle_visible_window_schedules_no_timed_repaint() {
+        let app = shots::app_with(shots::sample_cfg(), Tab::Settings, false);
+        assert!(
+            app.visible_repaint_delay().is_none(),
+            "an idle settings window must not request a periodic repaint"
+        );
+    }
+
+    #[test]
+    fn undo_toast_schedules_a_short_repaint() {
+        let mut app = shots::app_with(shots::sample_cfg(), Tab::Apps, false);
+        app.pending_delete = Some((PendingDelete::Exception { id: "x.exe".into() }, Instant::now()));
+        let d = app.visible_repaint_delay().expect("toast needs a wakeup");
+        assert!(d <= UNDO_DELETE_FOR);
+        assert!(d > Duration::ZERO);
+    }
+
+    #[test]
+    fn idle_context_is_not_asked_to_repaint() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+        let app = shots::app_with(shots::sample_cfg(), Tab::Settings, false);
+        let ctx = egui::Context::default();
+        let hits = Arc::new(AtomicU64::new(0));
+        let n = hits.clone();
+        ctx.set_request_repaint_callback(move |_| {
+            n.fetch_add(1, Ordering::SeqCst);
+        });
+        if let Some(d) = app.visible_repaint_delay() {
+            ctx.request_repaint_after(d);
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "idle visible UI must not call request_repaint"
+        );
     }
 }

@@ -112,6 +112,18 @@ pub fn start_daemon_tray(logo_index: u8, handler: fn(TrayCmd)) -> Option<TrayHan
 }
 
 #[allow(dead_code)]
+pub fn set_repaint_ctx(ctx: egui::Context) {
+    if let Ok(mut slot) = REPAINT.lock() {
+        *slot = Some(ctx);
+    }
+}
+
+pub fn clear_repaint_ctx() {
+    if let Ok(mut slot) = REPAINT.lock() {
+        *slot = None;
+    }
+}
+
 pub fn wake_gui() {
     if let Ok(slot) = REPAINT.lock() {
         if let Some(ctx) = slot.as_ref() {

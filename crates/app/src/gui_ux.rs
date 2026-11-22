@@ -1049,6 +1049,33 @@ fn default_sec(tab: Tab, light: bool, cfg: Config) -> Harness {
     Harness::new(app_with(cfg, tab, light), focus(), SEC, 1.0, false)
 }
 
+#[test]
+fn ux_programs_and_exceptions_counts_are_independent() {
+    let mut cfg = empty_cfg();
+    cfg.set_layout("alpha.exe", Lang::En);
+    cfg.set_layout("beta.exe", Lang::En);
+    cfg.set_layout("gamma.exe", Lang::Ru);
+    assert!(cfg.add_exception("one.exe"));
+    assert!(cfg.add_exception("two.exe"));
+    assert_eq!(cfg.apps.len(), 3);
+    assert_eq!(cfg.exception_apps.len(), 2);
+    let h = default_sec(Tab::Apps, true, cfg);
+    let texts: Vec<String> = h.texts().into_iter().map(|t| t.text).collect();
+    let joined = texts.join(" | ");
+    assert!(
+        texts.iter().any(|t| t.contains("Программы") && t.contains('3')),
+        "programs count should be 3, got: {joined}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("Исключения") && t.contains('2')),
+        "exceptions count should be 2 (not copied from programs), got: {joined}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.contains("Исключения") && t.contains('3')),
+        "exceptions must not show the programs count: {joined}"
+    );
+}
+
 
 fn many_exc_cfg(n: usize) -> Config {
     let mut c = empty_cfg();

@@ -141,7 +141,11 @@ impl Controller {
         }
         // Sticky defaults: an assigned layout is never overwritten by a keyboard switch.
         // Only `set-app` / the GUI change an existing assignment.
+        // If we now have a full path for a name that was stored as a bare exe, keep the path.
         if self.config.layout_for(app).is_some() {
+            if self.config.prefer_app_path(app) {
+                self.save();
+            }
             return;
         }
         if self.config.set_layout(app, lang) {

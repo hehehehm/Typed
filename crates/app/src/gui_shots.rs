@@ -61,6 +61,10 @@ pub(super) fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
     let dir = tmp_dir();
     let mut cfg = cfg;
     cfg.light_theme = light;
+    let mut icons = IconCache::default();
+    for id in cfg.apps.keys().chain(cfg.exception_apps.iter()) {
+        icons.preload_mock(id);
+    }
     App {
         path: dir.join("config.json"),
         cfg,
@@ -76,7 +80,7 @@ pub(super) fn app_with(cfg: Config, tab: Tab, light: bool) -> App {
         vault: crate::vault_ui::VaultUi::for_test(dir.join("no-vault.bin"), None),
         capturing_hotkey: None,
         word_draft: String::new(),
-        icons: IconCache::default(),
+        icons,
         grow_for_section: false,
         content_overflow: 0.0,
         tray: None,

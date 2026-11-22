@@ -18,6 +18,19 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+/// NVIDIA Optimus / AMD PowerXpress: use the integrated / low-power GPU.
+/// These must stay 0. Exporting 1 would force the discrete GPU.
+#[cfg(windows)]
+#[no_mangle]
+#[used]
+pub static NvOptimusEnablement: u32 = 0;
+
+#[cfg(windows)]
+#[no_mangle]
+#[used]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 0;
+
+
 mod app_id;
 mod brand;
 mod controller;

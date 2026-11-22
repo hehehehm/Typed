@@ -97,6 +97,12 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.81
+
+- **Меньше нагрузки на видеокарту.** Окно настроек больше не перерисовывается само по себе каждые 200 мс: только по вводу или пока на экране есть тост. Предпочитается встроенная / энергосберегающая видеокарта. На Windows при закрытии окна процесс настроек завершается и освобождает GPU; в трее остаётся лёгкий демон (раскладка и хуки) — это второй процесс в диспетчере, он нужен.
+- **Иконки программ.** В списках «Программы» и «Исключения» показываются настоящие иконки приложений (кэш на диске). Для этого запоминается полный путь к exe; пока путь неизвестен, остаётся буквенная метка.
+- **Счётчики.** Число в сегменте «Исключения» считается отдельно от «Программы».
+
 ## Что нового в 0.3.80
 
 - **Карточка пароля в сейфе.** Карточка с полем и кнопкой «Открыть» той же высоты и с теми же отступами, что и поле «слово» в словаре: она больше не растягивается на всё окно и не центрирует поле.
@@ -955,6 +961,12 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.81
+
+- Less GPU load: the settings window no longer repaints itself every 200 ms — only on input, or while a toast is on screen. The integrated / low-power adapter is preferred (wgpu LowPower; NVIDIA Optimus / AMD PowerXpress are not forced to the discrete GPU). On Windows, closing the window exits the settings process and releases the GPU; the small process that stays in the tray is the daemon (hooks and engine) and is required.
+- Real app icons in Programs and Exceptions (cached on disk). Full exe paths are stored when the app is seen in the foreground; a letter mark is used until a path is known.
+- The Exceptions count in the segment is independent of the Programs count.
 
 ### New in 0.3.80
 
