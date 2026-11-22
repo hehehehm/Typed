@@ -573,7 +573,7 @@ impl Engine {
     }
 
     fn merge_split_word(&mut self, token: &str, boundary: char, already_typed: bool) -> Option<Replacement> {
-        if !self.options.fix_missing_spaces {
+        if !self.options.fix_missing_spaces || !self.options.fix_typos || self.options.typo_level == typo::Level::Cautious {
             return None;
         }
         let last = self.last.as_ref()?;
