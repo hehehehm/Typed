@@ -1637,7 +1637,11 @@ impl Engine {
                 if d.is_word(&lower) || morph::is_known_form(d, &lower) || d.is_name_form(&lower) {
                     return None;
                 }
-                split::lm_segment(d, core, src)?.text
+                let seg = split::lm_segment(d, core, src)?;
+                if seg.dropped && !(self.options.fix_typos && self.options.typo_level != typo::Level::Cautious) {
+                    return None;
+                }
+                seg.text
             }
         };
         let lower = Dictionary::normalize(core);
