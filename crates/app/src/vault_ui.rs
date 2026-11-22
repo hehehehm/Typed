@@ -244,28 +244,30 @@ impl VaultUi {
     fn show_locked(&mut self, ui: &mut egui::Ui) {
         let exists = self.path.exists();
         let mut go = false;
-        st::group(ui, |ui| entry(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = st::PAD;
-            let w = ui.available_width();
-            if exists {
-                let bw = st::text_w(ui, "Открыть", st::font_md()) + st::PAD * 2.0;
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = st::PAD;
-                    st::password_bg(ui, &mut self.pw1, "пароль", w - bw - st::PAD, ACCENT);
-                    go = st::primary(ui, "Открыть", ACCENT)
-                        .on_hover_text(format!("Файл: {}", self.path.display()))
-                        .clicked();
-                });
-            } else {
-                st::password_bg(ui, &mut self.pw1, "новый пароль (8+)", w, ACCENT);
-                st::password_bg(ui, &mut self.pw2, "повтор", w, ACCENT);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    go = st::primary(ui, "Создать", ACCENT)
-                        .on_hover_text("Мастер-пароль нельзя восстановить")
-                        .clicked();
-                });
-            }
-        }));
+        // Same vertical rhythm as the dictionary / programs add row (GAP, shared field height).
+        st::group(ui, |ui| {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, st::GAP)).show(ui, |ui| {
+                let w = ui.available_width();
+                if exists {
+                    // Button first so it keeps its natural width; the field takes the rest.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = st::PAD;
+                        go = st::primary(ui, "Открыть", ACCENT)
+                            .on_hover_text(format!("Файл: {}", self.path.display()))
+                            .clicked();
+                        st::password_bg(ui, &mut self.pw1, "пароль", ui.available_width(), ACCENT);
+                    });
+                } else {
+                    st::password_bg(ui, &mut self.pw1, "новый пароль (8+)", w, ACCENT);
+                    st::password_bg(ui, &mut self.pw2, "повтор", w, ACCENT);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        go = st::primary(ui, "Создать", ACCENT)
+                            .on_hover_text("Мастер-пароль нельзя восстановить")
+                            .clicked();
+                    });
+                }
+            });
+        });
         let go = go || ui.input(|i| i.key_pressed(egui::Key::Enter));
         if !go || self.pw1.is_empty() {
             return;

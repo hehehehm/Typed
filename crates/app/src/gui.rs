@@ -1040,7 +1040,7 @@ impl App {
         // On the exceptions pane the title and count follow that list; the home
         // square still uses `section_count` (programs only).
         let (title, title_count) = self.header_title_and_count();
-        let plate_left = back.right() + st::GAP;
+        let plate_left = back.right() + st::PAD;
         let dot_c = egui::pos2(plate_left + 6.0 + 4.0, cy);
         let tx = dot_c.x + 6.0 + st::PAD;
         let max_w = (nav_left - st::PAD - tx).max(st::HIT);
@@ -1070,7 +1070,7 @@ impl App {
             p.galley(egui::pos2(tx + tw + st::PAD, cy - ng.size().y / 2.0 + 1.0), ng, t.muted_strong);
         }
         let title_rect = egui::Rect::from_min_max(
-            egui::pos2(title_plate.left().max(back.right() + 1.0), rect.top()),
+            egui::pos2(title_plate.left().max(back.right() + st::GAP), rect.top()),
             egui::pos2(title_right, rect.bottom()),
         );
         ui.interact(title_rect, ui.id().with("title"), egui::Sense::hover()).on_hover_text(self.section_tooltip(tab));

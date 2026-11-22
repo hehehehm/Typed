@@ -21,7 +21,8 @@
 //!   baseline exists and the diff is over the threshold
 
 use super::shots::{
-    app_with, focus, merge_textures, rasterize, sample_cfg, write_png, INTER, LONG_PATH,
+    app_with, focus, locked_vault_ui, merge_textures, rasterize, sample_cfg, write_png, INTER,
+    LONG_PATH,
 };
 use super::*;
 use eframe::egui::{
@@ -441,6 +442,7 @@ struct TextHit {
     clip: Rect,
     color: Color32,
     font_size: f32,
+    elided: bool,
 }
 
 fn collect_text(shape: &Shape, clip: Rect, out: &mut Vec<TextHit>) {
@@ -463,6 +465,7 @@ fn collect_text(shape: &Shape, clip: Rect, out: &mut Vec<TextHit>) {
                 clip,
                 color,
                 font_size,
+                elided: ts.galley.elided,
             });
         }
         _ => {}
@@ -529,11 +532,13 @@ impl Issue {
 
 struct Findings {
     issues: Vec<Issue>,
+    /// Single-line text fields: (screen, height, rect). Compared across screens.
+    field_heights: Vec<(String, f32, Rect)>,
 }
 
 impl Findings {
     fn new() -> Self {
-        Self { issues: Vec::new() }
+        Self { issues: Vec::new(), field_heights: Vec::new() }
     }
     fn push(&mut self, i: Issue) {
         self.issues.push(i);
@@ -1106,8 +1111,91 @@ fn inspect_usability(h: &mut Harness, screen: &str, findings: &mut Findings) {
     ux_label_clarity(h, screen, findings);
     ux_alignment(h, screen, findings);
     ux_consistency(h, screen, findings);
+    ux_header_plate_gaps(h, screen, findings);
+    ux_collect_field_heights(h, screen, findings);
     // Tooltip-on-icon is checked in the expert review: egui tooltip timing is
     // not reliable enough in the headless harness for a report-only flag.
+}
+
+/// Frost plates in the header (hover-only, ~32 px tall): the back chevron and
+/// the section-title plate must have a visible gap.
+fn ux_header_plate_gaps(h: &Harness, screen: &str, findings: &mut Findings) {
+    if h.app.tab == Tab::Home || h.app.welcome_open {
+        return;
+    }
+    let mut plates: Vec<Rect> = h
+        .widgets()
+        .into_iter()
+        .filter(|w| !w.sense.click && !w.sense.drag)
+        .map(|w| w.interact_rect)
+        .filter(|r| {
+            r.center().y < st::HEADER
+                && (r.height() - st::HIT).abs() <= 3.0
+                && r.width() >= 16.0
+        })
+        .collect();
+    plates.sort_by(|a, b| a.left().partial_cmp(&b.left()).unwrap_or(std::cmp::Ordering::Equal));
+    plates.dedup_by(|a, b| (a.left() - b.left()).abs() < 2.0 && (a.width() - b.width()).abs() < 2.0);
+    // Back (leftmost) vs title: these used to touch at 512 px.
+    if plates.len() >= 2 {
+        let gap = plates[1].left() - plates[0].right();
+        if gap < st::GAP - 0.5 {
+            findings.push(Issue::ux(
+                "must",
+                "ux-spacing",
+                screen,
+                format!(
+                    "gap between back and title plates is {:.1}px, want ≥ {:.0}px",
+                    gap,
+                    st::GAP
+                ),
+                Some(Rect::from_min_max(plates[0].right_top(), plates[1].left_bottom())),
+            ));
+        }
+    }
+}
+
+/// Single-line text fields (password, add-word, add-program, …).
+fn ux_collect_field_heights(h: &Harness, screen: &str, findings: &mut Findings) {
+    if h.app.welcome_open || h.app.tab == Tab::Home {
+        return;
+    }
+    for w in h.widgets() {
+        let r = w.interact_rect;
+        if !w.sense.drag || !w.sense.click {
+            continue;
+        }
+        if r.top() < st::HEADER || r.width() < 80.0 {
+            continue;
+        }
+        // Shared field visual is CTRL_H (28) inside a HIT (32) row.
+        if r.height() < 24.0 || r.height() > 36.0 {
+            continue;
+        }
+        findings.field_heights.push((screen.to_owned(), r.height(), r));
+    }
+}
+
+fn ux_input_heights_across(findings: &mut Findings) {
+    if findings.field_heights.len() < 2 {
+        return;
+    }
+    let heights: Vec<f32> = findings.field_heights.iter().map(|(_, h, _)| *h).collect();
+    let mut sorted = heights.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid = sorted[sorted.len() / 2];
+    let rows = findings.field_heights.clone();
+    for (screen, h, rect) in rows {
+        if (h - mid).abs() > 1.5 {
+            findings.push(Issue::ux(
+                "must",
+                "ux-spacing",
+                &screen,
+                format!("input field is {h:.1}px tall; other screens use {mid:.1}px"),
+                Some(rect),
+            ));
+        }
+    }
 }
 
 fn ux_placement_and_fitts(h: &Harness, screen: &str, findings: &mut Findings) {
@@ -1325,6 +1413,24 @@ fn ux_label_clarity(h: &Harness, screen: &str, findings: &mut Findings) {
                 format!("label «{}» is truncated by {:.0}px", trunc(&t.text, 40), lost_x),
                 Some(t.rect),
             ));
+        }
+        // Button labels must not be ellipsized (`Откр…`).
+        if t.elided && t.font_size + 0.05 >= st::FONT_SM {
+            let on_button = h.clickables().iter().any(|c| {
+                let r = c.interact_rect;
+                r.intersects(t.rect)
+                    && (r.height() - st::HIT).abs() < 6.0
+                    && r.width() < 200.0
+            });
+            if on_button {
+                findings.push(Issue::ux(
+                    "must",
+                    "ux-label",
+                    screen,
+                    format!("button label «{}» is truncated", trunc(&t.text, 40)),
+                    Some(t.rect),
+                ));
+            }
         }
     }
 
@@ -2290,6 +2396,9 @@ fn ux_inspect_screens_report() {
         if name == "welcome" {
             app.welcome_open = true;
         }
+        if name.starts_with("vault") {
+            app.vault = locked_vault_ui();
+        }
         let mut h = Harness::new(app, focus(), size, 1.0, mac);
         let before = findings.issues.len();
         let raster = inspect_all(&mut h, name, &mut findings, true, name != "apps-edge");
@@ -2315,6 +2424,8 @@ fn ux_inspect_screens_report() {
             h.app.content_overflow
         );
     }
+
+    ux_input_heights_across(&mut findings);
 
     let depths = measure_action_depths(&mut findings);
     let report = PathBuf::from("/tmp/typed-ui-ux-report.md");

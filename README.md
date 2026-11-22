@@ -97,6 +97,11 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.79
+
+- **Поля и кнопки в сейфе.** Поле пароля той же высоты, что и поля на других экранах. Кнопка «Открыть» больше не обрезается до «Откр…» — она подстраивается под текст.
+- **Зазор в шапке.** Между кнопкой «назад» и плашкой с названием раздела появился небольшой промежуток; на узком окне (~512 px) они больше не слипаются.
+
 ## Что нового в 0.3.78
 
 - **Сдвиг руки на одну клавишу.** Если все пальцы стоят на ряд правее или левее (`ротань` → «привет», `jr;;p` → `hello`), в том числе когда это ещё и не та раскладка, слово собирается обратно. Только при исправлении опечаток, на уровне «Обычно» и «Смело».
@@ -945,6 +950,11 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.79
+
+- The vault password field is the same height as the text fields on other screens. The «Открыть» (Unlock) button is sized to its label and is no longer truncated to «Откр…».
+- A small gap between the back chevron and the section-title plate in the header, so the two plates no longer touch at a narrow (~512 px) window.
 
 ### New in 0.3.78
 

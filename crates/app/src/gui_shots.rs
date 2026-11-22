@@ -113,6 +113,18 @@ struct Shot {
 pub(super) const INTER: &str = "/usr/share/fonts/truetype/sand-box/google/Inter/Inter-VariableFont_opsz,wght.ttf";
 
 
+/// A vault file on disk, still locked — the password + «Открыть» row.
+pub(super) fn locked_vault_ui() -> crate::vault_ui::VaultUi {
+    use layout_keeper_core::vault::Vault;
+    let dir = tmp_dir();
+    let path = dir.join("locked-vault.bin");
+    if !path.exists() {
+        let v = Vault::create("screenshot-pass").expect("vault");
+        v.save(&path).expect("save locked vault");
+    }
+    crate::vault_ui::VaultUi::for_test(path, None)
+}
+
 fn unlocked_vault(dir: &std::path::Path) -> crate::vault_ui::VaultUi {
     use layout_keeper_core::vault::{Card, Login, Vault};
     let mut v = Vault::create("screenshot-pass").expect("vault");
@@ -156,7 +168,9 @@ fn shots(with_vault: bool) -> Vec<Shot> {
         a.pending_delete = Some((PendingDelete::Exception { id: gone }, Instant::now()));
         v.push(Shot { name: sfx("02-exceptions-undo"), app: a, focus: focus(), size: sec_sz, mac: false });
         v.push(Shot { name: sfx("03-words"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz, mac: false });
-        v.push(Shot { name: sfx("04-vault-locked"), app: app_with(sample_cfg(), Tab::Vault, light), focus: focus(), size: sec_sz, mac: false });
+        let mut a = app_with(sample_cfg(), Tab::Vault, light);
+        a.vault = locked_vault_ui();
+        v.push(Shot { name: sfx("04-vault-locked"), app: a, focus: focus(), size: sec_sz, mac: false });
         if with_vault {
             let mut a = app_with(sample_cfg(), Tab::Vault, light);
             a.vault = unlocked_vault(&tmp_dir());
@@ -197,6 +211,25 @@ fn shots(with_vault: bool) -> Vec<Shot> {
 }
 
 /// Runs a few frames (egui settles sizes over two passes) and returns the final output.
+/// 1× raster at the window's logical size (~512 px wide), as on a 100% Windows display.
+fn native_shots() -> Vec<Shot> {
+    let sec_sz = egui::vec2(512.0, 496.0);
+    let mut v = Vec::new();
+    for light in [true, false] {
+        let sfx = |s: &'static str| -> &'static str {
+            if light { s } else { Box::leak(format!("{s}-dark").into_boxed_str()) }
+        };
+        v.push(Shot { name: sfx("15-words-native"), app: app_with(sample_cfg(), Tab::Words, light), focus: focus(), size: sec_sz, mac: false });
+        let mut a = app_with(sample_cfg(), Tab::Vault, light);
+        a.vault = locked_vault_ui();
+        v.push(Shot { name: sfx("16-vault-locked-native"), app: a, focus: focus(), size: sec_sz, mac: false });
+        let mut a = app_with(sample_cfg(), Tab::Vault, light);
+        a.vault = locked_vault_ui();
+        v.push(Shot { name: sfx("16-vault-locked-small"), app: a, focus: focus(), size: egui::vec2(512.0, 192.0), mac: false });
+    }
+    v
+}
+
 fn run(shot: &mut Shot, ppp: f32) -> (egui::Context, egui::FullOutput, HashMap<TextureId, egui::ColorImage>) {
     let ctx = egui::Context::default();
     ctx.set_pixels_per_point(ppp);
@@ -381,6 +414,14 @@ fn render_ui_screenshots() {
     std::fs::create_dir_all(&dir).unwrap();
     let ppp = 2.0;
     for mut shot in shots(true) {
+        let (ctx, out, tex) = run(&mut shot, ppp);
+        let (w, h, buf) = rasterize(&ctx, &out, &tex, shot.size, ppp);
+        write_png(&dir.join(format!("{}.png", shot.name)), w, h, &buf);
+        println!("{} overflow={}", shot.name, shot.app.content_overflow);
+    }
+    // Native 1× (~512 px wide), matching a 100% Windows window.
+    for mut shot in native_shots() {
+        let ppp = 1.0;
         let (ctx, out, tex) = run(&mut shot, ppp);
         let (w, h, buf) = rasterize(&ctx, &out, &tex, shot.size, ppp);
         write_png(&dir.join(format!("{}.png", shot.name)), w, h, &buf);

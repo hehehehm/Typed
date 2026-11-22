@@ -391,12 +391,19 @@ fn control_rect(rect: Rect) -> Rect {
     Rect::from_center_size(rect.center(), egui::vec2(rect.width(), CTRL_H.min(rect.height())))
 }
 
+/// Width a [`tile`] / [`primary`] button needs to show `text` without ellipsis.
+pub fn tile_width(ui: &Ui, text: &str) -> f32 {
+    (text_w(ui, text, font_md()) + INSET * 2.0).max(HIT)
+}
+
 /// Button: 28 px visual in a 32 px target. `fill` TRANSPARENT = neutral button.
+/// Sized to the label; only shrinks when the whole row is narrower than the text.
 pub fn tile(ui: &mut Ui, text: &str, fill: Color32, fg: Color32) -> egui::Response {
     let t = cur(ui);
     let f = font_md();
-    let natural = text_w(ui, text, f.clone()) + INSET * 2.0;
-    let w = natural.min(ui.available_width().max(HIT)).max(HIT);
+    let natural = tile_width(ui, text);
+    let avail = ui.available_width();
+    let w = if avail + 0.5 >= natural { natural } else { avail.max(HIT.min(natural)) };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, HIT), Sense::click());
     if ui.is_rect_visible(rect) {
         let r = control_rect(rect);
@@ -619,7 +626,8 @@ pub fn field(ui: &mut Ui, text: &mut String, hint_text: &str, width: f32, passwo
             .password(password)
             .frame(false)
             .margin(egui::vec2(PAD, GAP))
-            .desired_width(w - PAD * 2.0)
+            .desired_width(r.width() - PAD * 2.0)
+            .min_size(egui::vec2(0.0, r.height()))
             .vertical_align(egui::Align::Center),
     );
     if resp.has_focus() {
@@ -810,10 +818,13 @@ pub fn sea_srgb(dark: bool) -> (usize, usize, Vec<u8>) {
 
 /// Tight frosted plate behind header controls so they stay readable on the photo
 /// without washing the rest of the strip.
-pub fn frost_plate(ui: &Ui, rect: Rect) {
+pub fn frost_plate(ui: &mut Ui, rect: Rect) {
     if rect.width() <= 1.0 || rect.height() <= 1.0 {
         return;
     }
+    // So the UX tester can measure gaps between adjacent header plates.
+    let id = ui.id().with(("frost", (rect.min.x.to_bits(), rect.min.y.to_bits(), rect.width().to_bits())));
+    ui.interact(rect, id, Sense::hover());
     let t = cur(ui);
     let a = if t.dark { 200 } else { 215 };
     ui.painter().rect_filled(
