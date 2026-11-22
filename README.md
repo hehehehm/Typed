@@ -100,6 +100,7 @@ Cargo при первой сборке может потребоваться д�
 ## Что нового в 0.3.82
 
 - **Окно больше не зависает.** В 0.3.81 смена рендерера на wgpu (LowPower + vsync) на Windows могла повесить окно настроек («Не отвечает», 0% CPU) сразу после открытия. Вернули glow, как в 0.3.80; экономия GPU по-прежнему за счёт перерисовки только по событиям, без цикла 200 мс. Иконки программ извлекаются в фоновом потоке и не блокируют интерфейс.
+- **Короткие перестановки.** Неизвестное слово из трёх букв, которое получается перестановкой или циклом букв ровно одного очень частого слова (`ядл` → «для», `ент` → «нет»), исправляется на уровне «Обычно» и «Смело».
 
 ## Что нового в 0.3.81
 
@@ -969,6 +970,7 @@ settings does not stop the daemon.
 ### New in 0.3.82
 
 - The 0.3.81 switch to the wgpu renderer (LowPower + vsync) could hang the settings window on Windows ("Not Responding", 0% CPU) right after opening. The glow renderer from 0.3.80 is restored; GPU savings still come from painting only on input/events, not from a 200 ms loop. App icon extraction runs on a background thread and never blocks the UI.
+- A 3-letter unknown token whose letters are a transposition or rotation of exactly one very frequent word is corrected at Normal and Aggressive (`ядл` → «для», `ент` → «нет», `teh` → «the»).
 
 ### New in 0.3.81
 

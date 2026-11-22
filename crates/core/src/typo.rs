@@ -12,6 +12,11 @@
 //! wider, scored search in [`crate::typo_wide`]: 3-letter words, two slips from 5
 //! letters, three from 9, ranked by keyboard-weighted edit cost and word frequency,
 //! with an ambiguity guard.
+//!
+//! Since 0.3.82 a 3-letter token that is not on the frequency list (and is not a word
+//! in the other layout) is also corrected when exactly one transposition or rotation
+//! of its letters is a very frequent word (rank < [`SHORT_PERM_RANK`]): `ядл` → `для`,
+//! `ент` → `нет`, `teh` → `the`. Ambiguous anagrams (`про`/`пор`, `was`/`saw`) stay.
 
 use crate::dict::{self, Dictionary};
 use crate::layout::Lang;
@@ -46,6 +51,10 @@ pub const MAX_RANK: u32 = 40_000;
 pub const TAIL_RANK: u32 = 20_000;
 /// The winner must be this many times more frequent than the runner-up.
 pub const DOMINANCE: u32 = 20;
+/// 3-letter transposition / rotation targets must be this frequent (`для` is 37, `нет` is 16).
+pub const SHORT_PERM_RANK: u32 = 300;
+/// Length of [`short_perm_fix`]: only three-letter tokens.
+pub const SHORT_PERM_LEN: usize = 3;
 
 const EN_ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
 const RU_ALPHABET: &str = "абвгдежзийклмнопрстуфхцчшщъыьэюя";
@@ -259,6 +268,17 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
     }
     if is_title_case(word) && is_mid_sentence(ctx) {
         return None;
+    }
+    // 3-letter transposition / rotation of a very frequent word (`ядл` → `для`,
+    // `ент` → `нет`). Not at Cautious. Tried before the scored search, which only
+    // looks at words that keep the first letter (or swap the first two), and
+    // which skips tokens that happen to sit in the unranked full-form set (`ент`).
+    if level != Level::Cautious {
+        if let Some(fix) = short_perm_fix(d, word, lang) {
+            if !ngram::veto(ctx, word, &fix, lang) {
+                return Some(fix);
+            }
+        }
     }
     let strict = suggest_one(d, word, lang, assume_unknown)
         .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
@@ -805,6 +825,65 @@ fn is_swap(typed: &[char], cand: &str) -> bool {
     matches!(diff.as_slice(), [i, j] if *j == i + 1 && typed[*i] == cv[*j] && typed[*j] == cv[*i])
 }
 
+/// Transpositions (any two letters swapped) and rotations of `typed`, not including itself.
+fn short_perm_forms(typed: &[char]) -> Vec<String> {
+    let n = typed.len();
+    let mut out = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            let mut c = typed.to_vec();
+            c.swap(i, j);
+            if c != typed {
+                out.push(c.into_iter().collect());
+            }
+        }
+    }
+    for k in 1..n {
+        let rot: String = typed[k..].iter().chain(&typed[..k]).copied().collect();
+        if rot.chars().ne(typed.iter().copied()) {
+            out.push(rot);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// A 3-letter lowercase token that is not on the frequency list, and whose letters are a
+/// transposition or rotation of exactly one very frequent word (rank < [`SHORT_PERM_RANK`]).
+/// Unranked full-form crumbs (`ент` is in the form set but has no list rank) still count
+/// as unknown here; frequency-list words (`кот`, `нет`) are left alone. A reading in the
+/// other layout that is itself a list word is not corrected.
+fn short_perm_fix(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.len() != SHORT_PERM_LEN || !chars.iter().all(|c| c.is_alphabetic() && c.is_lowercase()) {
+        return None;
+    }
+    if crate::layout::detect_script(word) != Some(lang) {
+        return None;
+    }
+    let lower = Dictionary::normalize(word);
+    if d.rank(&lower).is_some() {
+        return None;
+    }
+    let other = match lang {
+        Lang::Ru => Lang::En,
+        Lang::En => Lang::Ru,
+    };
+    let conv = crate::layout::convert(&lower, lang);
+    if dict::get(other).rank(&Dictionary::normalize(&conv)).is_some() {
+        return None;
+    }
+    let lower_c: Vec<char> = lower.chars().collect();
+    let mut hits: Vec<String> = Vec::new();
+    for cand in short_perm_forms(&lower_c) {
+        if d.rank(&cand).is_some_and(|r| r < SHORT_PERM_RANK) && !hits.iter().any(|w| w == &cand) {
+            hits.push(cand);
+        }
+    }
+    (hits.len() == 1).then(|| match_case(word, &hits[0]))
+}
+
 /// Words up to this length accept a substituted letter only from a neighbouring key;
 /// longer ones also a vowel for a vowel or a voiced / voiceless pair.
 pub const SHORT_SUBST_LEN: usize = 5;
@@ -1244,6 +1323,39 @@ mod tests {
         }
         // к→й is not a neighbour-key slip, so only the doubled letter is dropped.
         assert_eq!(suggest("опечаткок", Lang::Ru).as_deref(), Some("опечаток"));
+    }
+
+    #[test]
+    fn three_letter_permutation_of_a_frequent_word() {
+        // Rotation: ядл → для (для is rank 37).
+        assert_eq!(suggest("ядл", Lang::Ru).as_deref(), Some("для"));
+        assert_eq!(suggest_level("ядл", Lang::Ru, Level::Aggressive).as_deref(), Some("для"));
+        assert_eq!(suggest_level("ядл", Lang::Ru, Level::Cautious), None);
+        // Adjacent transposition: ент → нет (нет is rank 16). ент is an unranked
+        // full-form crumb, so the scored search would skip it as a "known" word.
+        assert_eq!(suggest("ент", Lang::Ru).as_deref(), Some("нет"));
+        assert_eq!(suggest_level("ент", Lang::Ru, Level::Cautious), None);
+        // Other transpositions / rotations of the same two words.
+        assert_eq!(suggest("дял", Lang::Ru).as_deref(), Some("для"));
+        assert_eq!(suggest("лдя", Lang::Ru).as_deref(), Some("для"));
+        // The frequent words themselves, and other top-300 function words, stay.
+        for w in ["для", "нет", "что", "как", "все", "его"] {
+            assert_eq!(suggest(w, Lang::Ru), None, "{w}");
+        }
+        // English: teh → the already from the scored search; hte is a rotation.
+        assert_eq!(suggest("teh", Lang::En).as_deref(), Some("the"));
+        assert_eq!(suggest("hte", Lang::En).as_deref(), Some("the"));
+        assert_eq!(suggest("the", Lang::En), None);
+        // A ranked mid-list anagram of a top-300 word is a real word, not a typo.
+        assert_eq!(suggest("кот", Lang::Ru), None);
+        // Two or more top-300 anagrams: do not guess.
+        assert_eq!(suggest("роп", Lang::Ru), None); // про / пор
+        assert_eq!(suggest("asw", Lang::En), None); // was / saw
+        assert_eq!(suggest("woh", Lang::En), None); // how / who
+        assert_eq!(suggest("onw", Lang::En), None); // now / won / own
+        // Same length but not a transposition or rotation (a substituted letter).
+        assert_eq!(suggest("тта", Lang::Ru), None);
+        assert_eq!(suggest("нен", Lang::Ru), None);
     }
 
     #[test]
