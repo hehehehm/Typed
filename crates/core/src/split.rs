@@ -398,14 +398,14 @@ pub fn lm_segment(d: &Dictionary, token: &str, lang: Lang) -> Option<LmSplit> {
             continue;
         }
         let b: String = lower[i..].iter().collect();
-        if lm_part_ok(d, lang, &b) {
+        if b.chars().count() >= 2 && lm_part_ok(d, lang, &b) {
             let c = ng.count(&[&a, &b]);
-            let need = if a.chars().count() == 1 || b.chars().count() == 1 { LM_MIN_BIGRAM_SHORT } else { LM_MIN_BIGRAM };
+            let need = if a.chars().count() <= 2 || b.chars().count() <= 2 { LM_MIN_BIGRAM_SHORT } else { LM_MIN_BIGRAM };
             if c >= need {
                 cands.push((c, i, i));
             }
         }
-        if i + 1 < lower.len() && nb.contains(&lower[i]) {
+        if i + 1 < lower.len() && nb.contains(&lower[i]) && lower[i] != lower[i - 1] && lower[i] != lower[i + 1] {
             let b: String = lower[i + 1..].iter().collect();
             if a.chars().count() >= 2 && b.chars().count() >= 2 && lm_part_ok(d, lang, &b) {
                 let x: String = lower[i].to_string();

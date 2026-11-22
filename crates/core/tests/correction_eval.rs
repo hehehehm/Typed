@@ -85,6 +85,8 @@ fn engine() -> Engine {
     Engine::new(EngineOptions { fix_typos: true, typo_level: level(), ..Default::default() })
 }
 
+static EXPECT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+fn expect(w: &str) { *EXPECT.lock().unwrap() = w.to_string(); }
 fn out_text(e: &Engine, token: &str) -> Option<String> {
     let r = match e.decide(token) {
         Decision::Convert { text, .. } => Some(text),
@@ -93,7 +95,7 @@ fn out_text(e: &Engine, token: &str) -> Option<String> {
     if let Ok(p) = std::env::var("EVAL_DUMP") {
         use std::io::Write as _;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
-            let _ = writeln!(f, "{token}\t{}", r.clone().unwrap_or_default());
+            let _ = writeln!(f, "{token}\t{}\t{}", r.clone().unwrap_or_default(), EXPECT.lock().unwrap());
         }
     }
     r
@@ -169,6 +171,7 @@ fn correction_eval() {
                         t
                     } else { typed };
                     let t0 = std::time::Instant::now();
+                    expect(&format!("{kind}|{w}"));
                     let got = out_text(&e, &typed);
                     times.push((t0.elapsed().as_secs_f64() * 1000.0, typed.clone()));
                     // Wrong layout + slip, converted but the slip left: half done.
@@ -230,6 +233,7 @@ fn correction_eval() {
     let mut changed = vec![];
     let curated = curated();
     for t in &curated {
+        expect("curated|");
         if let Some(g) = out_text(&e, t) { changed.push(format!("{t}→{g}")); }
     }
     let _ = writeln!(report, "\n## Curated FP set (names, brands, code, URLs, slang): changed {}/{} ({:.1}%)\n\n{:?}\n", changed.len(), curated.len(), 100.0 * changed.len() as f64 / curated.len() as f64, changed);
@@ -240,6 +244,7 @@ fn correction_eval() {
         for len in 2..=12 {
             for w in pool(lang, len, 60) {
                 n_known += 1;
+                expect(&format!("known|{w}"));
                 if let Some(g) = out_text(&e, &w) { known_changed.push(format!("{w}→{g}")); }
             }
         }
@@ -373,6 +378,7 @@ fn spelling_eval() {
                     let Some(t) = t else { continue };
                     if d.is_word(&t) || t == *w { continue; }
                     n += 1;
+                    expect(&format!("spell {set} {k}|{w}"));
                     match out_text(&e, &t) {
                         Some(g) if Dictionary::normalize(&g) == *w => right += 1,
                         Some(g) => { wrong += 1; let x = ex.entry(format!("{lang:?} {set} {k} wrong")).or_default(); if x.len() < 10 { x.push(format!("{t}→{g} ({w})")); } }

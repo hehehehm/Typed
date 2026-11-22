@@ -280,6 +280,11 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
             }
         }
     }
+    if let Some(fix) = dedupe_fix(d, word, lang, assume_unknown) {
+        if !ngram::veto(ctx, word, &fix, lang) {
+            return Some(fix);
+        }
+    }
     let strict = suggest_one(d, word, lang, assume_unknown)
         .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
         .or_else(|| verb_soft_sign(d, word, lang, assume_unknown));
@@ -307,12 +312,62 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
         .or_else(|| channel_fix(d, word, lang, assume_unknown).filter(|f| !ngram::veto(ctx, word, f, lang)))
 }
 
+pub fn dedupe_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.len() < 4 || !chars.iter().all(|c| c.is_alphabetic()) {
+        return None;
+    }
+    let lower = Dictionary::normalize(word);
+    let w: Vec<char> = lower.chars().collect();
+    if w.len() != chars.len() {
+        return None;
+    }
+    let known = |x: &str| d.is_word(x) || (lang == Lang::Ru && morph::is_known_form(d, x));
+    if !assume_unknown && (known(&lower) || d.is_name_form(&lower)) {
+        return None;
+    }
+    let mut found: Option<String> = None;
+    for i in 2..w.len() {
+        if w[i] != w[i - 1] || w[i - 2] == w[i] {
+            continue;
+        }
+        let mut v = w.clone();
+        v.remove(i);
+        let c: String = v.iter().collect();
+        if c.chars().count() >= 3 && d.rank_exact(&c).is_some() {
+            if found.as_ref().is_some_and(|f| *f != c) {
+                return None;
+            }
+            found = Some(c);
+        }
+    }
+    let c = found?;
+    let g = ngram::get(lang);
+    let seen = g.count(&[&lower]);
+    if seen > 0.0 && g.count(&[&c]) < seen * DEDUPE_SEEN_RATIO {
+        return None;
+    }
+    Some(match_case(word, &c))
+}
+
+const DEDUPE_SEEN_RATIO: f64 = 100.0;
+
+pub fn is_dedupe_of(typed: &str, fix: &str) -> bool {
+    let a: Vec<char> = Dictionary::normalize(typed).chars().collect();
+    let b: Vec<char> = Dictionary::normalize(fix).chars().collect();
+    a.len() == b.len() + 1 && (1..a.len()).any(|i| a[i] == a[i - 1] && { let mut v = a.clone(); v.remove(i); v == b })
+}
+
 pub const CHANNEL_MIN_LEN: usize = 4;
 pub const CHANNEL_MARGIN: f64 = 1.5;
 pub const CHANNEL_CROWD: f64 = 10.0;
 pub const NC_RIVAL_UNSEEN: f64 = 0.5;
 pub const CHANNEL_MIN_COUNT: f64 = 2.0;
 pub const CHANNEL_SHORT_RANK: u32 = 10_000;
+
+const CHANNEL_W_NEAR_EXTRA: f64 = 0.2;
+const CHANNEL_W_SUBST: f64 = 0.25;
+const CHANNEL_W_OMIT: f64 = 1.0;
 
 fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
     let chars: Vec<char> = word.chars().collect();
@@ -361,8 +416,10 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
         let extra = v.remove(i);
         let doubled = w[i - 1] == extra || (i + 1 < n && w[i + 1] == extra);
         let near = adjacent_keys(extra, w[i - 1], lang) || (i + 1 < n && adjacent_keys(extra, w[i + 1], lang));
-        if doubled || near {
+        if doubled {
             offer(v, 1.0);
+        } else if near {
+            offer(v, CHANNEL_W_NEAR_EXTRA);
         }
         if i + 1 < n && w[i] != w[i + 1] {
             let mut v = w.clone();
@@ -373,7 +430,7 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
             if c != w[i] && adjacent_keys(c, w[i], lang) {
                 let mut v = w.clone();
                 v[i] = c;
-                offer(v, 1.0);
+                offer(v, CHANNEL_W_SUBST);
             }
         }
     }
@@ -382,7 +439,7 @@ fn channel_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
             let mut v = w.clone();
             v.insert(i, c);
             let doubled = w[i - 1] == c || (i < n && w[i] == c);
-            offer(v, if doubled { 1.0 } else { 0.4 });
+            offer(v, if doubled { 1.0 } else { CHANNEL_W_OMIT });
         }
     }
     let mut ranked: Vec<(String, f64, bool)> = best.into_iter().map(|(k, (v, e))| (k, v, e)).collect();
