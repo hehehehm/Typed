@@ -1135,10 +1135,6 @@ impl Engine {
                         .as_deref()
                         .is_some_and(|p| p != crate::ngram::START);
                 let unseen = crate::ngram::get(src).count(&[&Dictionary::normalize(&prep), &Dictionary::normalize(&rest)]) <= 0.0;
-                let typo_alt = if unseen && core.chars().all(char::is_alphabetic) { self.typo_fix(core, src) } else { None };
-                if let Some(fix) = typo_alt {
-                    return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
-                }
                 let weak_rest = unseen && src_dict.rank(&Dictionary::normalize(&rest)).is_none();
                 if o.fix_missing_spaces && !mid && !weak_rest {
                     let fixed = format!("{prep} {rest}");
