@@ -97,6 +97,11 @@ Cargo при первой сборке может потребоваться д�
   Сертификат (например, `Developer ID Application: Your Name (TEAMID)`) и профиль
   авторизации notarytool принадлежат вам; скрипт не запрашивает Apple ID и не хранит секреты.
 
+## Что нового в 0.3.86
+
+- **Правка после исправления.** Если программа уже исправила слово, а вы стираете его Backspace и правите сами, раскладка остаётся как у исправленного слова, и это слово больше не исправляется само. Отмена по своей клавише и список «не исправлять» не менялись.
+- **Знак препинания тоже заканчивает слово.** Слово в чужой раскладке исправляется не только по пробелу: `ghbdtn?` → «привет,», `ghbdtn/` → «привет.», `руддщ,` → `hello?`, а также Enter и Tab. Запятая и точка в английской раскладке после латинского слова по-прежнему ждут пробел: это могут быть буквы «б» и «ю».
+
 ## Что нового в 0.3.85
 
 - **Пропущенный и лишний пробел.** Слипшиеся слова разделяются чаще: `drunkthat` → `drunk that`, `marytook` → `mary took`, в том числе три слова подряд. Лишний пробел внутри слова убирается: «кн иге» → «книге», «моц арт» → «моцарт». Пробел, нажатый соседней клавишей (с, м, и, т, ь или c, v, b, n, m), исправляется: `i thinkbthat is` → `i think that is`, «мы пошлисдомой» → «мы пошли домой». Разделение по соседней клавише и уборка лишнего пробела работают на уровнях «Обычно» и «Смело» с включённым исправлением опечаток.
@@ -983,6 +988,11 @@ settings does not stop the daemon.
   `xcrun stapler staple`. Use your own certificate (for example,
   `Developer ID Application: Your Name (TEAMID)`) and notarytool authentication profile.
   The script does not request an Apple ID or store credentials.
+
+### New in 0.3.86
+
+- **Editing after a correction.** If the program has already corrected a word and you backspace to edit it yourself, the layout stays that of the corrected word, and the word is not corrected again. The undo hotkey and the never-correct list are unchanged.
+- **Punctuation also ends a word.** A word typed in the other layout is corrected not only on space: `ghbdtn?` → «привет,», `ghbdtn/` → «привет.», `руддщ,` → `hello?`, and also Enter and Tab. A comma or period in the English layout after a Latin word still waits for space: those keys may be «б» and «ю».
 
 ### New in 0.3.85
 

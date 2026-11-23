@@ -20,9 +20,9 @@
 
 Метрики хуже 0.3.83: `context/en/layout+typo/wrong`, `context/en/typo1/wrong`, `context/en/typo2/wrong`, `context/ru/layout+typo/wrong`, `context/ru/typo1/wrong`, `context/ru/typo2/wrong`, `correction/En frequent, 2 error(s)/wrong`, `correction/En rare form, 1 error(s)/wrong`, `correction/En typo 1/all/wrong`, `correction/En typo 2/all/wrong`, `correction/En typo 3/all/wrong`, `correction/Ru typo 2/all/wrong`, `correction/Ru typo 3/all/wrong`, `correction/unknown-fp/En lower`, `correction/unknown-fp/Ru Capitalised`, `correction/unknown-fp/Ru lower`, `typist/gramotey/aggressive/missed_pct`, `typist/gramotey/aggressive/wrong_pct`, `typist/gramotey/cautious/missed_pct`, `typist/gramotey/normal/fp`, `typist/gramotey/normal/wrong_pct`, `typist/torpyga/cautious/wrong_pct`, `typist/torpyga/normal/wrong_pct`, `typist/zlodey/aggressive/fixed_pct`, `typist/zlodey/aggressive/fp`, `typist/zlodey/aggressive/wrong_pct`, `typist/zlodey/normal/fp`.
 
-## 0.3.86 WIP против 0.3.85
+## 0.3.86 против 0.3.85
 
-Прогон 23.11.2026, ветка `wip-0.3.86`, коммит кода `da525b2`. База: полный прогон 0.3.85 (`iter/ev6`, движок `20430b4`). `typist_real_failures`: 55 из 55. Curated FP: 6 из 315. Частые слова: 0 из 1320. `typo_audit`: 0 ложных, 0 пропусков из 40.
+Прогон 23.11.2026, релиз 0.3.86, коммит кода `da525b2`. База: полный прогон 0.3.85 (`iter/ev6`, движок `20430b4`). `typist_real_failures`: 55 из 55. Curated FP: 6 из 315. Частые слова: 0 из 1320. `typo_audit`: 0 ложных, 0 пропусков из 40.
 
 Гейт «не хуже 0.3.85» скриптом не пройден: 29 метрик. Из них стабильные оценки не хуже:
 
@@ -34,7 +34,7 @@
 - `typist_eval` (fixed/missed у всех трёх персонажей, несколько fp). Знак препинания чаще даёт замену сразу, тестер из-за этого иначе расходует случайные числа (`undo_retype`), число слов расходится (например torpyga/normal 30096 против 29893). Доли с 0.3.85 напрямую не сравнимы.
 - Выборочные разделы `typist_sweep` на 25% слов: `typo1_all5_*` (92,78→92,73 и рядом), `typo1_transpose` (90,04→89,71), сдвиг рук Title/CAPS (88,75→88,46). Полный строчный сдвиг рук не изменился. Такие выборки и раньше плавали примерно на 0,3 п. п.
 
-Релиза нет, пока пользователь не решит, как считать гейт по тестерам.
+Гейт скриптом не пройден. 23.11.2026 пользователь принял этот прогон и разрешил выпуск 0.3.86 как есть.
 
 ## Слова 2–3 буквы в чужой раскладке с заглавной и капсом
 
