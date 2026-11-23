@@ -27,6 +27,7 @@ const INSERT_TYPED_MIN: usize = 5;
 const INSERT_TYPED_MAX: usize = 9;
 const INSERT_RIVAL_RANK: u32 = 10_000;
 const INSERT_DOMINANCE: u32 = 3;
+const SWAP_YIELD_DOMINANCE: u32 = 10;
 
 const EN_ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
 const RU_ALPHABET: &str = "абвгдежзийклмнопрстуфхцчшщъыьэюя";
@@ -1138,7 +1139,7 @@ fn edit_beats_rare_swap(d: &Dictionary, word: &str, lang: Lang, swap: &str) -> O
         let Some(r) = d.rank(&cand).filter(|&r| r < INSERT_MAX_RANK) else {
             continue;
         };
-        if r.saturating_mul(INSERT_DOMINANCE) >= sr {
+        if r.saturating_mul(SWAP_YIELD_DOMINANCE) >= sr {
             continue;
         }
         if !hits.iter().any(|(_, s)| *s == cand) {
