@@ -283,7 +283,18 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
     leading_neighbour_insert(d, word, lang, assume_unknown)
         .filter(|f| !ngram::veto(ctx, word, f, lang))
         .or_else(|| channel_fix(d, word, lang, assume_unknown).filter(|f| !ngram::veto(ctx, word, f, lang)))
-        .or_else(|| swap_fix.filter(|f| !ngram::veto(ctx, word, f, lang)))
+        .or_else(|| swap_fix.filter(|f| !ngram::veto(ctx, word, f, lang) && swap_supported(d, f, lang, ctx)))
+}
+
+fn swap_supported(d: &Dictionary, fix: &str, lang: Lang, ctx: &Context) -> bool {
+    let n = Dictionary::normalize(fix);
+    if d.rank(&n).is_some_and(|r| r < INSERT_MAX_RANK) {
+        return true;
+    }
+    ctx.prev
+        .as_deref()
+        .filter(|p| *p != ngram::START)
+        .is_some_and(|p| ngram::get(lang).count(&[p, &n]) > 0.0)
 }
 
 fn context_pick(lang: Lang, ctx: &Context, cands: &[&Option<String>]) -> Option<String> {
@@ -1188,7 +1199,7 @@ fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang, strict_ends: bool
         if is_title_case(word) && c.chars().count() <= 4 && r >= FIRST_SLIP_RANK_SHORT {
             continue;
         }
-        if i + 1 == n && substitution_rival(d, &w, i, lang) {
+        if i + 1 == n && substitution_rival(d, &w, lang) {
             if strict_ends {
                 return None;
             }
@@ -1205,16 +1216,18 @@ fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang, strict_ends: bool
     }
 }
 
-fn substitution_rival(d: &Dictionary, w: &[char], i: usize, lang: Lang) -> bool {
+fn substitution_rival(d: &Dictionary, w: &[char], lang: Lang) -> bool {
     let alphabet = match lang {
         Lang::En => EN_ALPHABET,
         Lang::Ru => RU_ALPHABET,
     };
-    alphabet.chars().filter(|&a| a != w[i]).any(|a| {
-        let mut v = w.to_vec();
-        v[i] = a;
-        let c: String = v.into_iter().collect();
-        d.rank(&c).is_some_and(|r| r < INSERT_RIVAL_RANK)
+    (0..w.len()).any(|i| {
+        alphabet.chars().filter(|&a| a != w[i]).any(|a| {
+            let mut v = w.to_vec();
+            v[i] = a;
+            let c: String = v.into_iter().collect();
+            d.rank(&c).is_some_and(|r| r < MAX_RANK)
+        })
     })
 }
 

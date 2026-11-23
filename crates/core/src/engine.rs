@@ -1724,6 +1724,9 @@ impl Engine {
             if let Some(fix) = crate::typo_wide::layout_typo_ctx(conv_core, dst, o.typo_level, &self.left_context(dst)) {
                 let foreign = crate::typo_wide::looks_foreign(&Dictionary::normalize(&typed_letters), src);
                 if !foreign {
+                    if self.typed_language_context(src) {
+                        continue;
+                    }
                     let lower = Dictionary::normalize(&typed_letters);
                     let src_d = dict::get(src);
                     let known = src_d.is_word(&lower) || src_d.in_full_forms(&lower);
