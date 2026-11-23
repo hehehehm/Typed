@@ -1600,7 +1600,10 @@ impl Engine {
                 return None;
             }
         }
-        let letters: Vec<char> = core.chars().filter(|c| c.is_alphabetic() || c.is_ascii_digit()).collect();
+        if core.chars().any(|c| !(c.is_alphabetic() || c.is_ascii_digit())) {
+            return None;
+        }
+        let letters: Vec<char> = core.chars().collect();
         if letters.len() < 4 || letters.len() > 8 {
             return None;
         }

@@ -1155,7 +1155,7 @@ fn edit_beats_rare_swap(d: &Dictionary, word: &str, lang: Lang, swap: &str) -> O
     Some(match_case(word, &hits[0].1))
 }
 
-fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang) -> Option<Vec<(u32, f64, usize, String)>> {
+fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang, strict_ends: bool) -> Option<Vec<(u32, f64, usize, String)>> {
     let chars: Vec<char> = word.chars().collect();
     let n = chars.len();
     if n < INSERT_TYPED_MIN || n > INSERT_TYPED_MAX || !chars.iter().all(|c| c.is_alphabetic()) {
@@ -1187,6 +1187,12 @@ fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang) -> Option<Vec<(u3
         if is_title_case(word) && c.chars().count() <= 4 && r >= FIRST_SLIP_RANK_SHORT {
             continue;
         }
+        if i + 1 == n && substitution_rival(d, &w, i, lang) {
+            if strict_ends {
+                return None;
+            }
+            continue;
+        }
         if !hits.iter().any(|(_, _, _, s)| *s == c) {
             hits.push((r, g.count(&[&c]), i, c));
         }
@@ -1198,8 +1204,21 @@ fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang) -> Option<Vec<(u3
     }
 }
 
+fn substitution_rival(d: &Dictionary, w: &[char], i: usize, lang: Lang) -> bool {
+    let alphabet = match lang {
+        Lang::En => EN_ALPHABET,
+        Lang::Ru => RU_ALPHABET,
+    };
+    alphabet.chars().filter(|&a| a != w[i]).any(|a| {
+        let mut v = w.to_vec();
+        v[i] = a;
+        let c: String = v.into_iter().collect();
+        d.rank(&c).is_some_and(|r| r < INSERT_RIVAL_RANK)
+    })
+}
+
 fn extra_letter_fix(d: &Dictionary, word: &str, lang: Lang, ctx: &Context) -> Option<String> {
-    let hits = collect_insert_hits(d, word, lang)?;
+    let hits = collect_insert_hits(d, word, lang, true)?;
     let w: Vec<char> = Dictionary::normalize(word).chars().collect();
     let kept: Vec<&(u32, f64, usize, String)> = hits
         .iter()
@@ -1246,7 +1265,7 @@ fn extra_letter_fix(d: &Dictionary, word: &str, lang: Lang, ctx: &Context) -> Op
 
 fn extra_letter_candidates(word: &str, lang: Lang) -> Vec<String> {
     let d = crate::dict::get(lang);
-    let Some(mut hits) = collect_insert_hits(&d, word, lang) else {
+    let Some(mut hits) = collect_insert_hits(&d, word, lang, false) else {
         return Vec::new();
     };
     hits.sort_by_key(|h| h.2);
