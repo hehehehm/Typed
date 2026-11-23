@@ -436,6 +436,31 @@ mod tests {
     }
 
     #[test]
+    fn undo_hotkey_cycles_alternatives_then_learns_on_original() {
+        let mut c = ctl();
+        c.tick(Some("firefox"), Some(Lang::En));
+        let cmds = typ(&mut c, "waek ");
+        assert_eq!(cmds[0], Command::Replace(Replacement { delete: 5, insert: "weak ".into(), target: Lang::En }));
+        c.replace_succeeded(Lang::En);
+        let cmds = c.on_input(Input::Undo);
+        assert_eq!(cmds, vec![Command::Replace(Replacement { delete: 5, insert: "wake ".into(), target: Lang::En })]);
+        c.replace_succeeded(Lang::En);
+        assert!(c.config.never_correct.is_empty());
+        loop {
+            let cmds = c.on_input(Input::Undo);
+            let Command::Replace(r) = &cmds[0] else { panic!("{cmds:?}") };
+            c.replace_succeeded(r.target);
+            if r.insert == "waek " {
+                break;
+            }
+            assert_ne!(r.insert, "weak ");
+        }
+        assert!(c.config.never_correct.is_empty());
+        typ(&mut c, "ok ");
+        assert_eq!(c.config.never_correct, vec!["waek".to_string()]);
+    }
+
+    #[test]
     fn undo_hotkey_saves_never_correct_word() {
         let dir = std::env::temp_dir().join(format!("typed-undo-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);

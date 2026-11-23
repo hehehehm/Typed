@@ -105,3 +105,11 @@ layout	это ult	это где
 layout	the ult	the где
 transp	hsot	shot
 transp	вдое	двое
+layout	meltn	будет
+layout	секд+фде+я	ctrl+alt+z
+layout	ctrl+alt+я	ctrl+alt+z
+layout	ctrl+shift+л	ctrl+shift+k
+layout	СЕКД+ФДЕ+Я	CTRL+ALT+Z
+
+
+typo	свроем	своем

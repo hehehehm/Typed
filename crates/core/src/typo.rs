@@ -22,6 +22,9 @@ pub const TAIL_RANK: u32 = 20_000;
 pub const DOMINANCE: u32 = 20;
 pub const SHORT_PERM_RANK: u32 = 300;
 pub const SHORT_PERM_LEN: usize = 3;
+pub const INSERT_MAX_RANK: u32 = 5_000;
+const INSERT_TYPED_MIN: usize = 5;
+const INSERT_TYPED_MAX: usize = 9;
 
 const EN_ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
 const RU_ALPHABET: &str = "абвгдежзийклмнопрстуфхцчшщъыьэюя";
@@ -223,6 +226,11 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
                 return Some(fix);
             }
             swap_fix = Some(fix);
+        }
+        if let Some(fix) = extra_letter_fix(d, word, lang) {
+            if !ngram::veto(ctx, word, &fix, lang) {
+                return Some(fix);
+            }
         }
         if let Some(fix) = short_perm_fix(d, word, lang) {
             if !ngram::veto(ctx, word, &fix, lang) {
@@ -941,7 +949,7 @@ fn pick_swap_candidate<'a>(hits: &'a [(u32, f64, usize, String)], _n: usize, lan
     hits.iter().min_by(|a, b| earlier_or_freq(a, b)).map(|h| h.3.as_str())
 }
 
-fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang, ctx: &Context) -> Option<String> {
+fn collect_swap_hits(d: &Dictionary, word: &str, lang: Lang) -> Option<(usize, Vec<(u32, f64, usize, String)>)> {
     let chars: Vec<char> = word.chars().collect();
     let n = chars.len();
     if n < MIN_LEN || !chars.iter().all(|c| c.is_alphabetic()) {
@@ -973,6 +981,155 @@ fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang, ctx: &Context) -> O
             }
         }
     }
+    Some((n, hits))
+}
+
+pub(crate) fn adjacent_swap_candidates(word: &str, lang: Lang) -> Vec<String> {
+    let d = crate::dict::get(lang);
+    let Some((_, mut hits)) = collect_swap_hits(&d, word, lang) else {
+        return Vec::new();
+    };
+    hits.sort_by(earlier_or_freq);
+    hits.into_iter().map(|h| match_case(word, &h.3)).collect()
+}
+
+pub(crate) fn typo_candidates(word: &str, lang: Lang, level: Level, ctx: &Context) -> Vec<String> {
+    let d = crate::dict::get(lang);
+    let mut out = adjacent_swap_candidates(word, lang);
+    let mut push = |s: String| {
+        if !s.is_empty() && !out.iter().any(|x| x == &s) {
+            out.push(s);
+        }
+    };
+    if level != Level::Cautious {
+        for fix in extra_letter_candidates(word, lang) {
+            if !ngram::veto(ctx, word, &fix, lang) {
+                push(fix);
+            }
+        }
+        if let Some(fix) = short_perm_fix(&d, word, lang) {
+            if !ngram::veto(ctx, word, &fix, lang) {
+                push(fix);
+            }
+        }
+    }
+    if let Some(fix) = dedupe_fix(&d, word, lang, false) {
+        if !ngram::veto(ctx, word, &fix, lang) {
+            push(fix);
+        }
+    }
+    if let Some(fix) = suggest_one(&d, word, lang, false)
+        .or_else(|| hush_soft_sign(&d, word, lang, false))
+        .or_else(|| verb_soft_sign(&d, word, lang, false))
+    {
+        if !ngram::veto(ctx, word, &fix, lang) {
+            push(fix);
+        }
+    }
+    if level != Level::Cautious {
+        if let Some((fix, dest)) = hand_shift_fix(word, lang, level, None) {
+            if dest == lang && !ngram::veto(ctx, word, &fix, lang) {
+                push(fix);
+            }
+        }
+        if let Some(fix) = crate::typo_wide::suggest_wide(&d, word, lang, false, level, ctx) {
+            push(fix);
+        }
+        if let Some(fix) = leading_neighbour_insert(&d, word, lang, false).filter(|f| !ngram::veto(ctx, word, f, lang)) {
+            push(fix);
+        }
+        if let Some(fix) = channel_fix(&d, word, lang, false).filter(|f| !ngram::veto(ctx, word, f, lang)) {
+            push(fix);
+        }
+    }
+    out
+}
+
+
+fn extra_letter_plausible(extra: char, i: usize, w: &[char], lang: Lang) -> bool {
+    let left = i > 0 && adjacent_keys(extra, w[i - 1], lang);
+    let right = i + 1 < w.len() && adjacent_keys(extra, w[i + 1], lang);
+    if left || right {
+        return true;
+    }
+    w.iter().enumerate().any(|(j, &c)| j != i && c == extra)
+}
+
+fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang) -> Option<Vec<(u32, f64, usize, String)>> {
+    let chars: Vec<char> = word.chars().collect();
+    let n = chars.len();
+    if n < INSERT_TYPED_MIN || n > INSERT_TYPED_MAX || !chars.iter().all(|c| c.is_alphabetic()) {
+        return None;
+    }
+    if crate::layout::detect_script(&Dictionary::normalize(word)) != Some(lang) {
+        return None;
+    }
+    let lower = Dictionary::normalize(word);
+    if d.is_word(&lower) || (lang == Lang::Ru && morph::is_known_form(d, &lower)) || d.is_name_form(&lower) {
+        return None;
+    }
+    if lang == Lang::En && en_known_form(d, &lower) {
+        return None;
+    }
+    let w: Vec<char> = lower.chars().collect();
+    if w.len() != n {
+        return None;
+    }
+    let g = ngram::get(lang);
+    let mut hits: Vec<(u32, f64, usize, String)> = Vec::new();
+    for i in 0..n {
+        if !extra_letter_plausible(w[i], i, &w, lang) {
+            continue;
+        }
+        let mut v = w.clone();
+        v.remove(i);
+        let c: String = v.into_iter().collect();
+        let Some(r) = d.rank(&c).filter(|&r| r < MAX_RANK) else {
+            continue;
+        };
+        if is_title_case(word) && c.chars().count() <= 4 && r >= FIRST_SLIP_RANK_SHORT {
+            continue;
+        }
+        if !hits.iter().any(|(_, _, _, s)| *s == c) {
+            hits.push((r, g.count(&[&c]), i, c));
+        }
+    }
+    if hits.is_empty() {
+        None
+    } else {
+        Some(hits)
+    }
+}
+
+fn extra_letter_fix(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
+    let hits = collect_insert_hits(d, word, lang)?;
+    if hits.len() != 1 || hits[0].0 >= INSERT_MAX_RANK {
+        return None;
+    }
+    Some(match_case(word, &hits[0].3))
+}
+
+fn extra_letter_candidates(word: &str, lang: Lang) -> Vec<String> {
+    let d = crate::dict::get(lang);
+    let Some(mut hits) = collect_insert_hits(&d, word, lang) else {
+        return Vec::new();
+    };
+    hits.sort_by_key(|h| h.2);
+    let mut out = Vec::new();
+    for h in hits {
+        if h.0 >= INSERT_MAX_RANK {
+            continue;
+        }
+        let s = match_case(word, &h.3);
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang, ctx: &Context) -> Option<String> {
+    let (n, hits) = collect_swap_hits(d, word, lang)?;
     let winner = pick_swap_candidate(&hits, n, lang, ctx)?;
     if is_title_case(word) && n <= 4 {
         let wr = hits
@@ -1661,6 +1818,19 @@ mod tests {
         assert_eq!(suggest_level("услушу", Lang::Ru, Level::Normal).as_deref(), Some("услугу"));
         assert_eq!(suggest_level("услушу", Lang::Ru, Level::Cautious).as_deref(), Some("услугу"));
         assert_eq!(suggest("Услушу", Lang::Ru).as_deref(), Some("Услугу"));
+    }
+
+    #[test]
+    fn extra_letter_inside_a_frequent_word() {
+        assert_eq!(suggest("свроем", Lang::Ru).as_deref(), Some("своем"));
+        assert_eq!(suggest("Свроем", Lang::Ru).as_deref(), Some("Своем"));
+        assert_eq!(suggest("СВРОЕМ", Lang::Ru).as_deref(), Some("СВОЕМ"));
+        assert_eq!(suggest_level("свроем", Lang::Ru, Level::Aggressive).as_deref(), Some("своем"));
+        assert_eq!(suggest_level("свроем", Lang::Ru, Level::Normal).as_deref(), Some("своем"));
+        assert_eq!(suggest_level("свроем", Lang::Ru, Level::Cautious).as_deref(), Some("своем"));
+        assert_eq!(suggest("своем", Lang::Ru), None);
+        assert_eq!(suggest("theiir", Lang::En).as_deref(), Some("their"));
+        assert_eq!(suggest("whihch", Lang::En).as_deref(), Some("which"));
     }
 
 }

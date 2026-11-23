@@ -145,6 +145,7 @@ const BRAND_PREFIX_RANK: u32 = 20_000;
 pub const LAYOUT_TYPO_REASON: &str = "wrong layout and a typo";
 pub const HAND_SHIFT_REASON: &str = "home-row hand shift";
 pub const SPACE_REASON: &str = "missing space after a function word";
+pub const KEY_COMBO_REASON: &str = "shortcut typed in the other layout";
 
 impl Default for EngineOptions {
     fn default() -> Self {
@@ -185,7 +186,16 @@ struct LastWord {
 struct AutoFix {
     typed: String,
     typed_boundary: String,
+    applied_boundary: String,
     steps: Vec<String>,
+    cycle: Vec<String>,
+    idx: usize,
+}
+
+impl AutoFix {
+    fn new(typed: String, typed_boundary: String, applied_boundary: String, steps: Vec<String>, cycle: Vec<String>) -> Self {
+        Self { typed, typed_boundary, applied_boundary, steps, cycle, idx: 0 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +223,7 @@ pub struct Engine {
     last: Option<LastWord>,
     recent_fix: Option<RecentFix>,
     pending_learn: Option<(String, bool)>,
+    pending_remember: Option<String>,
     learned: Vec<Learned>,
     history: Vec<LastWord>,
     edited_fix: bool,
@@ -288,6 +299,9 @@ impl Engine {
     }
 
     fn commit_pending_learn(&mut self) {
+        if let Some(w) = self.pending_remember.take() {
+            self.remember(&w);
+        }
         if let Some((w, typo_only)) = self.pending_learn.take() {
             self.count_undo(&w, typo_only);
         }
@@ -328,15 +342,57 @@ impl Engine {
 
     pub fn undo_last(&mut self, current_layout: Lang) -> Option<Replacement> {
         if self.buf.is_empty() && self.last.as_ref().is_some_and(|l| l.fix.is_some()) {
+            if let Some(rep) = self.cycle_next(current_layout, true) {
+                return Some(rep);
+            }
             let rep = self.restore_last(current_layout)?;
             self.recent_fix = None;
             self.pending_learn = None;
+            self.pending_remember = None;
             if let Some(w) = self.last.as_ref().map(|l| l.word.clone()) {
                 self.remember(&w);
             }
             return Some(rep);
         }
         self.undo_earlier(current_layout)
+    }
+
+    fn cycle_next(&mut self, current_layout: Lang, wrap: bool) -> Option<Replacement> {
+        let last = self.last.as_mut()?;
+        let fix = last.fix.as_mut()?;
+        if fix.cycle.len() <= 2 {
+            return None;
+        }
+        let next_idx = fix.idx + 1;
+        if next_idx >= fix.cycle.len() {
+            if !wrap {
+                return None;
+            }
+            fix.idx = 0;
+        } else {
+            fix.idx = next_idx;
+        }
+        let next = fix.cycle[fix.idx].clone();
+        let is_orig = never_key(&next) == never_key(&fix.typed);
+        let typo_step = fix.steps.iter().any(|s| never_key(s) == never_key(&next));
+        let rest: String = last.boundary.chars().skip(1).collect();
+        let head = if is_orig { fix.typed_boundary.clone() } else { fix.applied_boundary.clone() };
+        let boundary = format!("{head}{rest}");
+        let delete = last.word.chars().count() + last.boundary.chars().count();
+        let insert = format!("{next}{boundary}");
+        let target = layout::detect_script(&next).unwrap_or(current_layout);
+        last.word = next.clone();
+        last.boundary = boundary;
+        last.fresh = true;
+        self.recent_fix = None;
+        self.pending_remember = None;
+        self.pending_learn = None;
+        if is_orig {
+            self.pending_remember = Some(fix.typed.clone());
+        } else if typo_step {
+            self.pending_learn = Some((next, true));
+        }
+        Some(Replacement { delete, insert, target })
     }
 
     fn undo_earlier(&mut self, current_layout: Lang) -> Option<Replacement> {
@@ -404,6 +460,9 @@ impl Engine {
             || last.boundary.contains(['\n', '\t', '\r'])
         {
             return None;
+        }
+        if last.fix.as_ref().is_some_and(|f| f.cycle.len() > 2) {
+            return self.cycle_next(current_layout, false);
         }
         if let Some(step) = last.fix.as_mut().and_then(|f| f.steps.pop()) {
             let rep = Replacement {
@@ -482,6 +541,7 @@ impl Engine {
     fn mark_erased(&mut self) {
         if self.last.is_some() {
             self.pending_learn = None;
+            self.pending_remember = None;
         }
         if let Some(rf) = self.recent_fix.as_mut() {
             rf.erased = true;
@@ -610,7 +670,8 @@ impl Engine {
                         steps.push(plain);
                     }
                 }
-                let fix = AutoFix { typed: token.clone(), typed_boundary: boundary.to_string(), steps };
+                let cycle = self.correction_cycle(&token, &text, reason);
+                let fix = AutoFix::new(token.clone(), boundary.to_string(), b.clone(), steps, cycle);
                 self.recent_fix = Some(RecentFix { typed: token, erased: false });
                 self.push_last(LastWord { word: text, boundary: b, fix: Some(fix), fresh: true });
                 Some(rep)
@@ -663,7 +724,7 @@ impl Engine {
         lw.fix = None;
         lw.fresh = false;
         let fix = if text != token {
-            Some(AutoFix { typed: token.to_string(), typed_boundary: boundary.to_string(), steps: Vec::new() })
+            Some(AutoFix::new(token.to_string(), boundary.to_string(), bnd.clone(), Vec::new(), self.correction_cycle(token, &text, TYPO_REASON)))
         } else {
             None
         };
@@ -736,7 +797,8 @@ impl Engine {
         let delete = last.word.chars().count() + last.boundary.chars().count() + b.chars().count() + typed_len;
         let typed_all = format!("{a_typed}{}{b}", last.boundary);
         let rep = Replacement { delete, insert: format!("{merged}{bnd}"), target: src };
-        let fix = AutoFix { typed: typed_all.clone(), typed_boundary: boundary.to_string(), steps: Vec::new() };
+        let cycle = self.correction_cycle(&typed_all, &merged, SPACE_REASON);
+        let fix = AutoFix::new(typed_all.clone(), boundary.to_string(), bnd.clone(), Vec::new(), cycle);
         self.recent_fix = Some(RecentFix { typed: typed_all, erased: false });
         self.last = Some(LastWord { word: merged, boundary: bnd, fix: Some(fix), fresh: true });
         Some(rep)
@@ -810,6 +872,9 @@ impl Engine {
         }
         if let Some(text) = filename::from_ru_layout(token) {
             return Decision::Convert { text, target: Lang::En, reason: "file name typed in the other layout" };
+        }
+        if let Some(d) = key_combo_decision(token) {
+            return d;
         }
         if o.skip_tokens_with_digits && token.chars().any(|c| c.is_ascii_digit()) {
             return Decision::Keep("contains digits");
@@ -1481,13 +1546,21 @@ impl Engine {
                 continue;
             }
             let typed_letters: String = head.chars().filter(|c| c.is_alphabetic()).collect();
-            if !crate::typo_wide::looks_foreign(&Dictionary::normalize(&typed_letters), src) {
-                continue;
-            }
             if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(conv_core)) {
                 continue;
             }
             if let Some(fix) = crate::typo_wide::layout_typo_ctx(conv_core, dst, o.typo_level, &self.left_context(dst)) {
+                let foreign = crate::typo_wide::looks_foreign(&Dictionary::normalize(&typed_letters), src);
+                if !foreign {
+                    let lower = Dictionary::normalize(&typed_letters);
+                    let src_d = dict::get(src);
+                    let known = src_d.is_word(&lower) || src_d.in_full_forms(&lower);
+                    let cv: Vec<char> = conv_core.chars().collect();
+                    let tight = typo::is_adjacent_swap(conv_core, &fix) || typo::is_direct_neighbour_subst(&cv, &fix, dst);
+                    if known || !tight {
+                        continue;
+                    }
+                }
                 let tail: String = tail.iter().collect();
                 let tail = layout::convert_punctuation(&tail, src);
                 let plain = format!("{conv}{tail}");
@@ -1598,6 +1671,58 @@ impl Engine {
             }
         }
         None
+    }
+
+    fn correction_cycle(&self, typed: &str, applied: &str, _reason: &str) -> Vec<String> {
+        let mut extra = Vec::new();
+        let push = |extra: &mut Vec<String>, s: String| {
+            if s.is_empty() || s == applied || s == typed || extra.iter().any(|x| x == &s) {
+                return;
+            }
+            extra.push(s);
+        };
+        let core = trim_non_letters(typed);
+        let o = &self.options;
+        if let Some(src) = layout::detect_script(core) {
+            let ctx = self.left_context(src);
+            if o.fix_typos {
+                for c in typo::typo_candidates(core, src, o.typo_level, &ctx) {
+                    push(&mut extra, typed.replacen(core, &c, 1));
+                }
+            } else {
+                for c in typo::adjacent_swap_candidates(core, src) {
+                    push(&mut extra, typed.replacen(core, &c, 1));
+                }
+            }
+            let conv = layout::convert(typed, src);
+            let dst = src.other();
+            let layout_involved = layout::detect_script(applied).is_some_and(|l| l != src);
+            let conv_core = trim_non_letters(&conv).to_string();
+            let conv_known = !conv_core.is_empty()
+                && layout::detect_script(&conv_core) == Some(dst)
+                && (dict::get(dst).is_word(&Dictionary::normalize(&conv_core))
+                    || dict::get(dst).rank(&Dictionary::normalize(&conv_core)).is_some());
+            if layout_involved || conv_known {
+                push(&mut extra, conv.clone());
+            }
+            if (layout_involved || conv_known)
+                && !conv_core.is_empty()
+                && layout::detect_script(&conv_core) == Some(dst)
+                && o.fix_typos
+            {
+                let dctx = self.left_context(dst);
+                for c in typo::typo_candidates(&conv_core, dst, o.typo_level, &dctx) {
+                    push(&mut extra, conv.replacen(&conv_core, &c, 1));
+                }
+            }
+        }
+        if extra.is_empty() {
+            return Vec::new();
+        }
+        let mut cycle = vec![applied.to_string()];
+        cycle.extend(extra);
+        cycle.push(typed.to_string());
+        cycle
     }
 }
 
@@ -1776,6 +1901,88 @@ fn is_cli_flag(token: &str) -> bool {
     token.starts_with('-')
 }
 
+fn canon_key_part(s: &str) -> Option<String> {
+    let l = s.to_ascii_lowercase();
+    match l.as_str() {
+        "ctrl" | "control" => Some("ctrl".into()),
+        "alt" | "option" => Some("alt".into()),
+        "shift" => Some("shift".into()),
+        "win" | "super" | "meta" => Some("win".into()),
+        "cmd" | "command" => Some("cmd".into()),
+        "tab" => Some("tab".into()),
+        "esc" | "escape" => Some("esc".into()),
+        "del" | "delete" => Some("del".into()),
+        "enter" | "return" => Some("enter".into()),
+        "backspace" | "bksp" => Some("backspace".into()),
+        "space" => Some("space".into()),
+        "pause" | "break" => Some("pause".into()),
+        t if t.chars().count() == 1 && t.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) => Some(t.to_string()),
+        t if t.starts_with('f') => {
+            let n: u8 = t[1..].parse().ok()?;
+            if (1..=12).contains(&n) {
+                Some(t.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_key_part(part: &str) -> Option<String> {
+    if let Some(c) = canon_key_part(part) {
+        return Some(c);
+    }
+    let src = layout::detect_script(part)?;
+    canon_key_part(&layout::convert(part, src))
+}
+
+fn key_combo_decision(token: &str) -> Option<Decision> {
+    if !token.chars().any(|c| c == '+' || c == '-') || token.starts_with('+') || token.starts_with('-') || token.ends_with('+') || token.ends_with('-') {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    let mut delims: Vec<char> = Vec::new();
+    let mut start = 0usize;
+    for (i, c) in token.char_indices() {
+        if c == '+' || c == '-' {
+            let p = &token[start..i];
+            if p.is_empty() {
+                return None;
+            }
+            parts.push(p);
+            delims.push(c);
+            start = i + c.len_utf8();
+        }
+    }
+    let last = &token[start..];
+    if last.is_empty() {
+        return None;
+    }
+    parts.push(last);
+    if parts.len() < 2 {
+        return None;
+    }
+    if parts.iter().all(|p| canon_key_part(p).is_some()) {
+        return None;
+    }
+    let mut out = String::new();
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push(delims[i - 1]);
+        }
+        out.push_str(&parse_key_part(p)?);
+    }
+    if out == token {
+        return None;
+    }
+    let letters: Vec<char> = token.chars().filter(|c| c.is_alphabetic()).collect();
+    if !letters.is_empty() && letters.iter().all(|c| c.is_uppercase()) {
+        out = out.to_uppercase();
+    }
+    Some(Decision::Convert { text: out, target: Lang::En, reason: KEY_COMBO_REASON })
+}
+
 pub fn never_key(token: &str) -> String {
     Dictionary::normalize(trim_non_letters(token))
 }
@@ -1857,6 +2064,21 @@ mod tests {
             Decision::Convert { text, .. } => Some(text),
             Decision::Keep(_) => None,
         }
+    }
+
+    #[test]
+    fn extra_letter_inside_a_frequent_word_is_fixed() {
+        let fix = |w: &str| typo_fix_at(typo::Level::Normal, w);
+        assert_eq!(fix("свроем").as_deref(), Some("своем"));
+        assert_eq!(fix("Свроем").as_deref(), Some("Своем"));
+        assert_eq!(fix("СВРОЕМ").as_deref(), Some("СВОЕМ"));
+        assert_eq!(typo_fix_at(typo::Level::Aggressive, "свроем").as_deref(), Some("своем"));
+        assert_eq!(typo_fix_at(typo::Level::Cautious, "свроем").as_deref(), Some("своем"));
+        let off = Engine::new(EngineOptions { fix_typos: false, typo_level: typo::Level::Normal, ..Default::default() });
+        assert!(matches!(off.decide("свроем"), Decision::Keep(_)));
+        assert_eq!(fix("своем"), None, "must keep своем");
+        assert_eq!(fix("theiir").as_deref(), Some("their"));
+        assert_eq!(fix("whihch").as_deref(), Some("which"));
     }
 
     #[test]
@@ -2193,7 +2415,10 @@ mod tests {
         let mut e = engine();
         assert!(type_str(&mut e, "ctrl+shift+k").is_empty());
         assert_eq!(e.current_len(), "ctrl+shift+k".chars().count());
-        assert!(matches!(engine().decide("ctrl+shift+к"), Decision::Keep(_)));
+        match engine().decide("ctrl+shift+л") {
+            Decision::Convert { text, .. } => assert_eq!(text, "ctrl+shift+k"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -2230,6 +2455,40 @@ mod tests {
         let mut e = engine();
         let r = type_str(&mut e, ",eltn ");
         assert_eq!(r[0].insert, "будет ");
+    }
+
+    #[test]
+    fn neighbour_typo_in_wrong_layout_is_fixed() {
+        let mut e = typo_engine();
+        assert_eq!(type_str(&mut e, "meltn ")[0].insert, "будет ");
+        match typo_engine().decide("meltn") {
+            Decision::Convert { text, target, reason } => {
+                assert_eq!(text, "будет");
+                assert_eq!(target, Lang::Ru);
+                assert_eq!(reason, LAYOUT_TYPO_REASON);
+            }
+            other => panic!("{other:?}"),
+        }
+        let cautious = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Cautious, ..Default::default() });
+        assert!(matches!(cautious.decide("meltn"), Decision::Keep(_)));
+    }
+
+    #[test]
+    fn key_combo_typed_in_the_other_layout() {
+        let e = engine();
+        let conv = |w: &str| match e.decide(w) {
+            Decision::Convert { text, .. } => text,
+            Decision::Keep(r) => panic!("{w} kept ({r})"),
+        };
+        assert_eq!(conv("секд+фде+я"), "ctrl+alt+z");
+        assert_eq!(conv("ctrl+alt+я"), "ctrl+alt+z");
+        assert_eq!(conv("ctrl+shift+л"), "ctrl+shift+k");
+        assert_eq!(conv("ctrl+shift+к"), "ctrl+shift+r");
+        assert_eq!(conv("СЕКД+ФДЕ+Я"), "CTRL+ALT+Z");
+        assert!(matches!(e.decide("кто-то"), Decision::Keep(_)));
+        assert!(matches!(e.decide("ctrl+shift+k"), Decision::Keep(_)));
+        let mut e = engine();
+        assert_eq!(type_str(&mut e, "секд+фде+я ")[0].insert, "ctrl+alt+z ");
     }
 
     fn engine_with(words: &[&str]) -> Engine {
@@ -2491,6 +2750,36 @@ mod tests {
     }
 
     #[test]
+    fn undo_cycles_transposition_alternatives() {
+        let mut e = typo_engine();
+        assert_eq!(type_str(&mut e, "waek ")[0].insert, "weak ");
+        assert_eq!(e.undo_last(Lang::En).unwrap().insert, "wake ");
+        assert!(never(&mut e).is_empty());
+        loop {
+            let w = e.undo_last(Lang::En).unwrap().insert;
+            if w == "waek " {
+                break;
+            }
+            assert_ne!(w, "weak ", "wrapped before the original");
+        }
+        assert!(never(&mut e).is_empty());
+        assert!(type_str(&mut e, "ok ").is_empty());
+        assert_eq!(never(&mut e), vec!["waek".to_string()]);
+        let mut e = typo_engine();
+        type_str(&mut e, "waek ");
+        assert_eq!(e.undo_last(Lang::En).unwrap().insert, "wake ");
+        loop {
+            if e.undo_last(Lang::En).unwrap().insert == "waek " {
+                break;
+            }
+        }
+        assert_eq!(e.undo_last(Lang::En).unwrap().insert, "weak ");
+        assert!(never(&mut e).is_empty());
+        assert!(type_str(&mut e, "ok ").is_empty());
+        assert!(never(&mut e).is_empty());
+    }
+
+    #[test]
     fn undo_hotkey_restores_and_remembers() {
         let mut e = engine();
         assert_eq!(type_str(&mut e, "ghbdtn ")[0].insert, "привет ");
@@ -2735,7 +3024,8 @@ mod tests {
         assert_eq!(bs(&mut e), None);
         let mut e = typo_engine();
         type_str(&mut e, "xnjj ");
-        assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 4, insert: "xnjj ".into(), target: Lang::En }));
+        assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 4, insert: "чтоо ".into(), target: Lang::Ru }));
+        assert_eq!(e.undo_last(Lang::Ru), Some(Replacement { delete: 5, insert: "xnjj ".into(), target: Lang::En }));
     }
 
     #[test]
