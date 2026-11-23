@@ -882,6 +882,9 @@ impl Engine {
             if let Some(d) = ranked_convert() {
                 return d;
             }
+            if let Some(d) = self.typo_swap_decision(token, core, src) {
+                return d;
+            }
             if let Some(d) = self.split_decision(token, core, src) {
                 return d;
             }
@@ -981,7 +984,7 @@ impl Engine {
                         let lm_loses = lm_split && !is_single_letter_prep_split(split_text) && split_count < fix_count * LM_SPLIT_OVER_TYPO;
                         let dedupe = typo::is_dedupe_of(core, &fix) && split_count * SPLIT_VS_DEDUPE < fix_count;
                         let unseen_glued = !lm_split && split_count <= 0.0 && !is_single_letter_prep_split(split_text);
-                        if dedupe || unseen_glued || lm_loses || (!is_single_letter_prep_split(split_text) && !split_likelier && (m > n || a == b || vowel_slip)) {
+                        if typo::is_adjacent_swap(core, &fix) || dedupe || unseen_glued || lm_loses || (!is_single_letter_prep_split(split_text) && !split_likelier && (m > n || a == b || vowel_slip)) {
                             return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
                         }
                     }
@@ -991,6 +994,9 @@ impl Engine {
         }
 
         if o.fix_typos {
+            if let Some(d) = self.typo_swap_decision(token, core, src) {
+                return d;
+            }
             let split_like = single_prep_plus_word(core, src).is_some()
                 || (core.chars().all(char::is_alphabetic) && split::lm_segment(src_dict, core, src).is_some());
             if !split_like {
@@ -1015,7 +1021,8 @@ impl Engine {
                         reason: SPACE_REASON,
                     };
                 }
-            } else if core.chars().all(char::is_alphabetic) {
+            }
+            if core.chars().all(char::is_alphabetic) {
                 if let Some(fix) = self.typo_fix(core, src) {
                     return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
                 }
@@ -1303,6 +1310,18 @@ impl Engine {
         } else {
             typo::suggest_ctx(part, lang, o.typo_level, &ctx)
         }
+    }
+
+    fn typo_swap_decision(&self, token: &str, core: &str, lang: Lang) -> Option<Decision> {
+        if !core.chars().all(char::is_alphabetic) {
+            return None;
+        }
+        let fix = self.typo_fix(core, lang)?;
+        typo::is_adjacent_swap(core, &fix).then(|| Decision::Convert {
+            text: token.replacen(core, &fix, 1),
+            target: lang,
+            reason: TYPO_REASON,
+        })
     }
 
     fn typo_fix(&self, core: &str, lang: Lang) -> Option<String> {
@@ -1784,6 +1803,25 @@ mod tests {
             Decision::Convert { text, .. } => Some(text),
             Decision::Keep(_) => None,
         }
+    }
+
+    #[test]
+    fn adjacent_transposition_of_a_known_word_is_fixed() {
+        let fix = |w: &str| typo_fix_at(typo::Level::Normal, w);
+        assert_eq!(fix("заню").as_deref(), Some("знаю"));
+        assert_eq!(fix("Заню").as_deref(), Some("Знаю"));
+        assert_eq!(fix("ЗАНЮ").as_deref(), Some("ЗНАЮ"));
+        assert_eq!(fix("тиак").as_deref(), Some("итак"));
+        assert_eq!(fix("уверне").as_deref(), Some("уверен"));
+        assert_eq!(fix("ивдеть").as_deref(), Some("видеть"));
+        assert_eq!(fix("впорос").as_deref(), Some("вопрос"));
+        assert_eq!(fix("кгода").as_deref(), Some("когда"));
+        assert_eq!(fix("опмню").as_deref(), Some("помню"));
+        assert_eq!(typo_fix_at(typo::Level::Aggressive, "заню").as_deref(), Some("знаю"));
+        assert_eq!(typo_fix_at(typo::Level::Cautious, "заню"), None);
+        let off = Engine::new(EngineOptions { fix_typos: false, typo_level: typo::Level::Normal, ..Default::default() });
+        assert!(matches!(off.decide("заню"), Decision::Keep(_)));
+        assert_eq!(fix("знаю"), None, "must keep знаю");
     }
 
     #[test]

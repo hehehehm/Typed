@@ -63,3 +63,15 @@ punct	ghbdtn/	привет.
 punct	руддщ,	hello?
 punct	руддщ.	hello/
 punct	руддщ!	hello!
+transp	заню	знаю
+transp	Заню	Знаю
+transp	ЗАНЮ	ЗНАЮ
+transp	тиак	итак
+transp	уверне	уверен
+transp	ивдеть	видеть
+transp	впорос	вопрос
+transp	кгода	когда
+transp	опмню	помню
+transp	jsut	just
+transp	wiht	with
+transp	taht	that

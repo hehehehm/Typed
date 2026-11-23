@@ -20,6 +20,30 @@
 
 Метрики хуже 0.3.83: `context/en/layout+typo/wrong`, `context/en/typo1/wrong`, `context/en/typo2/wrong`, `context/ru/layout+typo/wrong`, `context/ru/typo1/wrong`, `context/ru/typo2/wrong`, `correction/En frequent, 2 error(s)/wrong`, `correction/En rare form, 1 error(s)/wrong`, `correction/En typo 1/all/wrong`, `correction/En typo 2/all/wrong`, `correction/En typo 3/all/wrong`, `correction/Ru typo 2/all/wrong`, `correction/Ru typo 3/all/wrong`, `correction/unknown-fp/En lower`, `correction/unknown-fp/Ru Capitalised`, `correction/unknown-fp/Ru lower`, `typist/gramotey/aggressive/missed_pct`, `typist/gramotey/aggressive/wrong_pct`, `typist/gramotey/cautious/missed_pct`, `typist/gramotey/normal/fp`, `typist/gramotey/normal/wrong_pct`, `typist/torpyga/cautious/wrong_pct`, `typist/torpyga/normal/wrong_pct`, `typist/zlodey/aggressive/fixed_pct`, `typist/zlodey/aggressive/fp`, `typist/zlodey/aggressive/wrong_pct`, `typist/zlodey/normal/fp`.
 
+## 0.3.87 против 0.3.86
+
+Прогон 23.11.2026, ветка `wip-0.3.87`, релиза нет. База: полный прогон 0.3.86 (`iter086`, коммит `d7ef7f8`). `typist_real_failures`: 67 из 67. Curated FP: 7 из 315 (было 6, новый случай «Маск» → «Макс»). Частые слова: 0 из 1320. `typo_audit`: 0 ложных, 0 пропусков из 40.
+
+Соседние перестановки частых слов длиной 4–6 букв (все позиции, включая первую, без столкновений со словом-опечаткой):
+
+| набор | 0.3.86 hit% без столкновений | miss | wrong | после | miss | wrong |
+|---|---|---|---|---|---|---|
+| все ranked | 78,59% | 15413 | 10446 | 98,92% | 586 | 724 |
+| rank < 1000 | 90,40% | 182 | 247 | 99,49% | 9 | 14 |
+| rank < 5000 | 88,47% | 1074 | 1328 | 98,99% | 106 | 104 |
+
+В штатном `typist_sweep` выборка `typo1_transpose (25%×3)`: recall 89,71% → 99,32%, wrong 4,63% → 0,29%.
+
+Гейт «не хуже 0.3.86» скриптом не пройден: 44 метрики. Главное, что хуже по качеству, а не из-за несравнимости тестера:
+
+- `correction_eval`: доля неверных typo 1 RU 1,9→2,4, EN 2,5→3,1; typo 2 чуть выше; layout+typo wrong чуть выше. Curated FP 6→7. Частые слова по-прежнему 0/1320. Recall typo 1 RU 85→86.
+- `context_eval`: typo1 wrong RU 3,89→4,15, EN 3,58→4,09; typo2 и layout+typo wrong чуть выше.
+- Склейки с предлогом в `typist_sweep` ниже, потому что однозначная перестановка теперь важнее («кгода» → «когда», а не «к года»): `space_glued_prep` 98,70→98,18, CAPS 98,70→98,33, corpus_bi 96,93→96,59.
+- Выборочные typo1 omit/subst/insert/double на 25% слов ниже на 0,06–0,25 п. п.; полный строчный сдвиг рук 88,49→88,39. `typo_hyphen` 97,17→96,60.
+- `typist_eval`: у gramotey (числа слов близки) fp Normal 18→21, Aggressive 8→9. У torpyga и zlodey число слов снова разошлось из-за других замен тестера, доли с 0.3.86 напрямую не сравнимы.
+
+Релиза нет.
+
 ## 0.3.86 против 0.3.85
 
 Прогон 23.11.2026, релиз 0.3.86, коммит кода `da525b2`. База: полный прогон 0.3.85 (`iter/ev6`, движок `20430b4`). `typist_real_failures`: 55 из 55. Curated FP: 6 из 315. Частые слова: 0 из 1320. `typo_audit`: 0 ложных, 0 пропусков из 40.

@@ -215,7 +215,15 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
     if is_title_case(word) && is_mid_sentence(ctx) {
         return None;
     }
+    let mut swap_fix = None;
     if level != Level::Cautious {
+        if let Some(fix) = adjacent_swap_fix(d, word, lang) {
+            let isolated = ctx.prev.as_deref().is_none_or(|p| p == crate::ngram::START);
+            if isolated && !ngram::veto(ctx, word, &fix, lang) {
+                return Some(fix);
+            }
+            swap_fix = Some(fix);
+        }
         if let Some(fix) = short_perm_fix(d, word, lang) {
             if !ngram::veto(ctx, word, &fix, lang) {
                 return Some(fix);
@@ -246,6 +254,7 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
     leading_neighbour_insert(d, word, lang, assume_unknown)
         .filter(|f| !ngram::veto(ctx, word, f, lang))
         .or_else(|| channel_fix(d, word, lang, assume_unknown).filter(|f| !ngram::veto(ctx, word, f, lang)))
+        .or_else(|| swap_fix.filter(|f| !ngram::veto(ctx, word, f, lang)))
 }
 
 pub fn dedupe_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {
@@ -868,6 +877,11 @@ fn is_swap(typed: &[char], cand: &str) -> bool {
     matches!(diff.as_slice(), [i, j] if *j == i + 1 && typed[*i] == cv[*j] && typed[*j] == cv[*i])
 }
 
+pub(crate) fn is_adjacent_swap(typed: &str, cand: &str) -> bool {
+    let typed: Vec<char> = Dictionary::normalize(typed).chars().collect();
+    is_swap(&typed, &Dictionary::normalize(cand))
+}
+
 fn short_perm_forms(typed: &[char]) -> Vec<String> {
     let n = typed.len();
     let mut out = Vec::new();
@@ -889,6 +903,51 @@ fn short_perm_forms(typed: &[char]) -> Vec<String> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+
+fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
+    let chars: Vec<char> = word.chars().collect();
+    let n = chars.len();
+    if n < MIN_LEN || !chars.iter().all(|c| c.is_alphabetic()) {
+        return None;
+    }
+    if crate::layout::detect_script(&Dictionary::normalize(word)) != Some(lang) {
+        return None;
+    }
+    let lower = Dictionary::normalize(word);
+    if d.is_word(&lower) {
+        return None;
+    }
+    let w: Vec<char> = lower.chars().collect();
+    if w.len() != n {
+        return None;
+    }
+    let mut hits: Vec<(u32, String)> = Vec::new();
+    for i in 0..n - 1 {
+        if w[i] == w[i + 1] {
+            continue;
+        }
+        let mut v = w.clone();
+        v.swap(i, i + 1);
+        let c: String = v.into_iter().collect();
+        if let Some(r) = d.rank(&c).filter(|&r| r < MAX_RANK) {
+            if !hits.iter().any(|(_, s)| *s == c) {
+                hits.push((r, c));
+            }
+        }
+    }
+    hits.sort_by_key(|(r, _)| *r);
+    let winner = match hits.as_slice() {
+        [(_, cand)] => cand,
+        [(r1, cand), (r2, _), ..]
+            if r1.saturating_add(1).saturating_mul(DOMINANCE) <= r2.saturating_add(1) =>
+        {
+            cand
+        }
+        _ => return None,
+    };
+    Some(match_case(word, winner))
 }
 
 fn short_perm_fix(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
