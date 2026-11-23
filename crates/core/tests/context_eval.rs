@@ -232,6 +232,15 @@ fn context_eval() {
                         wrong_examples.push(format!("{kind}: `{w}`→`{t}`: `{got}`"));
                     }
                     if mid { cells[k][1][m].add(right, partial, wrong); }
+                    if m == 0 {
+                        if let Ok(p) = std::env::var("EVAL_DUMP") {
+                            use std::io::Write as _;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+                                let st = if right { "right" } else if partial { "partial" } else if wrong { "wrong" } else { "miss" };
+                                let _ = writeln!(f, "{tag}\t{kind}\t{w}\t{t}\t{st}\t{got}\t{s}");
+                            }
+                        }
+                    }
                     res[m] = got;
                 }
                 if res[0] != res[1] && diff_examples.len() < 40 {

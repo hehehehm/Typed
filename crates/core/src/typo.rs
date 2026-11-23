@@ -221,9 +221,20 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
         return None;
     }
     let mut swap_fix = None;
+    let dedupe = dedupe_fix(d, word, lang, assume_unknown).filter(|f| !ngram::veto(ctx, word, f, lang));
+    if dedupe.is_some() {
+        return dedupe;
+    }
+    let strict_of = || {
+        suggest_one(d, word, lang, assume_unknown)
+            .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
+            .or_else(|| verb_soft_sign(d, word, lang, assume_unknown))
+            .filter(|f| !ngram::veto(ctx, word, f, lang))
+    };
+    let mut strict_done: Option<Option<String>> = None;
     if level != Level::Cautious {
+        let isolated = ctx.prev.as_deref().is_none_or(|p| p == crate::ngram::START);
         if let Some(fix) = adjacent_swap_fix(d, word, lang, ctx) {
-            let isolated = ctx.prev.as_deref().is_none_or(|p| p == crate::ngram::START);
             if isolated && !ngram::veto(ctx, word, &fix, lang) {
                 let frequent = d.rank(&Dictionary::normalize(&fix)).is_some_and(|r| r < INSERT_MAX_RANK);
                 if frequent {
@@ -234,11 +245,19 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
                 }
                 return Some(fix);
             }
-            swap_fix = Some(fix);
+            swap_fix = Some(fix).filter(|f| !ngram::veto(ctx, word, f, lang));
         }
-        if let Some(fix) = extra_letter_fix(d, word, lang, ctx) {
-            if !ngram::veto(ctx, word, &fix, lang) {
-                return Some(fix);
+        let extra = extra_letter_fix(d, word, lang, ctx).filter(|f| !ngram::veto(ctx, word, f, lang));
+        if extra.is_some() || swap_fix.is_some() {
+            let strict = strict_of();
+            if let Some(best) = context_pick(lang, ctx, &[&swap_fix, &extra, &strict]) {
+                return Some(match_case(word, &best));
+            }
+            strict_done = Some(strict.clone());
+            if let Some(fix) = extra {
+                if strict.as_ref().is_none_or(|s| Dictionary::normalize(s) == Dictionary::normalize(&fix)) {
+                    return Some(fix);
+                }
             }
         }
         if let Some(fix) = short_perm_fix(d, word, lang) {
@@ -247,17 +266,9 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
             }
         }
     }
-    if let Some(fix) = dedupe_fix(d, word, lang, assume_unknown) {
-        if !ngram::veto(ctx, word, &fix, lang) {
-            return Some(fix);
-        }
-    }
-    let strict = suggest_one(d, word, lang, assume_unknown)
-        .or_else(|| hush_soft_sign(d, word, lang, assume_unknown))
-        .or_else(|| verb_soft_sign(d, word, lang, assume_unknown));
-    let vetoed = strict.as_deref().is_some_and(|f| ngram::veto(ctx, word, f, lang));
-    if (strict.is_some() && !vetoed) || level == Level::Cautious {
-        return strict.filter(|_| !vetoed);
+    let strict = strict_done.unwrap_or_else(strict_of);
+    if strict.is_some() || level == Level::Cautious {
+        return strict;
     }
     if let Some((fix, dest)) = hand_shift_fix(word, lang, level, None) {
         if dest == lang && !ngram::veto(ctx, word, &fix, lang) {
@@ -272,6 +283,34 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
         .filter(|f| !ngram::veto(ctx, word, f, lang))
         .or_else(|| channel_fix(d, word, lang, assume_unknown).filter(|f| !ngram::veto(ctx, word, f, lang)))
         .or_else(|| swap_fix.filter(|f| !ngram::veto(ctx, word, f, lang)))
+}
+
+fn context_pick(lang: Lang, ctx: &Context, cands: &[&Option<String>]) -> Option<String> {
+    let prev = ctx.prev.as_deref().filter(|p| *p != ngram::START)?;
+    let g = ngram::get(lang);
+    let mut best: Option<(f64, String)> = None;
+    let mut tie = false;
+    let mut seen: Vec<String> = Vec::new();
+    for c in cands.iter().filter_map(|c| c.as_deref()) {
+        let n = Dictionary::normalize(c);
+        if seen.contains(&n) {
+            continue;
+        }
+        seen.push(n.clone());
+        let k = g.count(&[prev, &n]);
+        match &best {
+            Some((b, _)) if k < *b => {}
+            Some((b, _)) if k == *b => tie = true,
+            _ => {
+                tie = false;
+                best = Some((k, n));
+            }
+        }
+    }
+    if seen.len() < 2 || tie {
+        return None;
+    }
+    best.filter(|(k, _)| *k > 0.0).map(|(_, n)| n)
 }
 
 pub fn dedupe_fix(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> Option<String> {

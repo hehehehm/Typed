@@ -1053,10 +1053,7 @@ impl Engine {
                 return Decision::Keep("known word form in current layout");
             }
             if o.fix_typos && o.typo_level != typo::Level::Cautious {
-                if let Some(d) = self.typo_then_layout_decision(token) {
-                    return d;
-                }
-                if let Some((d, _)) = self.layout_typo_decision(&chars, src) {
+                if let Some(d) = self.pick_layout_typo(token, &chars, src) {
                     return d;
                 }
             }
@@ -1155,10 +1152,7 @@ impl Engine {
             if let Some(d) = self.hyphen_typo_decision(token, src) {
                 return d;
             }
-            if let Some(d) = self.typo_then_layout_decision(token) {
-                return d;
-            }
-            if let Some((d, _)) = self.layout_typo_decision(&chars, src) {
+            if let Some(d) = self.pick_layout_typo(token, &chars, src) {
                 return d;
             }
         }
@@ -1556,12 +1550,56 @@ impl Engine {
         Context { prev: words.first().cloned(), prev2: words.get(1).cloned() }
     }
 
+    fn pick_layout_typo(&self, token: &str, chars: &[char], src: Lang) -> Option<Decision> {
+        let lt = self.layout_typo_decision(chars, src);
+        let tl = self.typo_then_layout_decision(token);
+        let ((lt, plain), tl) = match (lt, tl) {
+            (None, tl) => return tl,
+            (Some((d, _)), None) => return Some(d),
+            (Some(x), Some(y)) => (x, y),
+        };
+        let word = |d: &Decision| match d {
+            Decision::Convert { text, .. } => Dictionary::normalize(trim_non_letters(text)),
+            Decision::Keep(_) => String::new(),
+        };
+        let (a, b) = (word(&lt), word(&tl));
+        if a == b || a.is_empty() || b.is_empty() {
+            return Some(lt);
+        }
+        let dst = src.other();
+        let conv_core = Dictionary::normalize(trim_non_letters(&plain));
+        if typo::is_dedupe_of(&conv_core, &a) {
+            return Some(lt);
+        }
+        let ctx = self.left_context(dst);
+        if let Some(p) = ctx.prev.as_deref().filter(|p| *p != crate::ngram::START) {
+            let g = crate::ngram::get(dst);
+            let (ca, cb) = (g.count(&[p, &a]), g.count(&[p, &b]));
+            if ca > cb {
+                return Some(lt);
+            }
+            if cb > ca {
+                return Some(tl);
+            }
+        }
+        let d = dict::get(dst);
+        let ra = d.rank(&a).unwrap_or(u32::MAX);
+        let rb = d.rank(&b).unwrap_or(u32::MAX);
+        if rb < ra { Some(tl) } else { Some(lt) }
+    }
+
     fn typo_then_layout_decision(&self, token: &str) -> Option<Decision> {
         let o = &self.options;
         if !o.fix_typos || o.typo_level == typo::Level::Cautious {
             return None;
         }
         let core = token.trim_matches(|c: char| !(c.is_alphabetic() || c.is_ascii_digit()));
+        let lead = &token[..token.find(core).unwrap_or(0)];
+        if let Some(s) = layout::detect_script(core) {
+            if layout::convert(lead, s).chars().any(char::is_alphabetic) {
+                return None;
+            }
+        }
         let letters: Vec<char> = core.chars().filter(|c| c.is_alphabetic() || c.is_ascii_digit()).collect();
         if letters.len() < 4 || letters.len() > 8 {
             return None;
