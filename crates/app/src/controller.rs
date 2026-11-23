@@ -249,13 +249,22 @@ impl Controller {
             Input::Undo => self.engine.undo_last(self.layout.unwrap_or(Lang::En)),
             Input::Summon => return vec![Command::SummonGui],
         };
+        let nudge = self.engine.take_layout_nudge();
         self.save_learned();
         match rep {
             Some(r) => {
                 self.replacement_pending = true;
                 vec![Command::Replace(r)]
             }
-            None => vec![],
+            None => {
+                if let Some(lang) = nudge {
+                    self.layout = Some(lang);
+                    self.expected = Some((lang, Instant::now()));
+                    vec![Command::SwitchLayout(lang)]
+                } else {
+                    vec![]
+                }
+            }
         }
     }
 
@@ -481,7 +490,25 @@ mod tests {
         c.tick(Some("firefox"), Some(Lang::En));
         typ(&mut c, "ghbdtn ");
         c.replace_succeeded(Lang::Ru);
+        assert_eq!(c.on_input(Input::Key { key: Key::Backspace, modifiers: false }), vec![Command::SwitchLayout(Lang::Ru)]);
+        assert_eq!(c.current_layout(), Some(Lang::Ru));
+        assert!(c.on_input(Input::Key { key: Key::Backspace, modifiers: false }).iter().all(|cmd| !matches!(cmd, Command::Replace(_))));
+    }
+
+    #[test]
+    fn editing_a_correction_keeps_target_layout_and_does_not_fix_again() {
+        let mut c = ctl();
+        c.config.undo_on_backspace = false;
+        c.engine.options = c.config.engine_options();
+        c.tick(Some("firefox"), Some(Lang::En));
+        assert_eq!(typ(&mut c, "jpdex, "), vec![Command::Replace(Replacement { delete: 7, insert: "озвучб ".into(), target: Lang::Ru })]);
+        c.replace_succeeded(Lang::Ru);
+        assert_eq!(c.on_input(Input::Key { key: Key::Backspace, modifiers: false }), vec![Command::SwitchLayout(Lang::Ru)]);
+        assert_eq!(c.current_layout(), Some(Lang::Ru));
         assert!(c.on_input(Input::Key { key: Key::Backspace, modifiers: false }).is_empty());
+        assert!(c.on_input(Input::Key { key: Key::Char('ь'), modifiers: false }).is_empty());
+        assert!(c.on_input(Input::Key { key: Key::Char(' '), modifiers: false }).is_empty());
+        assert_eq!(c.current_layout(), Some(Lang::Ru));
     }
 
     #[test]

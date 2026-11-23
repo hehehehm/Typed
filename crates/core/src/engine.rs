@@ -191,6 +191,8 @@ pub struct Engine {
     pending_learn: Option<(String, bool)>,
     learned: Vec<Learned>,
     history: Vec<LastWord>,
+    edited_fix: bool,
+    layout_nudge: Option<Lang>,
 }
 
 fn is_boundary(c: char) -> bool {
@@ -247,7 +249,13 @@ impl Engine {
         self.buf.clear();
         self.drop_context();
         self.recent_fix = None;
+        self.edited_fix = false;
+        self.layout_nudge = None;
         self.commit_pending_learn();
+    }
+
+    pub fn take_layout_nudge(&mut self) -> Option<Lang> {
+        self.layout_nudge.take()
     }
 
     fn drop_context(&mut self) {
@@ -421,15 +429,23 @@ impl Engine {
                     if let Some(rep) = self.backspace_undo(layout) {
                         return Some(rep);
                     }
-                }
-                if !self.buf.backspace() {
+                    if self.reopen_last() {
+                        return None;
+                    }
                     self.mark_erased();
                     self.drop_context();
+                    return None;
+                }
+                self.buf.backspace();
+                if self.buf.is_empty() {
+                    self.edited_fix = false;
+                    self.mark_erased();
                 }
                 None
             }
-            Key::Char(c) if !is_boundary(c) => {
+            Key::Char(c) if !self.is_word_end(c) => {
                 if !self.buf.push(c) {
+                    self.edited_fix = false;
                     self.drop_context();
                 }
                 None
@@ -448,8 +464,60 @@ impl Engine {
         }
     }
 
+    fn is_word_end(&self, c: char) -> bool {
+        if is_boundary(c) {
+            return true;
+        }
+        if c.is_alphanumeric() || self.buf.is_empty() {
+            return false;
+        }
+        let token = self.buf.as_string();
+        let Some(script) = layout::detect_script(&token) else {
+            return false;
+        };
+        let other = layout::convert_char(c, script.other());
+        let same = layout::convert_char(c, script);
+        let punct_here = other.is_alphabetic() && other != c;
+        let punct_other = !c.is_alphabetic() && same != c && !same.is_alphabetic();
+        if !punct_here && !punct_other {
+            return false;
+        }
+        matches!(self.decide(&token), Decision::Convert { .. })
+    }
+
+    fn reopen_last(&mut self) -> bool {
+        let last = match self.last.as_mut() {
+            Some(l) => l,
+            None => return false,
+        };
+        if last.word.is_empty() && last.boundary.is_empty() {
+            return false;
+        }
+        if !last.boundary.is_empty() {
+            let mut chs: Vec<char> = last.boundary.chars().collect();
+            chs.pop();
+            last.boundary = chs.into_iter().collect();
+            last.fresh = false;
+            if !last.boundary.is_empty() {
+                self.layout_nudge = layout::detect_script(&last.word);
+                return true;
+            }
+        }
+        let word = std::mem::take(&mut last.word);
+        let was_fix = last.fix.is_some();
+        self.last = self.history.pop();
+        if word.is_empty() {
+            return true;
+        }
+        self.buf.set(&word);
+        self.edited_fix = was_fix;
+        self.layout_nudge = layout::detect_script(&word);
+        true
+    }
+
     fn finish_word(&mut self, boundary: char, already_typed: bool) -> Option<Replacement> {
         let token = self.buf.take();
+        let leave_alone = std::mem::take(&mut self.edited_fix);
         if token.is_empty() {
             if let Some(last) = self.last.as_mut() {
                 last.fresh = false;
@@ -462,6 +530,13 @@ impl Engine {
             return None;
         }
         self.commit_pending_learn();
+        if leave_alone {
+            self.recent_fix = None;
+            let mut b = String::new();
+            b.push(boundary);
+            self.push_last(LastWord { word: token, boundary: b, fix: None, fresh: false });
+            return None;
+        }
         if self.recent_fix.take().is_some_and(|rf| rf.erased && never_key(&rf.typed) == never_key(&token)) {
             self.remember(&token);
         }
@@ -2135,7 +2210,21 @@ mod tests {
             delete: 8, insert: "привет, ".into(), target: Lang::Ru,
         }]);
         assert_eq!(type_str(&mut e, "руддщ, "), vec![Replacement {
-            delete: 7, insert: "hello? ".into(), target: Lang::En,
+            delete: 6, insert: "hello?".into(), target: Lang::En,
+        }]);
+        assert_eq!(type_str(&mut engine(), "руддщ,"), vec![Replacement {
+            delete: 6, insert: "hello?".into(), target: Lang::En,
+        }]);
+        assert_eq!(type_str(&mut engine(), "руддщ."), vec![Replacement {
+            delete: 6, insert: "hello/".into(), target: Lang::En,
+        }]);
+        assert_eq!(type_str(&mut engine(), "ghbdtn/"), vec![Replacement {
+            delete: 7, insert: "привет.".into(), target: Lang::Ru,
+        }]);
+        assert_eq!(type_str(&mut engine(), "ghbdtn,"), vec![]);
+        assert_eq!(type_str(&mut engine(), "ghbdtn."), vec![]);
+        assert_eq!(type_str(&mut engine(), "k.,jdm "), vec![Replacement {
+            delete: 7, insert: "любовь ".into(), target: Lang::Ru,
         }]);
     }
 
@@ -2169,7 +2258,7 @@ mod tests {
         assert!(type_str(&mut e, "поечаток ").is_empty(), "off by default");
         e.options.fix_typos = true;
         let r = type_str(&mut e, "пирвет, ");
-        assert_eq!(r, vec![Replacement { delete: 8, insert: "привет, ".into(), target: Lang::Ru }]);
+        assert_eq!(r, vec![Replacement { delete: 7, insert: "привет,".into(), target: Lang::Ru }]);
         let r = type_str(&mut e, "Becuase ");
         assert_eq!(r[0].insert, "Because ");
         let undo = e.manual_convert(Lang::En).unwrap();
@@ -2593,7 +2682,7 @@ mod tests {
     fn missing_space_after_function_word() {
         let mut e = engine();
         assert_eq!(type_str(&mut e, "снейросеткой "), vec![Replacement { delete: 13, insert: "с нейросеткой ".into(), target: Lang::Ru }]);
-        assert_eq!(type_str(&mut e, "Вофисе, ")[0].insert, "В офисе, ");
+        assert_eq!(type_str(&mut e, "Вофисе, ")[0].insert, "В офисе,");
         assert_eq!(type_str(&mut e, "незнаю ")[0].insert, "не знаю ");
         assert_eq!(type_str(&mut e, "кврачу ")[0].insert, "к врачу ");
         assert!(type_str(&mut e, "сделать вопрос сколько ").is_empty());
@@ -2671,5 +2760,63 @@ mod tests {
             assert_eq!(field_after(level, "есть хранилка типа nas"), "есть хранилка типа nas", "{level:?}");
         }
         assert_eq!(field_after(typo::Level::Normal, "lf, ns ghfd"), "да, ты прав");
+    }
+
+    #[test]
+    fn punctuation_triggers_wrong_layout_word() {
+        assert_eq!(type_str(&mut engine(), "ghbdtn?"), vec![Replacement {
+            delete: 7, insert: "привет,".into(), target: Lang::Ru,
+        }]);
+        assert_eq!(type_str(&mut engine(), "ghbdtn!"), vec![Replacement {
+            delete: 7, insert: "привет!".into(), target: Lang::Ru,
+        }]);
+        assert_eq!(type_str(&mut engine(), "руддщ!"), vec![Replacement {
+            delete: 6, insert: "hello!".into(), target: Lang::En,
+        }]);
+        let mut e = engine();
+        type_str(&mut e, "ghbdtn");
+        assert_eq!(e.feed(Key::Boundary('\n'), false), Some(Replacement {
+            delete: 6, insert: "привет\n".into(), target: Lang::Ru,
+        }));
+        let mut e = engine();
+        type_str(&mut e, "руддщ");
+        assert_eq!(e.feed(Key::Boundary('\t'), false), Some(Replacement {
+            delete: 5, insert: "hello\t".into(), target: Lang::En,
+        }));
+    }
+
+    #[test]
+    fn edited_correction_is_left_alone_and_stays_in_its_layout() {
+        let mut e = engine();
+        e.options.undo_on_backspace = false;
+        assert_eq!(type_str(&mut e, "jpdex, "), vec![Replacement {
+            delete: 7, insert: "озвучб ".into(), target: Lang::Ru,
+        }]);
+        assert_eq!(e.feed(Key::Backspace, false), None);
+        assert_eq!(e.take_layout_nudge(), Some(Lang::Ru));
+        assert_eq!(e.current_len(), 6);
+        assert_eq!(e.feed(Key::Backspace, false), None);
+        assert_eq!(e.take_layout_nudge(), None);
+        assert_eq!(e.feed(Key::Char('ь'), false), None);
+        assert_eq!(e.feed(Key::Char(' '), false), None);
+        assert_eq!(e.current_len(), 0);
+
+        let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, undo_on_backspace: false, ..Default::default() });
+        assert_eq!(type_str(&mut e, "пирвет ")[0].insert, "привет ");
+        assert_eq!(e.feed(Key::Backspace, false), None);
+        assert_eq!(e.take_layout_nudge(), Some(Lang::Ru));
+        for _ in 0..5 {
+            assert_eq!(e.feed(Key::Backspace, false), None);
+        }
+        assert_eq!(type_str(&mut e, "ирвет "), vec![], "edited typo fix must not be applied again");
+    }
+
+    #[test]
+    fn backspace_undo_still_restores_when_enabled() {
+        let mut e = engine();
+        type_str(&mut e, "ghbdtn ");
+        let u = e.feed(Key::Backspace, false).unwrap();
+        assert_eq!(u, Replacement { delete: 7, insert: "ghbdtn ".into(), target: Lang::En });
+        assert_eq!(e.take_layout_nudge(), None);
     }
 }
