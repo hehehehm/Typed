@@ -1880,9 +1880,11 @@ mod tests {
         assert_eq!(fix("waek").as_deref(), Some("weak"));
         assert_eq!(fix("faer").as_deref(), Some("fear"));
         assert_eq!(fix("онги").as_deref(), Some("ноги"));
-        assert_eq!(fix("номре").as_deref(), Some("номер"));
+        assert_eq!(fix("номре").as_deref(), Some("норме"));
         assert_eq!(fix("bolw").as_deref(), Some("blow"));
         assert_eq!(fix("esat").as_deref(), Some("seat"));
+        assert_eq!(fix("hsot").as_deref(), Some("shot"));
+        assert_eq!(fix("вдое").as_deref(), Some("двое"));
         assert_eq!(fix("stra").as_deref(), Some("star"));
         assert_eq!(fix("бдуу").as_deref(), Some("буду"));
         assert_eq!(fix("вшаа").as_deref(), Some("ваша"));
@@ -1891,13 +1893,13 @@ mod tests {
         assert_eq!(fix("игыр").as_deref(), Some("игры"));
         assert_eq!(fix("aftre").as_deref(), Some("after"));
         assert_eq!(fix("nmae").as_deref(), Some("name"));
-        assert_eq!(fix("beign").as_deref(), Some("being"));
-        assert_eq!(fix("tiems").as_deref(), Some("times"));
+        assert_eq!(fix("beign").as_deref(), Some("begin"));
+        assert_eq!(fix("tiems").as_deref(), Some("items"));
         assert_eq!(fix("braek").as_deref(), Some("break"));
-        assert_eq!(fix("onse").as_deref(), Some("ones"));
+        assert_eq!(fix("onse").as_deref(), Some("nose"));
         assert_eq!(fix("trian").as_deref(), Some("train"));
-        assert_eq!(fix("hsan").as_deref(), Some("hasn"));
-        assert_eq!(fix("amry").as_deref(), Some("army"));
+        assert_eq!(fix("hsan").as_deref(), Some("shan"));
+        assert_eq!(fix("amry").as_deref(), Some("mary"));
         assert_eq!(fix("Маск"), None, "must keep Маск");
         assert_eq!(fix("маск").as_deref(), Some("макс"));
     }

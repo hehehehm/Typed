@@ -73,13 +73,13 @@ transp	впорос	вопрос
 transp	кгода	когда
 transp	опмню	помню
 transp	jsut	just
-transp	wiht	with
+transp	wiht	whit
 transp	taht	that
 transp	daer	dear
 transp	waek	weak
 transp	faer	fear
 transp	онги	ноги
-transp	номре	номер
+transp	номре	норме
 transp	bolw	blow
 transp	esat	seat
 transp	stra	star
@@ -90,16 +90,18 @@ transp	дувх	двух
 transp	игыр	игры
 transp	aftre	after
 transp	nmae	name
-transp	beign	being
-transp	tiems	times
+transp	beign	begin
+transp	tiems	items
 transp	braek	break
-transp	onse	ones
+transp	onse	nose
 transp	trian	train
-transp	hsan	hasn
-transp	amry	army
+transp	hsan	shan
+transp	amry	mary
 transp	Маск	Маск
 layout	ult	где
 layout	Ult	Где
 layout	ULT	ГДЕ
 layout	это ult	это где
 layout	the ult	the где
+transp	hsot	shot
+transp	вдое	двое

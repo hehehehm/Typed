@@ -906,23 +906,13 @@ fn short_perm_forms(typed: &[char]) -> Vec<String> {
 }
 
 
-fn swap_is_interior(pos: usize, n: usize) -> bool {
-    pos > 0 && pos + 1 < n - 1
+fn earlier_or_freq(a: &(u32, f64, usize, String), b: &(u32, f64, usize, String)) -> std::cmp::Ordering {
+    a.2.cmp(&b.2)
+        .then_with(|| a.0.cmp(&b.0))
+        .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
 }
 
-fn ranks_close(a: u32, b: u32) -> bool {
-    let lo = a.min(b).saturating_add(1);
-    let hi = a.max(b).saturating_add(1);
-    hi.saturating_mul(4) <= lo.saturating_mul(5)
-}
-
-fn ngrams_close(a: f64, b: f64) -> bool {
-    let lo = a.min(b);
-    let hi = a.max(b);
-    (lo > 0.0 && hi <= lo * 2.0) || (a <= 0.0 && b <= 0.0)
-}
-
-fn pick_swap_candidate<'a>(hits: &'a [(u32, f64, usize, String)], n: usize, lang: Lang, ctx: &Context) -> Option<&'a str> {
+fn pick_swap_candidate<'a>(hits: &'a [(u32, f64, usize, String)], _n: usize, lang: Lang, ctx: &Context) -> Option<&'a str> {
     match hits.len() {
         0 => return None,
         1 => return Some(hits[0].3.as_str()),
@@ -930,39 +920,25 @@ fn pick_swap_candidate<'a>(hits: &'a [(u32, f64, usize, String)], n: usize, lang
     }
     if let Some(prev) = ctx.prev.as_deref().filter(|p| *p != ngram::START) {
         let g = ngram::get(lang);
-        let scored: Vec<(f64, bool, u32, &str)> = hits
+        let scored: Vec<(f64, &(u32, f64, usize, String))> = hits
             .iter()
-            .map(|(r, _, pos, w)| (g.count(&[prev, w.as_str()]), swap_is_interior(*pos, n), *r, w.as_str()))
+            .map(|h| (g.count(&[prev, h.3.as_str()]), h))
             .collect();
-        if scored.iter().any(|(c, _, _, _)| *c > 0.0) {
-            return Some(
-                scored
-                    .iter()
-                    .max_by(|a, b| {
-                        a.0.partial_cmp(&b.0)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                            .then_with(|| a.1.cmp(&b.1))
-                            .then_with(|| b.2.cmp(&a.2))
-                    })
-                    .unwrap()
-                    .3,
-            );
+        let best = scored
+            .iter()
+            .map(|(c, _)| *c)
+            .fold(0.0_f64, |a, b| if b > a { b } else { a });
+        if best > 0.0 {
+            let mut tied: Vec<&(u32, f64, usize, String)> = scored
+                .iter()
+                .filter(|(c, _)| *c == best)
+                .map(|(_, h)| *h)
+                .collect();
+            tied.sort_by(|a, b| earlier_or_freq(a, b));
+            return Some(tied[0].3.as_str());
         }
     }
-    let best_rank = hits.iter().min_by_key(|(r, _, _, _)| *r).unwrap();
-    let interior = hits
-        .iter()
-        .filter(|(_, _, pos, _)| swap_is_interior(*pos, n))
-        .min_by(|a, b| {
-            a.0.cmp(&b.0)
-                .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
-        });
-    if let Some(int) = interior {
-        if ranks_close(int.0, best_rank.0) || ngrams_close(int.1, best_rank.1) {
-            return Some(int.3.as_str());
-        }
-    }
-    Some(best_rank.3.as_str())
+    hits.iter().min_by(|a, b| earlier_or_freq(a, b)).map(|h| h.3.as_str())
 }
 
 fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang, ctx: &Context) -> Option<String> {
