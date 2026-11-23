@@ -49,6 +49,30 @@ fn reading_likelier(typed: &str, src: Lang, conv: &str, dst: Lang) -> bool {
     fc > 0.0 && fc > READING_CORPUS_RATIO * ft
 }
 
+fn form_freq(word: &str, lang: Lang) -> f64 {
+    let g = crate::ngram::get(lang);
+    let n = Dictionary::normalize(word);
+    if g.total() > 0.0 { g.count(&[n.as_str()]) / g.total() } else { 0.0 }
+}
+
+fn typo_swap_beats_layout(swap: &str, src: Lang, layout: &str, dst: Lang) -> bool {
+    let swap_n = Dictionary::normalize(trim_non_letters(swap));
+    let lay_n = Dictionary::normalize(trim_non_letters(layout));
+    if swap_n.is_empty() || !swap_n.chars().all(char::is_alphabetic) {
+        return false;
+    }
+    if lay_n.is_empty() || !lay_n.chars().all(char::is_alphabetic) {
+        return true;
+    }
+    if dst == src {
+        return false;
+    }
+    let fs = form_freq(&swap_n, src);
+    let fl = form_freq(&lay_n, dst);
+    let frequent = dict::get(src).rank(&swap_n).is_some_and(|r| r < typo::MAX_RANK);
+    frequent && (fl <= 0.0 || fs >= fl)
+}
+
 pub const SPLIT_VS_DEDUPE: f64 = 10.0;
 
 pub const NC_ERROR_RATE: f64 = 0.01;
@@ -757,7 +781,11 @@ impl Engine {
         let d = self.decide_core(token);
         if let Decision::Convert { text, target, reason } = &d {
             if *reason != SPACE_REASON && attested_form_wins(token, text, *target) {
-                return Decision::Keep("typed form attested in the corpus");
+                let typo_swap = *reason == TYPO_REASON
+                    && typo::is_adjacent_swap(trim_non_letters(token), trim_non_letters(text));
+                if !typo_swap {
+                    return Decision::Keep("typed form attested in the corpus");
+                }
             }
         }
         d
@@ -880,7 +908,7 @@ impl Engine {
         }
         if o.fix_missing_spaces && src == Lang::Ru && split::is_glued(core) {
             if let Some(d) = ranked_convert() {
-                return d;
+                return self.prefer_own_layout_swap(token, core, src, d);
             }
             if let Some(d) = self.typo_swap_decision(token, core, src) {
                 return d;
@@ -913,7 +941,7 @@ impl Engine {
             return Decision::Keep("known word in current layout");
         }
         if let Some(d) = Self::hyphen_converted(&chars, src) {
-            return d;
+            return self.prefer_own_layout_swap(token, core, src, d);
         }
 
         let src_full = letters.len() >= FULL_FORM_MIN_LEN && src_dict.in_full_forms(core);
@@ -936,7 +964,7 @@ impl Engine {
             ranked_convert()
         };
         if let Some(d) = ranked {
-            return d;
+            return self.prefer_own_layout_swap(token, core, src, d);
         }
 
         let n_letters = letters.len();
@@ -947,7 +975,7 @@ impl Engine {
             if let Some(d) = Self::try_convert(&chars, src, o.min_word_len, |w| {
                 w.chars().count() >= FULL_FORM_CONVERT_MIN_LEN && dst_dict.in_full_forms(w)
             }) {
-                return d;
+                return self.prefer_own_layout_swap(token, core, src, d);
             }
         }
 
@@ -1313,6 +1341,9 @@ impl Engine {
     }
 
     fn typo_swap_decision(&self, token: &str, core: &str, lang: Lang) -> Option<Decision> {
+        if !self.options.fix_typos {
+            return None;
+        }
         if !core.chars().all(char::is_alphabetic) {
             return None;
         }
@@ -1322,6 +1353,24 @@ impl Engine {
             target: lang,
             reason: TYPO_REASON,
         })
+    }
+
+    fn prefer_own_layout_swap(&self, token: &str, core: &str, src: Lang, layout: Decision) -> Decision {
+        let Some(swap) = self.typo_swap_decision(token, core, src) else {
+            return layout;
+        };
+        let (layout_text, dst) = match &layout {
+            Decision::Convert { text, target, .. } => (text.as_str(), *target),
+            Decision::Keep(_) => return layout,
+        };
+        let Decision::Convert { text: swap_text, .. } = &swap else {
+            return layout;
+        };
+        if typo_swap_beats_layout(swap_text, src, layout_text, dst) {
+            swap
+        } else {
+            layout
+        }
     }
 
     fn typo_fix(&self, core: &str, lang: Lang) -> Option<String> {
@@ -1822,6 +1871,30 @@ mod tests {
         let off = Engine::new(EngineOptions { fix_typos: false, typo_level: typo::Level::Normal, ..Default::default() });
         assert!(matches!(off.decide("заню"), Decision::Keep(_)));
         assert_eq!(fix("знаю"), None, "must keep знаю");
+        assert_eq!(fix("daer").as_deref(), Some("dear"));
+        assert_eq!(fix("waek").as_deref(), Some("weak"));
+        assert_eq!(fix("faer").as_deref(), Some("fear"));
+        assert_eq!(fix("онги").as_deref(), Some("ноги"));
+        assert_eq!(fix("номре").as_deref(), Some("номер"));
+        assert_eq!(fix("bolw").as_deref(), Some("blow"));
+        assert_eq!(fix("esat").as_deref(), Some("seat"));
+        assert_eq!(fix("stra").as_deref(), Some("star"));
+        assert_eq!(fix("бдуу").as_deref(), Some("буду"));
+        assert_eq!(fix("вшаа").as_deref(), Some("ваша"));
+        assert_eq!(fix("огду").as_deref(), Some("году"));
+        assert_eq!(fix("дувх").as_deref(), Some("двух"));
+        assert_eq!(fix("игыр").as_deref(), Some("игры"));
+        assert_eq!(fix("aftre").as_deref(), Some("after"));
+        assert_eq!(fix("nmae").as_deref(), Some("name"));
+        assert_eq!(fix("beign").as_deref(), Some("being"));
+        assert_eq!(fix("tiems").as_deref(), Some("times"));
+        assert_eq!(fix("braek").as_deref(), Some("break"));
+        assert_eq!(fix("onse").as_deref(), Some("ones"));
+        assert_eq!(fix("trian").as_deref(), Some("train"));
+        assert_eq!(fix("hsan").as_deref(), Some("hasn"));
+        assert_eq!(fix("amry").as_deref(), Some("army"));
+        assert_eq!(fix("Маск"), None, "must keep Маск");
+        assert_eq!(fix("маск").as_deref(), Some("макс"));
     }
 
     #[test]

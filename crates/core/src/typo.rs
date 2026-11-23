@@ -217,7 +217,7 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
     }
     let mut swap_fix = None;
     if level != Level::Cautious {
-        if let Some(fix) = adjacent_swap_fix(d, word, lang) {
+        if let Some(fix) = adjacent_swap_fix(d, word, lang, ctx) {
             let isolated = ctx.prev.as_deref().is_none_or(|p| p == crate::ngram::START);
             if isolated && !ngram::veto(ctx, word, &fix, lang) {
                 return Some(fix);
@@ -906,7 +906,66 @@ fn short_perm_forms(typed: &[char]) -> Vec<String> {
 }
 
 
-fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
+fn swap_is_interior(pos: usize, n: usize) -> bool {
+    pos > 0 && pos + 1 < n - 1
+}
+
+fn ranks_close(a: u32, b: u32) -> bool {
+    let lo = a.min(b).saturating_add(1);
+    let hi = a.max(b).saturating_add(1);
+    hi.saturating_mul(4) <= lo.saturating_mul(5)
+}
+
+fn ngrams_close(a: f64, b: f64) -> bool {
+    let lo = a.min(b);
+    let hi = a.max(b);
+    (lo > 0.0 && hi <= lo * 2.0) || (a <= 0.0 && b <= 0.0)
+}
+
+fn pick_swap_candidate<'a>(hits: &'a [(u32, f64, usize, String)], n: usize, lang: Lang, ctx: &Context) -> Option<&'a str> {
+    match hits.len() {
+        0 => return None,
+        1 => return Some(hits[0].3.as_str()),
+        _ => {}
+    }
+    if let Some(prev) = ctx.prev.as_deref().filter(|p| *p != ngram::START) {
+        let g = ngram::get(lang);
+        let scored: Vec<(f64, bool, u32, &str)> = hits
+            .iter()
+            .map(|(r, _, pos, w)| (g.count(&[prev, w.as_str()]), swap_is_interior(*pos, n), *r, w.as_str()))
+            .collect();
+        if scored.iter().any(|(c, _, _, _)| *c > 0.0) {
+            return Some(
+                scored
+                    .iter()
+                    .max_by(|a, b| {
+                        a.0.partial_cmp(&b.0)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| a.1.cmp(&b.1))
+                            .then_with(|| b.2.cmp(&a.2))
+                    })
+                    .unwrap()
+                    .3,
+            );
+        }
+    }
+    let best_rank = hits.iter().min_by_key(|(r, _, _, _)| *r).unwrap();
+    let interior = hits
+        .iter()
+        .filter(|(_, _, pos, _)| swap_is_interior(*pos, n))
+        .min_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
+        });
+    if let Some(int) = interior {
+        if ranks_close(int.0, best_rank.0) || ngrams_close(int.1, best_rank.1) {
+            return Some(int.3.as_str());
+        }
+    }
+    Some(best_rank.3.as_str())
+}
+
+fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang, ctx: &Context) -> Option<String> {
     let chars: Vec<char> = word.chars().collect();
     let n = chars.len();
     if n < MIN_LEN || !chars.iter().all(|c| c.is_alphabetic()) {
@@ -923,7 +982,8 @@ fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
     if w.len() != n {
         return None;
     }
-    let mut hits: Vec<(u32, String)> = Vec::new();
+    let g = ngram::get(lang);
+    let mut hits: Vec<(u32, f64, usize, String)> = Vec::new();
     for i in 0..n - 1 {
         if w[i] == w[i + 1] {
             continue;
@@ -932,21 +992,22 @@ fn adjacent_swap_fix(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
         v.swap(i, i + 1);
         let c: String = v.into_iter().collect();
         if let Some(r) = d.rank(&c).filter(|&r| r < MAX_RANK) {
-            if !hits.iter().any(|(_, s)| *s == c) {
-                hits.push((r, c));
+            if !hits.iter().any(|(_, _, _, s)| *s == c) {
+                hits.push((r, g.count(&[&c]), i, c));
             }
         }
     }
-    hits.sort_by_key(|(r, _)| *r);
-    let winner = match hits.as_slice() {
-        [(_, cand)] => cand,
-        [(r1, cand), (r2, _), ..]
-            if r1.saturating_add(1).saturating_mul(DOMINANCE) <= r2.saturating_add(1) =>
-        {
-            cand
+    let winner = pick_swap_candidate(&hits, n, lang, ctx)?;
+    if is_title_case(word) && n <= 4 {
+        let wr = hits
+            .iter()
+            .find(|(_, _, _, s)| s == winner)
+            .map(|(r, _, _, _)| *r)
+            .unwrap_or(u32::MAX);
+        if wr >= FIRST_SLIP_RANK_SHORT {
+            return None;
         }
-        _ => return None,
-    };
+    }
     Some(match_case(word, winner))
 }
 
