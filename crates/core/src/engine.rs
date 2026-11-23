@@ -70,6 +70,9 @@ fn typo_swap_beats_layout(swap: &str, src: Lang, layout: &str, dst: Lang) -> boo
     let fs = form_freq(&swap_n, src);
     let fl = form_freq(&lay_n, dst);
     let frequent = dict::get(src).rank(&swap_n).is_some_and(|r| r < typo::MAX_RANK);
+    if frequent && layout.chars().any(|c| !c.is_alphabetic() && !c.is_whitespace()) {
+        return true;
+    }
     frequent && (fl <= 0.0 || fs >= fl)
 }
 
@@ -877,6 +880,11 @@ impl Engine {
             return d;
         }
         if o.skip_tokens_with_digits && token.chars().any(|c| c.is_ascii_digit()) {
+            if o.fix_typos && o.typo_level != typo::Level::Cautious {
+                if let Some(d) = self.typo_then_layout_decision(token) {
+                    return d;
+                }
+            }
             return Decision::Keep("contains digits");
         }
         let Some(src) = layout::detect_script(token) else {
@@ -1039,6 +1047,19 @@ impl Engine {
 
         let n_letters = letters.len();
         if n_letters >= FULL_FORM_MIN_LEN && src_dict.in_full_forms(core) {
+            let attested = src_dict.contains(core)
+                || crate::ngram::get(src).count(&[&Dictionary::normalize(core)]) > 0.0;
+            if attested {
+                return Decision::Keep("known word form in current layout");
+            }
+            if o.fix_typos && o.typo_level != typo::Level::Cautious {
+                if let Some(d) = self.typo_then_layout_decision(token) {
+                    return d;
+                }
+                if let Some((d, _)) = self.layout_typo_decision(&chars, src) {
+                    return d;
+                }
+            }
             return Decision::Keep("known word form in current layout");
         }
         if n_letters >= FULL_FORM_CONVERT_MIN_LEN {
@@ -1082,7 +1103,13 @@ impl Engine {
                         let lm_loses = lm_split && !is_single_letter_prep_split(split_text) && split_count < fix_count * LM_SPLIT_OVER_TYPO;
                         let dedupe = typo::is_dedupe_of(core, &fix) && split_count * SPLIT_VS_DEDUPE < fix_count;
                         let unseen_glued = !lm_split && split_count <= 0.0 && !is_single_letter_prep_split(split_text);
-                        if typo::is_adjacent_swap(core, &fix) || dedupe || unseen_glued || lm_loses || (!is_single_letter_prep_split(split_text) && !split_likelier && (m > n || a == b || vowel_slip)) {
+                        let leading_prep_extra = n == m + 1
+                            && is_single_letter_prep_split(split_text)
+                            && src_dict.rank(&Dictionary::normalize(&fix)).is_some_and(|r| r < typo::INSERT_MAX_RANK)
+                            && split_count < SPLIT_MIN_COUNT
+                            && Dictionary::normalize(core).chars().next()
+                                == Dictionary::normalize(split_text).chars().next();
+                        if typo::is_adjacent_swap(core, &fix) || dedupe || unseen_glued || lm_loses || leading_prep_extra || (!is_single_letter_prep_split(split_text) && !split_likelier && (m > n || a == b || vowel_slip)) {
                             return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
                         }
                     }
@@ -1126,6 +1153,9 @@ impl Engine {
                 }
             }
             if let Some(d) = self.hyphen_typo_decision(token, src) {
+                return d;
+            }
+            if let Some(d) = self.typo_then_layout_decision(token) {
                 return d;
             }
             if let Some((d, _)) = self.layout_typo_decision(&chars, src) {
@@ -1524,6 +1554,104 @@ impl Engine {
             }
         }
         Context { prev: words.first().cloned(), prev2: words.get(1).cloned() }
+    }
+
+    fn typo_then_layout_decision(&self, token: &str) -> Option<Decision> {
+        let o = &self.options;
+        if !o.fix_typos || o.typo_level == typo::Level::Cautious {
+            return None;
+        }
+        let core = token.trim_matches(|c: char| !(c.is_alphabetic() || c.is_ascii_digit()));
+        let letters: Vec<char> = core.chars().filter(|c| c.is_alphabetic() || c.is_ascii_digit()).collect();
+        if letters.len() < 4 || letters.len() > 8 {
+            return None;
+        }
+        let digits = letters.iter().filter(|c| c.is_ascii_digit()).count();
+        if digits > 1 {
+            return None;
+        }
+        let letter_only: String = letters.iter().copied().filter(|c| c.is_alphabetic()).collect();
+        if letter_only.chars().count() < 3 {
+            return None;
+        }
+        let Some(src) = layout::detect_script(&letter_only) else {
+            return None;
+        };
+        let src_d = dict::get(src);
+        let lower = Dictionary::normalize(&letter_only);
+        if src_d.contains(&lower) || (digits == 0 && src_d.is_word(&Dictionary::normalize(core)) && crate::ngram::get(src).count(&[&Dictionary::normalize(core)]) > 0.0) {
+            return None;
+        }
+        if typo::is_title_case(core) {
+            let mid = self
+                .left_context(src)
+                .prev
+                .as_deref()
+                .is_some_and(|p| p != crate::ngram::START);
+            if mid {
+                return None;
+            }
+        }
+        let dst = src.other();
+        let dst_d = dict::get(dst);
+        let ctx = self.left_context(dst);
+        let mut hits: Vec<(u32, f64, String)> = Vec::new();
+        for i in 0..letters.len() {
+            for nb in typo::physical_letter_neighbours(letters[i]) {
+                let mut v = letters.clone();
+                v[i] = if letters[i].is_uppercase() {
+                    nb.to_uppercase().next().unwrap_or(nb)
+                } else {
+                    nb
+                };
+                if v.iter().any(|c| c.is_ascii_digit() || !c.is_alphabetic()) {
+                    continue;
+                }
+                let typoed: String = v.into_iter().collect();
+                let conv = layout::convert(&typoed, src);
+                if layout::detect_script(&conv) != Some(dst) || !conv.chars().all(char::is_alphabetic) {
+                    continue;
+                }
+                let cn = Dictionary::normalize(&conv);
+                let Some(r) = dst_d.rank(&cn).filter(|&r| r < typo::INSERT_MAX_RANK) else {
+                    continue;
+                };
+                if !hits.iter().any(|(_, _, s)| *s == cn) {
+                    let c2 = ctx
+                        .prev
+                        .as_deref()
+                        .filter(|p| *p != crate::ngram::START)
+                        .map(|p| crate::ngram::get(dst).count(&[p, &cn]))
+                        .unwrap_or(0.0);
+                    hits.push((r, c2, cn));
+                }
+            }
+        }
+        if hits.is_empty() {
+            return None;
+        }
+        hits.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+                .then(a.2.cmp(&b.2))
+        });
+        let winner = if hits.iter().filter(|h| h.1 > 0.0).count() == 1 && hits[0].1 > 0.0 {
+            &hits[0].2
+        } else if hits.len() == 1 {
+            &hits[0].2
+        } else if hits.iter().all(|h| h.1 <= 0.0) && hits[0].0.saturating_mul(3) < hits[1].0 {
+            &hits[0].2
+        } else {
+            return None;
+        };
+        let text = typo::match_case(core, winner);
+        let text = token.replacen(core, &text, 1);
+        Some(Decision::Convert {
+            text,
+            target: dst,
+            reason: LAYOUT_TYPO_REASON,
+        })
     }
 
     fn layout_typo_decision(&self, chars: &[char], src: Lang) -> Option<(Decision, String)> {
@@ -2124,6 +2252,56 @@ mod tests {
         assert_eq!(fix("amry").as_deref(), Some("mary"));
         assert_eq!(fix("Маск"), None, "must keep Маск");
         assert_eq!(fix("маск").as_deref(), Some("макс"));
+    }
+
+    #[test]
+    fn remaining_typo_cases_use_general_rules() {
+        let fix = |w: &str| typo_fix_at(typo::Level::Normal, w);
+        assert_eq!(fix("тысячут").as_deref(), Some("тысячу"));
+        assert_eq!(fix("следзы").as_deref(), Some("следы"));
+        assert_eq!(fix("freezeing").as_deref(), Some("freezing"));
+        assert_eq!(fix("охотите").as_deref(), Some("хотите"));
+        assert_eq!(fix("эдлисон").as_deref(), Some("элисон"));
+        assert_eq!(fix("спросви").as_deref(), Some("спроси"));
+        assert_eq!(fix("амиледи").as_deref(), Some("миледи"));
+        assert_eq!(fix("буью").as_deref(), Some("убью"));
+        assert_eq!(fix("хотл").as_deref(), Some("хотел"));
+        assert_eq!(fix("rnhf").as_deref(), Some("утра"));
+        assert_eq!(fix("enuf").as_deref(), Some("утра"));
+        assert_eq!(fix("1nhf").as_deref(), Some("утра"));
+        assert_eq!(fix("лдень").as_deref(), Some("лень"));
+        assert_eq!(fix("waek").as_deref(), Some("weak"));
+        assert_eq!(fix("свроем").as_deref(), Some("своем"));
+        assert_eq!(fix("бегри"), None);
+        assert_eq!(fix("amry").as_deref(), Some("mary"));
+        assert_eq!(fix("issuse").as_deref(), Some("issues"));
+        assert_eq!(typo_fix_at(typo::Level::Cautious, "тысячут"), None);
+        assert_eq!(typo_fix_at(typo::Level::Cautious, "1nhf"), None);
+        assert_eq!(typo_fix_at(typo::Level::Cautious, "хотл"), None);
+        let off = Engine::new(EngineOptions { fix_typos: false, typo_level: typo::Level::Normal, ..Default::default() });
+        assert!(matches!(off.decide("тысячут"), Decision::Keep(_)));
+        assert!(matches!(off.decide("1nhf"), Decision::Keep(_)));
+        let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
+        for ch in "не ".chars() {
+            let _ = e.feed(Key::Char(ch), false);
+        }
+        match e.decide("бегри") {
+            Decision::Convert { text, .. } => assert_eq!(text, "бери"),
+            other => panic!("не бегри: {other:?}"),
+        }
+        let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
+        for ch in "просто ".chars() {
+            let _ = e.feed(Key::Char(ch), false);
+        }
+        assert!(matches!(e.decide("бегри"), Decision::Keep(_)));
+        let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
+        for ch in "the ".chars() {
+            let _ = e.feed(Key::Char(ch), false);
+        }
+        match e.decide("amry") {
+            Decision::Convert { text, .. } => assert_eq!(text, "army"),
+            other => panic!("the amry: {other:?}"),
+        }
     }
 
     #[test]

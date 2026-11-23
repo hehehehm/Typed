@@ -113,3 +113,17 @@ layout	СЕКД+ФДЕ+Я	CTRL+ALT+Z
 
 
 typo	свроем	своем
+typo	тысячут	тысячу
+typo	следзы	следы
+typo	freezeing	freezing
+typo	охотите	хотите
+typo	эдлисон	элисон
+typo	спросви	спроси
+typo	амиледи	миледи
+typo	буью	убью
+typo	хотл	хотел
+typo	не бегри	не бери
+layout	rnhf	утра
+layout	enuf	утра
+layout	1nhf	утра
+transp	the amry	the army

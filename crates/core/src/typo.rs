@@ -25,6 +25,8 @@ pub const SHORT_PERM_LEN: usize = 3;
 pub const INSERT_MAX_RANK: u32 = 5_000;
 const INSERT_TYPED_MIN: usize = 5;
 const INSERT_TYPED_MAX: usize = 9;
+const INSERT_RIVAL_RANK: u32 = 10_000;
+const INSERT_DOMINANCE: u32 = 3;
 
 const EN_ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
 const RU_ALPHABET: &str = "абвгдежзийклмнопрстуфхцчшщъыьэюя";
@@ -223,11 +225,18 @@ fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
         if let Some(fix) = adjacent_swap_fix(d, word, lang, ctx) {
             let isolated = ctx.prev.as_deref().is_none_or(|p| p == crate::ngram::START);
             if isolated && !ngram::veto(ctx, word, &fix, lang) {
+                let frequent = d.rank(&Dictionary::normalize(&fix)).is_some_and(|r| r < INSERT_MAX_RANK);
+                if frequent {
+                    return Some(fix);
+                }
+                if let Some(better) = edit_beats_rare_swap(d, word, lang, &fix) {
+                    return Some(better);
+                }
                 return Some(fix);
             }
             swap_fix = Some(fix);
         }
-        if let Some(fix) = extra_letter_fix(d, word, lang) {
+        if let Some(fix) = extra_letter_fix(d, word, lang, ctx) {
             if !ngram::veto(ctx, word, &fix, lang) {
                 return Some(fix);
             }
@@ -1055,6 +1064,58 @@ fn extra_letter_plausible(extra: char, i: usize, w: &[char], lang: Lang) -> bool
     w.iter().enumerate().any(|(j, &c)| j != i && c == extra)
 }
 
+fn typo_blocks_known(d: &Dictionary, word: &str, lang: Lang) -> bool {
+    if d.is_name_form(word) || d.rank(word).is_some() || d.is_word(word) {
+        return true;
+    }
+    if ngram::get(lang).count(&[word]) <= 0.0 {
+        return false;
+    }
+    match lang {
+        Lang::Ru => morph::is_known_form(d, word),
+        Lang::En => en_known_form(d, word),
+    }
+}
+
+fn edit_beats_rare_swap(d: &Dictionary, word: &str, lang: Lang, swap: &str) -> Option<String> {
+    let lower = Dictionary::normalize(word);
+    let w: Vec<char> = lower.chars().collect();
+    let alphabet: Vec<char> = match lang {
+        Lang::En => EN_ALPHABET,
+        Lang::Ru => RU_ALPHABET,
+    }
+    .chars()
+    .collect();
+    let swap_n = Dictionary::normalize(swap);
+    let sr = d.rank(&swap_n).unwrap_or(MAX_RANK);
+    let mut hits: Vec<(u32, String)> = Vec::new();
+    for cand in edits1(&w, &alphabet) {
+        if cand == lower || cand == swap_n {
+            continue;
+        }
+        if is_swap(&w, &cand) || cand.chars().count() == w.len() || !first_letter_kept(&w, &cand) {
+            continue;
+        }
+        let Some(r) = d.rank(&cand).filter(|&r| r < INSERT_MAX_RANK) else {
+            continue;
+        };
+        if r.saturating_mul(INSERT_DOMINANCE) >= sr {
+            continue;
+        }
+        if !hits.iter().any(|(_, s)| *s == cand) {
+            hits.push((r, cand));
+        }
+    }
+    hits.sort_by_key(|h| h.0);
+    if hits.is_empty() {
+        return None;
+    }
+    if hits.len() >= 2 && hits[0].0.saturating_mul(INSERT_DOMINANCE) >= hits[1].0 {
+        return None;
+    }
+    Some(match_case(word, &hits[0].1))
+}
+
 fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang) -> Option<Vec<(u32, f64, usize, String)>> {
     let chars: Vec<char> = word.chars().collect();
     let n = chars.len();
@@ -1065,10 +1126,7 @@ fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang) -> Option<Vec<(u3
         return None;
     }
     let lower = Dictionary::normalize(word);
-    if d.is_word(&lower) || (lang == Lang::Ru && morph::is_known_form(d, &lower)) || d.is_name_form(&lower) {
-        return None;
-    }
-    if lang == Lang::En && en_known_form(d, &lower) {
+    if typo_blocks_known(d, &lower, lang) {
         return None;
     }
     let w: Vec<char> = lower.chars().collect();
@@ -1101,12 +1159,50 @@ fn collect_insert_hits(d: &Dictionary, word: &str, lang: Lang) -> Option<Vec<(u3
     }
 }
 
-fn extra_letter_fix(d: &Dictionary, word: &str, lang: Lang) -> Option<String> {
+fn extra_letter_fix(d: &Dictionary, word: &str, lang: Lang, ctx: &Context) -> Option<String> {
     let hits = collect_insert_hits(d, word, lang)?;
-    if hits.len() != 1 || hits[0].0 >= INSERT_MAX_RANK {
-        return None;
+    let w: Vec<char> = Dictionary::normalize(word).chars().collect();
+    let kept: Vec<&(u32, f64, usize, String)> = hits
+        .iter()
+        .filter(|h| first_letter_kept(&w, &h.3))
+        .collect();
+    if let Some(prev) = ctx.prev.as_deref().filter(|p| *p != ngram::START) {
+        let g = ngram::get(lang);
+        let frequent: Vec<&(u32, f64, usize, String)> = hits.iter().filter(|h| h.0 < INSERT_MAX_RANK).collect();
+        if frequent.len() >= 2 {
+            let scored: Vec<(f64, &&(u32, f64, usize, String))> = frequent
+                .iter()
+                .map(|h| (g.count(&[prev, h.3.as_str()]), h))
+                .collect();
+            let best = scored.iter().map(|(c, _)| *c).fold(0.0_f64, |a, b| if b > a { b } else { a });
+            if best > 0.0 {
+                let tied: Vec<&&(u32, f64, usize, String)> = scored
+                    .iter()
+                    .filter(|(c, _)| *c == best)
+                    .map(|(_, h)| *h)
+                    .collect();
+                if tied.len() == 1 {
+                    return Some(match_case(word, &tied[0].3));
+                }
+            }
+        }
     }
-    Some(match_case(word, &hits[0].3))
+    if hits.len() == 1 && hits[0].0 < INSERT_MAX_RANK {
+        return Some(match_case(word, &hits[0].3));
+    }
+    let mut close: Vec<&(u32, f64, usize, String)> = kept
+        .iter()
+        .copied()
+        .filter(|h| h.0 < INSERT_RIVAL_RANK)
+        .collect();
+    close.sort_by_key(|h| h.0);
+    if close.len() == 1 && close[0].0 < INSERT_MAX_RANK {
+        return Some(match_case(word, &close[0].3));
+    }
+    if close.len() >= 2 && close[0].0 < INSERT_MAX_RANK && close[0].0.saturating_mul(INSERT_DOMINANCE) < close[1].0 {
+        return Some(match_case(word, &close[0].3));
+    }
+    None
 }
 
 fn extra_letter_candidates(word: &str, lang: Lang) -> Vec<String> {
@@ -1202,6 +1298,35 @@ fn key_pos(c: char, lang: Lang) -> Option<(i32, i32)> {
 
 pub(crate) fn adjacent_keys(a: char, b: char, lang: Lang) -> bool {
     crate::typo_wide::adjacent_fast(a, b, lang)
+}
+
+const PHYSICAL_ROWS: [&str; 4] = ["`1234567890-=", "qwertyuiop[]\\", "asdfghjkl;'", "zxcvbnm,./"];
+
+fn physical_pos(c: char) -> Option<(i32, i32)> {
+    let k = c.to_ascii_lowercase();
+    PHYSICAL_ROWS.iter().enumerate().find_map(|(r, row)| row.chars().position(|x| x == k).map(|p| (r as i32, p as i32)))
+}
+
+pub(crate) fn physical_adjacent(a: char, b: char) -> bool {
+    match (physical_pos(a), physical_pos(b)) {
+        (Some((ra, ca)), Some((rb, cb))) => {
+            let (dr, dc) = ((ra - rb).abs(), (ca - cb).abs());
+            (dr == 0 && dc == 1) || (dr == 1 && dc <= 1)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn physical_letter_neighbours(c: char) -> Vec<char> {
+    let mut out = Vec::new();
+    for row in PHYSICAL_ROWS {
+        for k in row.chars() {
+            if k.is_ascii_alphabetic() && k != c.to_ascii_lowercase() && physical_adjacent(c, k) {
+                out.push(k);
+            }
+        }
+    }
+    out
 }
 
 pub(crate) fn adjacent_keys_raw(a: char, b: char, lang: Lang) -> bool {
