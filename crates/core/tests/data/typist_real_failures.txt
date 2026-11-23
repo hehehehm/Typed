@@ -98,3 +98,8 @@ transp	trian	train
 transp	hsan	hasn
 transp	amry	army
 transp	Маск	Маск
+layout	ult	где
+layout	Ult	Где
+layout	ULT	ГДЕ
+layout	это ult	это где
+layout	the ult	the где

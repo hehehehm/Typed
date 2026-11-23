@@ -959,7 +959,12 @@ impl Engine {
                 })
             })
         } else if letters.len() <= 3 && src_dict.in_full_forms(core) && self.typed_language_context(src) {
-            None
+            let lower = Dictionary::normalize(core);
+            if crate::ngram::get(src).count(&[lower.as_str()]) > 0.0 {
+                None
+            } else {
+                ranked_convert()
+            }
         } else {
             ranked_convert()
         };
@@ -1895,6 +1900,39 @@ mod tests {
         assert_eq!(fix("amry").as_deref(), Some("army"));
         assert_eq!(fix("Маск"), None, "must keep Маск");
         assert_eq!(fix("маск").as_deref(), Some("макс"));
+    }
+
+    #[test]
+    fn short_unattested_en_form_converts_to_frequent_ru_word() {
+        let e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
+        match e.decide("ult") {
+            Decision::Convert { text, target, .. } => {
+                assert_eq!(text, "где");
+                assert_eq!(target, Lang::Ru);
+            }
+            other => panic!("isolated ult: {other:?}"),
+        }
+        let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
+        for ch in "это ".chars() {
+            let _ = e.feed(Key::Char(ch), false);
+        }
+        match e.decide("ult") {
+            Decision::Convert { text, .. } => assert_eq!(text, "где"),
+            other => panic!("after RU ult: {other:?}"),
+        }
+        let mut e = Engine::new(EngineOptions { fix_typos: true, typo_level: typo::Level::Normal, ..Default::default() });
+        for ch in "the ".chars() {
+            let _ = e.feed(Key::Char(ch), false);
+        }
+        match e.decide("ult") {
+            Decision::Convert { text, .. } => assert_eq!(text, "где"),
+            other => panic!("after EN ult: {other:?}"),
+        }
+        let off = Engine::new(EngineOptions { fix_typos: false, ..Default::default() });
+        match off.decide("ult") {
+            Decision::Convert { text, .. } => assert_eq!(text, "где"),
+            other => panic!("typo off ult: {other:?}"),
+        }
     }
 
     #[test]
