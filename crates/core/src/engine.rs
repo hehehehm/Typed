@@ -1645,6 +1645,9 @@ impl Engine {
         if self.typed_language_context(src) {
             return None;
         }
+        if letter_only.chars().all(char::is_uppercase) {
+            return None;
+        }
         let src_d = dict::get(src);
         let lower = Dictionary::normalize(&letter_only);
         if src_d.contains(&lower) || (digits == 0 && src_d.is_word(&Dictionary::normalize(core)) && crate::ngram::get(src).count(&[&Dictionary::normalize(core)]) > 0.0) {
