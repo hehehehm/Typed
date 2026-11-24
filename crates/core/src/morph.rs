@@ -419,6 +419,11 @@ pub fn form_rank(d: &Dictionary, word: &str) -> Option<u32> {
     evidence_any(d, &w).map(|e| e.1)
 }
 
+pub fn max_end_len() -> usize {
+    static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| GROUPS.iter().filter(|g| g.class != Class::Verb).flat_map(|g| g.ends.iter()).map(|e| e.chars().count()).max().unwrap_or(0))
+}
+
 pub fn reinflect(cand: &str, typed: &str) -> Vec<(String, bool)> {
     let c: Vec<char> = cand.chars().collect();
     let mut out = Vec::new();

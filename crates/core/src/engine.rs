@@ -247,6 +247,12 @@ struct RecentFix {
 impl Decision {
 }
 
+type TypoKey = (String, Lang, typo::Level, crate::ngram::Context);
+
+thread_local! {
+    static TYPO_CACHE: std::cell::RefCell<Option<(TypoKey, Option<String>)>> = const { std::cell::RefCell::new(None) };
+}
+
 #[derive(Debug, Default)]
 pub struct Engine {
     pub options: EngineOptions,
@@ -1514,7 +1520,14 @@ impl Engine {
         if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(core)) {
             return None;
         }
-        typo::suggest_ctx(core, lang, o.typo_level, &self.left_context(lang))
+        let ctx = self.left_context(lang);
+        let key = (core.to_string(), lang, o.typo_level, ctx.clone());
+        if let Some(hit) = TYPO_CACHE.with(|c| c.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, v)| v.clone())) {
+            return hit;
+        }
+        let fix = typo::suggest_ctx(core, lang, o.typo_level, &ctx);
+        TYPO_CACHE.with(|c| *c.borrow_mut() = Some((key, fix.clone())));
+        fix
     }
 
     fn prev_hand_shift(&self) -> Option<(i32, Lang)> {

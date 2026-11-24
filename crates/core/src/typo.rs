@@ -677,6 +677,11 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
             if n + 3 < lower.len() || n > lower.len() + 3 || n < MIN_LEN_2 - 2 {
                 continue;
             }
+            let free_end = if lang == Lang::Ru { morph::max_end_len() } else { 0 };
+            let fixed = n.saturating_sub(free_end);
+            if bag_excess(cand.chars().take(fixed), &lower[..lower.len().min(fixed + 2)]) > 2 {
+                continue;
+            }
             if lang == Lang::Ru {
                 let mut offered = false;
                 for (f, safe) in morph::reinflect(cand, &lower_s) {
@@ -746,7 +751,7 @@ fn frequent_within_two(d: &Dictionary, lower: &[char]) -> bool {
     let pool = d.starting_with(&first).chain(d.starting_with(&swapped).filter(|_| lower[0] != lower[1]));
     let found = pool.filter(|&(_, r)| r < TAIL_RANK).any(|(w, _)| {
         let n = w.chars().count();
-        n + 2 >= lower.len() && n <= lower.len() + 2 && {
+        n + 2 >= lower.len() && n <= lower.len() + 2 && bag_excess(w.chars(), lower) <= 2 && {
             let cv: Vec<char> = w.chars().collect();
             distance(lower, &cv, 2) <= 2
         }
@@ -1649,6 +1654,20 @@ impl Ranked {
 
 fn distance(a: &[char], b: &[char], max: usize) -> usize {
     distance_by(a, b, max, |x, y| usize::from(x != y))
+}
+
+pub fn bag_excess(cand: impl Iterator<Item = char>, typed: &[char]) -> usize {
+    let mut left: Vec<char> = typed.to_vec();
+    let mut excess = 0;
+    for c in cand {
+        match left.iter().position(|&t| t == c) {
+            Some(i) => {
+                left.swap_remove(i);
+            }
+            None => excess += 1,
+        }
+    }
+    excess
 }
 
 fn distance_kb(typed: &[char], cand: &[char], max: usize, lang: Lang) -> usize {
