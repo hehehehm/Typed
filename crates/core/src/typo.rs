@@ -20,6 +20,17 @@ pub const MIN_LEN_2: usize = 8;
 pub const MAX_RANK: u32 = u32::MAX;
 pub const TAIL_RANK: u32 = 20_000;
 pub const DOMINANCE: u32 = 20;
+
+thread_local! {
+    static CONVERTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn as_converted<R>(f: impl FnOnce() -> R) -> R {
+    let before = CONVERTED.with(|c| c.replace(true));
+    let r = f();
+    CONVERTED.with(|c| c.set(before));
+    r
+}
 pub const SHORT_PERM_RANK: u32 = 300;
 pub const SHORT_PERM_LEN: usize = 3;
 pub const INSERT_MAX_RANK: u32 = 5_000;
@@ -216,7 +227,6 @@ fn suggest_impl_ctx(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
 
 pub const SUPPORT_RANK: u32 = 40_000;
 
-
 fn is_subsequence(short: &[char], long: &[char]) -> bool {
     let mut it = long.iter();
     short.iter().all(|c| it.any(|x| x == c))
@@ -232,13 +242,18 @@ fn rare_fix_supported(d: &Dictionary, word: &str, fix: &str, lang: Lang, ctx: &C
     let lowercase = rest_lower && word.chars().next().is_some_and(char::is_lowercase);
     let fv: Vec<char> = n.chars().collect();
     let shape_ok = lowercase || (rest_lower && fv.len() == lower.len());
-    if lower.len() >= FULL_MIN_LEN && shape_ok && distance_kb(&lower, &fv, 1, lang) <= 1 && !frequent_within_two(d, &lower) {
+    let lower_s: String = lower.iter().collect();
+    let full_like = (first_letter_kept(&lower, &n) || (fv.len() == lower.len() && first_key_slip(&lower, &n, lang)))
+        && substitution_ok(&lower, &n, lang)
+        && !(lang == Lang::Ru && morph::only_ending_differs(&lower_s, &n))
+        && !(lang == Lang::En && (en_affix_only(&lower_s, &n) || en_end_letter_only(&lower_s, &n)));
+    if lower.len() >= FULL_MIN_LEN && shape_ok && full_like && distance_kb(&lower, &fv, 1, lang) <= 1 && !frequent_within_two(d, &lower) {
         return true;
     }
-    if fv.len() >= FULL_MIN_LEN && lowercase && fv.len() + 2 >= lower.len() && is_subsequence(&fv, &lower) {
+    if fv.len() >= FULL_MIN_LEN && lowercase && fv.len() + 2 >= lower.len() && is_subsequence(&fv, &lower) && !frequent_within_two(d, &lower) {
         return true;
     }
-    if lang == Lang::Ru && morph::paradigm_sibling_rank(d, &n).is_some_and(|r| r < TAIL_RANK) {
+    if lang == Lang::Ru && full_like && (fv.len() == lower.len() || !frequent_within_two(d, &lower)) && morph::paradigm_sibling_rank(d, &n).is_some_and(|r| r < TAIL_RANK) {
         return true;
     }
     ctx.prev.as_deref().filter(|p| *p != ngram::START).is_some_and(|p| ngram::get(lang).count(&[p, &n]) > 0.0)
@@ -1660,9 +1675,10 @@ impl Pick {
 
     fn winner(self) -> Option<String> {
         if self.same.best.is_some() {
-            self.same.winner()
+            let alone = self.other.best.is_none();
+            self.same.winner(alone)
         } else {
-            self.other.winner()
+            self.other.winner(true)
         }
     }
 }
@@ -1680,13 +1696,13 @@ impl Ranked {
         }
     }
 
-    fn winner(self) -> Option<String> {
+    fn winner(self, alone: bool) -> Option<String> {
         let (r, w, ok) = self.best?;
         if !ok {
             return None;
         }
         if let Some(s) = self.second {
-            if !(r < SUPPORT_RANK && s >= SUPPORT_RANK) && r.saturating_add(1).saturating_mul(DOMINANCE) > s.saturating_add(1) {
+            if !(alone && r < SUPPORT_RANK && s >= SUPPORT_RANK && CONVERTED.with(std::cell::Cell::get)) && r.saturating_add(1).saturating_mul(DOMINANCE) > s.saturating_add(1) {
                 return None;
             }
         }

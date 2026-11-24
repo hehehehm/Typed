@@ -501,9 +501,10 @@ mod tests {
     #[test]
     fn forms_of_known_words() {
         let d = dict::get(Lang::Ru);
-        assert!(!d.contains("коррекцию"));
-        assert!(is_known_form(d, "коррекцию"));
-        assert!(is_known_form(d, "коррекцией"));
+        assert!(!d.contains("коррекциями"));
+        assert!(!d.contains("коррекциях"));
+        assert!(is_known_form(d, "коррекциями"));
+        assert!(is_known_form(d, "коррекциях"));
         assert!(candidate_rank(d, "точкой").unwrap() < 5000, "via точка");
         assert!(!is_known_form(d, "кореркцию"));
         assert!(!is_known_form(d, "чтокой"));

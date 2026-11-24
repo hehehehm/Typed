@@ -492,7 +492,7 @@ pub fn layout_typo_ctx(conv: &str, dst: Lang, level: Level, ctx: &Context) -> Op
     if d.is_word(conv) {
         return None;
     }
-    crate::typo::suggest_ctx(conv, dst, level, ctx)
+    crate::typo::as_converted(|| crate::typo::suggest_ctx(conv, dst, level, ctx))
 }
 
 pub fn looks_foreign(typed_letters: &str, src: Lang) -> bool {

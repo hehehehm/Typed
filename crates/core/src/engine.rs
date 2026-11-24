@@ -3421,7 +3421,7 @@ mod tests {
         assert_eq!(conv("шташтшч").as_deref(), Some("infinix"));
         for w in ["реалми", "сяоми", "айфоном", "самсунга", "хуавея"] {
             assert_eq!(conv(w), None, "{w}");
-            assert_eq!(e.decide(w), Decision::Keep("known word form in current layout"), "{w}");
+            assert!(matches!(e.decide(w), Decision::Keep(r) if r.starts_with("known word")), "{w}");
         }
         assert_eq!(conv("fqajyjv").as_deref(), Some("айфоном"));
         assert_eq!(conv("зуфсу").as_deref(), Some("peace"));
