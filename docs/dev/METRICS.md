@@ -20,6 +20,28 @@
 
 Метрики хуже 0.3.83: `context/en/layout+typo/wrong`, `context/en/typo1/wrong`, `context/en/typo2/wrong`, `context/ru/layout+typo/wrong`, `context/ru/typo1/wrong`, `context/ru/typo2/wrong`, `correction/En frequent, 2 error(s)/wrong`, `correction/En rare form, 1 error(s)/wrong`, `correction/En typo 1/all/wrong`, `correction/En typo 2/all/wrong`, `correction/En typo 3/all/wrong`, `correction/Ru typo 2/all/wrong`, `correction/Ru typo 3/all/wrong`, `correction/unknown-fp/En lower`, `correction/unknown-fp/Ru Capitalised`, `correction/unknown-fp/Ru lower`, `typist/gramotey/aggressive/missed_pct`, `typist/gramotey/aggressive/wrong_pct`, `typist/gramotey/cautious/missed_pct`, `typist/gramotey/normal/fp`, `typist/gramotey/normal/wrong_pct`, `typist/torpyga/cautious/wrong_pct`, `typist/torpyga/normal/wrong_pct`, `typist/zlodey/aggressive/fixed_pct`, `typist/zlodey/aggressive/fp`, `typist/zlodey/aggressive/wrong_pct`, `typist/zlodey/normal/fp`.
 
+## 0.3.87 против 0.3.86, прогон 24.11.2026 (`iter087j`, коммит `f1b3adb`)
+
+Гейт не пройден: 47 метрик. `typist_real_failures` 117 из 117, curated FP 6 из 315, частые слова 0 из 1320, `typo_audit` без ошибок.
+
+| набор | 0.3.86 верно / неверно | f1b3adb верно / неверно |
+|---|---|---|
+| Ru typo 1 | 85 / 1.9 | 86 / 2.4 |
+| En typo 1 | 84 / 2.5 | 84 / 3.3 |
+| Ru typo 2 | 63 / 7.7 | 63 / 7.8 |
+| En typo 2 | 63 / 8.3 | 63 / 8.8 |
+| Ru layout+typo | 74 / 3.8 | 78 / 4.2 |
+| En layout+typo | 75 / 2.7 | 79 / 2.8 |
+| Ru частые, 1 ошибка | 81 / 3.7 | 82 / 4.0 |
+| En частые, 1 ошибка | 98 / 0.9 | 97 / 1.3 |
+| контекст ru layout+typo | 59.7 / 5.86 | 63.3 / 5.74 |
+| контекст en layout+typo | 53.1 / 7.73 | 58.3 / 7.43 |
+| контекст ru typo1 | 79.9 / 3.89 | 80.9 / 3.92 |
+| контекст en typo2 | 34.4 / 16.49 | 34.7 / 16.74 |
+| fp_ngram_phrase (ошибок) | 632 | 690 |
+| fp_full_forms (ошибок) | 26.9 | 43.1 |
+| space_glued_prep (полнота) | 98.70 | 90.38 |
+
 ## 0.3.87 против 0.3.86
 
 Прогон 23.11.2026, ветка `wip-0.3.87`, релиза нет. База: полный прогон 0.3.86 (`iter086`, коммит `d7ef7f8`). Полный набор после правила «всегда выбирать кандидата», самой ранней соседней перестановки, перевода раскладки, который уступает перестановке в своей раскладке, отмены с перебором вариантов, layout+typo соседней клавишей, сочетаний клавиш и лишней буквы в частом слове (`iter087g`). `typist_real_failures`: 103 из 103. Curated FP: 6 из 315. Частые слова: 0 из 1320. `typo_audit`: 0 ложных, 0 пропусков из 40.
