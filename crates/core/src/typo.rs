@@ -17,7 +17,7 @@ pub enum Level {
 
 pub const MIN_LEN: usize = 4;
 pub const MIN_LEN_2: usize = 8;
-pub const MAX_RANK: u32 = 40_000;
+pub const MAX_RANK: u32 = u32::MAX;
 pub const TAIL_RANK: u32 = 20_000;
 pub const DOMINANCE: u32 = 20;
 pub const SHORT_PERM_RANK: u32 = 300;

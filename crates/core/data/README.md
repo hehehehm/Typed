@@ -6,6 +6,12 @@ derived from OpenSubtitles 2018. Content license: **CC-BY-SA-4.0** (code of that
 (Up to 0.3.2 the cutoff was 20 000; the first 20 000 lines are unchanged and are the only ones used
 for letter-bigram statistics.)
 
+Branch wip-0.3.88-bigdict: after those 40 000 lines the lists continue with words from
+[wordfreq](https://github.com/rspeer/wordfreq) 3.1.1 `large` lists (data **CC-BY-SA-4.0**, code Apache-2.0),
+most frequent first, kept only when the word is already in the full-form set (`*_known.fst`), has at least
+3 letters, Zipf ≥ 2.0, and is not a brand or a name. RU 40 000 → 204 505 words, EN 40 000 → 78 103.
+Built with `examples/rank_extend.rs` and appended after the old order.
+
 Processing: lowercased, `ё` → `е`, only tokens made purely of `a-z` / `а-я` kept, single-letter tokens
 kept only for real one-letter words (`a`, `i`; `я в к с о и у а`), duplicates removed.
 
