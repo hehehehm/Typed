@@ -608,7 +608,9 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
         if cand.chars().count() < MIN_LEN - 1 {
             continue;
         }
-        let row_slip = long_row_slip(d, &lower, &cand, lang);
+        let ranked = std::cell::OnceCell::new();
+        let cand_rank = || *ranked.get_or_init(|| rank(&cand));
+        let row_slip = long_row_near(&lower, &cand, lang) && cand_rank().is_some() && only_substitution(d, &lower, &cand, lang, false);
         let first_slip = first_key_slip(&lower, &cand, lang) || (row_slip && cand.chars().next() != lower.first().copied());
         let first_missing = lower.len() >= MIN_LEN_FIRST_MISSING && {
             let cv: Vec<char> = cand.chars().collect();
@@ -620,7 +622,7 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
         if lang == Lang::Ru
             && morph::only_ending_differs(&lower_s, &cand)
             && !is_direct_neighbour_subst(&lower, &cand, lang)
-            && !hard_soft_slip(d, &lower, &cand)
+            && !(cand_rank().is_some() && hard_soft_slip(d, &lower, &cand))
         {
             continue;
         }
@@ -628,7 +630,7 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
             continue;
         }
         let limit = if first_missing { first_slip_rank(lower.len() + 1, lang) } else { first_slip_rank(lower.len(), lang) };
-        if let Some(r) = rank(&cand).filter(|&r| !(first_slip || first_missing) || r < limit) {
+        if let Some(r) = cand_rank().filter(|&r| !(first_slip || first_missing) || r < limit) {
             let ok = can_win(r, &cand);
             let r = if is_swap(&lower, &cand) { r / SWAP_BONUS } else { r };
             if cand.chars().count() != lower.len() {
@@ -979,7 +981,7 @@ fn only_substitution(d: &Dictionary, typed: &[char], cand: &str, lang: Lang, sam
     })
 }
 
-fn long_row_slip(d: &Dictionary, typed: &[char], cand: &str, lang: Lang) -> bool {
+fn long_row_near(typed: &[char], cand: &str, lang: Lang) -> bool {
     if typed.len() < ROW_SLIP_MIN_LEN {
         return false;
     }
@@ -988,7 +990,7 @@ fn long_row_slip(d: &Dictionary, typed: &[char], cand: &str, lang: Lang) -> bool
         (Some((ra, ca)), Some((rb, cb))) => ra == rb && (ca - cb).abs() <= ROW_SLIP_MAX_COLS,
         _ => false,
     };
-    near && only_substitution(d, typed, cand, lang, false)
+    near
 }
 
 fn hard_soft_slip(d: &Dictionary, typed: &[char], cand: &str) -> bool {

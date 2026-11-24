@@ -1,5 +1,6 @@
 
 use crate::dict::Dictionary;
+use std::collections::HashMap;
 
 pub const MIN_STEM: usize = 5;
 const MIN_STEM_SHORT: usize = 3;
@@ -424,18 +425,39 @@ pub fn max_end_len() -> usize {
     *MAX.get_or_init(|| GROUPS.iter().filter(|g| g.class != Class::Verb).flat_map(|g| g.ends.iter()).map(|e| e.chars().count()).max().unwrap_or(0))
 }
 
+fn end_index() -> &'static HashMap<&'static str, Vec<(usize, usize)>> {
+    static INDEX: std::sync::OnceLock<HashMap<&'static str, Vec<(usize, usize)>>> = std::sync::OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut m: HashMap<&'static str, Vec<(usize, usize)>> = HashMap::new();
+        for (gi, g) in GROUPS.iter().enumerate().filter(|(_, g)| g.class != Class::Verb) {
+            for (ei, e) in g.ends.iter().enumerate() {
+                m.entry(*e).or_default().push((gi, ei));
+            }
+        }
+        m
+    })
+}
+
 pub fn reinflect(cand: &str, typed: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     if cand.ends_with("ся") || cand.ends_with("сь") {
         return out;
     }
     let c: Vec<char> = cand.chars().collect();
-    for group in GROUPS.iter().filter(|g| g.class != Class::Verb) {
-        for end in group.ends {
-            if !cand.ends_with(end) {
-                continue;
-            }
-            let n = end.chars().count();
+    let index = end_index();
+    let mut hits: Vec<(usize, usize)> = Vec::new();
+    for k in 0..=max_end_len().min(c.len()) {
+        let tail: String = c[c.len() - k..].iter().collect();
+        if let Some(v) = index.get(tail.as_str()) {
+            hits.extend(v.iter().copied());
+        }
+    }
+    hits.sort_unstable();
+    for (gi, ei) in hits {
+        let group = &GROUPS[gi];
+        let end = &group.ends[ei];
+        let n = end.chars().count();
+        {
             if c.len() < MIN_STEM + n || !group.stem.ok(c[c.len() - n - 1]) {
                 continue;
             }
