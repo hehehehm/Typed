@@ -962,13 +962,17 @@ fn only_substitution(d: &Dictionary, typed: &[char], cand: &str, lang: Lang, sam
         Lang::En => EN_ALPHABET,
         Lang::Ru => RU_ALPHABET,
     };
+    let mut v = typed.to_vec();
+    let mut c = String::with_capacity(typed.len() * 2);
     (0..typed.len()).filter(|&i| !same_pos || i == at).all(|i| {
-        alphabet.chars().filter(|&a| a != typed[i]).all(|a| {
-            let mut v = typed.to_vec();
+        let ok = alphabet.chars().filter(|&a| a != typed[i]).all(|a| {
             v[i] = a;
-            let c: String = v.into_iter().collect();
+            c.clear();
+            c.extend(v.iter());
             c == cand || d.rank(&c).is_none_or(|r| r >= MAX_RANK)
-        })
+        });
+        v[i] = typed[i];
+        ok
     })
 }
 

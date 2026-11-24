@@ -179,6 +179,9 @@ impl Dictionary {
     }
 
     pub fn rank(&self, word: &str) -> Option<u32> {
+        if word.chars().all(|c| !c.is_uppercase() && c != 'ё' && c != 'Ё') {
+            return self.ranks.get(word).copied();
+        }
         self.ranks.get(&Self::normalize(word)).copied()
     }
     pub fn iter(&self) -> impl Iterator<Item = (&str, u32)> {

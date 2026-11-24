@@ -393,6 +393,11 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
         if !first_letter_kept(&lower, cand) {
             continue;
         }
+        let extra = crate::typo::bag_excess(cv.iter().copied(), &lower);
+        let missing = (extra + n).saturating_sub(m);
+        if (extra.max(missing) as u32) * DOUBLE_MISSING > max {
+            continue;
+        }
         let cost = wdist_with(&lower, &dels, &cv, max, lang, &mut scratch);
         if cost > max || cost == 0 {
             continue;

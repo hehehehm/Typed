@@ -359,14 +359,14 @@ fn paradigm_rank(d: &Dictionary, w: &str) -> Option<u32> {
     let chars: Vec<char> = w.chars().collect();
     let mut best: Option<u32> = None;
     for &end in all_endings() {
+        if !w.ends_with(end) {
+            continue;
+        }
         let n = end.chars().count();
         if chars.len() < MIN_STEM + n {
             continue;
         }
-        let (stem, tail) = chars.split_at(chars.len() - n);
-        if tail.iter().collect::<String>() != end {
-            continue;
-        }
+        let (stem, _) = chars.split_at(chars.len() - n);
         let last = stem[stem.len() - 1];
         let stem_s: String = stem.iter().collect();
         if !d.has_prefix(&stem_s) {
