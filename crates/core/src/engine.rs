@@ -1053,7 +1053,7 @@ impl Engine {
                 return Decision::Keep("known word form in current layout");
             }
             if o.fix_typos && o.typo_level != typo::Level::Cautious {
-                if let Some(d) = self.pick_layout_typo(token, &chars, src) {
+                if let Some(d) = self.typo_then_layout_decision(token) {
                     return d;
                 }
             }
