@@ -55,6 +55,30 @@ fn form_freq(word: &str, lang: Lang) -> f64 {
     if g.total() > 0.0 { g.count(&[n.as_str()]) / g.total() } else { 0.0 }
 }
 
+fn last_letter_ambiguous(conv: &str, fix: &str, lang: Lang) -> bool {
+    let a: Vec<char> = Dictionary::normalize(conv).chars().collect();
+    let b: Vec<char> = Dictionary::normalize(fix).chars().collect();
+    let n = a.len();
+    if n < 2 || b.len() != n || a[..n - 1] != b[..n - 1] {
+        return false;
+    }
+    let d = dict::get(lang);
+    let alphabet: Vec<char> = match lang {
+        Lang::En => "abcdefghijklmnopqrstuvwxyz",
+        Lang::Ru => "абвгдежзийклмнопрстуфхцчшщъыьэюя",
+    }
+    .chars()
+    .collect();
+    let stem: String = a[..n - 1].iter().collect();
+    alphabet.iter().any(|&c| {
+        if c == b[n - 1] || c == a[n - 1] {
+            return false;
+        }
+        d.rank(&format!("{stem}{c}")).is_some_and(|r| r < typo::MAX_RANK)
+    }) || d.rank(&format!("{stem}{}{}", a[n - 1], b[n - 1])).is_some()
+        || alphabet.iter().any(|&c| d.rank(&format!("{}{c}", a.iter().collect::<String>())).is_some_and(|r| r < typo::MAX_RANK))
+}
+
 fn typo_swap_beats_layout(swap: &str, src: Lang, layout: &str, dst: Lang) -> bool {
     let swap_n = Dictionary::normalize(trim_non_letters(swap));
     let lay_n = Dictionary::normalize(trim_non_letters(layout));
@@ -1689,6 +1713,10 @@ impl Engine {
         } else {
             return None;
         };
+        let plain = layout::convert(core, src);
+        if plain.chars().all(char::is_alphabetic) && last_letter_ambiguous(&plain, winner, dst) {
+            return None;
+        }
         let text = typo::match_case(core, winner);
         let text = token.replacen(core, &text, 1);
         Some(Decision::Convert {
@@ -1721,7 +1749,17 @@ impl Engine {
             if !o.never_typo.is_empty() && o.never_typo.contains(&never_key(conv_core)) {
                 continue;
             }
+            let lost_letter = head
+                .chars()
+                .zip(conv.chars())
+                .any(|(t, c)| t.is_alphabetic() && !c.is_alphabetic());
+            if lost_letter {
+                continue;
+            }
             if let Some(fix) = crate::typo_wide::layout_typo_ctx(conv_core, dst, o.typo_level, &self.left_context(dst)) {
+                if last_letter_ambiguous(conv_core, &fix, dst) {
+                    continue;
+                }
                 let foreign = crate::typo_wide::looks_foreign(&Dictionary::normalize(&typed_letters), src);
                 if !foreign {
                     if self.typed_language_context(src) {
