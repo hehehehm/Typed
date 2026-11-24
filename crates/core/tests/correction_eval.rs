@@ -84,8 +84,17 @@ fn out_text(e: &Engine, token: &str) -> Option<String> {
     r
 }
 
+fn eval_words(lang: Lang) -> &'static Dictionary {
+    static RU: std::sync::OnceLock<Dictionary> = std::sync::OnceLock::new();
+    static EN: std::sync::OnceLock<Dictionary> = std::sync::OnceLock::new();
+    match lang {
+        Lang::Ru => RU.get_or_init(|| Dictionary::with_extras(Lang::Ru, include_str!("data/eval_words_ru.txt"), include_str!("../data/ru_extra.txt"))),
+        Lang::En => EN.get_or_init(|| Dictionary::with_extras(Lang::En, include_str!("data/eval_words_en.txt"), include_str!("../data/en_extra.txt"))),
+    }
+}
+
 fn pool(lang: Lang, len: usize, n: usize) -> Vec<String> {
-    let d = dict::get(lang);
+    let d = eval_words(lang);
     let limit = if len <= 3 { 3_000 } else { 20_000 };
     let mut v: Vec<(String, u32)> = d
         .iter()
@@ -188,8 +197,8 @@ fn correction_eval() {
     let bucket = |n: usize| match n { 0..=3 => 0, 4 => 1, 5..=6 => 2, 7..=8 => 3, _ => 4 };
     for lang in [Lang::Ru, Lang::En] {
         let d = dict::get(lang);
-        let ranked = dict::ranked_only(lang);
-        let words = full_only(lang, &ranked);
+        let ranked = eval_words(lang);
+        let words = full_only(lang, ranked);
         for (name, cap) in [("lower", false), ("Capitalised", true)] {
             let mut b = [(0u32, 0u32); 5];
             let mut ex = vec![];
@@ -339,8 +348,8 @@ fn spelling_eval() {
     let mut ex: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for lang in [Lang::Ru, Lang::En] {
         let d = dict::get(lang);
-        let ranked = dict::ranked_only(lang);
-        let mut rare: Vec<String> = full_only(lang, &ranked).into_iter().filter(|w| w.chars().count() >= 5).collect();
+        let ranked = eval_words(lang);
+        let mut rare: Vec<String> = full_only(lang, ranked).into_iter().filter(|w| w.chars().count() >= 5).collect();
         rare.truncate(1500);
         let mut freq: Vec<String> = vec![];
         for len in 5..=12 { freq.extend(pool(lang, len, 120)); }
