@@ -608,15 +608,20 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
         if cand.chars().count() < MIN_LEN - 1 {
             continue;
         }
-        let first_slip = first_key_slip(&lower, &cand, lang);
+        let row_slip = long_row_slip(d, &lower, &cand, lang);
+        let first_slip = first_key_slip(&lower, &cand, lang) || (row_slip && cand.chars().next() != lower.first().copied());
         let first_missing = lower.len() >= MIN_LEN_FIRST_MISSING && {
             let cv: Vec<char> = cand.chars().collect();
             cv.len() == lower.len() + 1 && cv[1..] == lower[..]
         };
-        if !substitution_ok(&lower, &cand, lang) || !(first_letter_kept(&lower, &cand) || first_slip || first_missing) {
+        if !(substitution_ok(&lower, &cand, lang) || row_slip) || !(first_letter_kept(&lower, &cand) || first_slip || first_missing) {
             continue;
         }
-        if lang == Lang::Ru && morph::only_ending_differs(&lower_s, &cand) && !is_direct_neighbour_subst(&lower, &cand, lang) {
+        if lang == Lang::Ru
+            && morph::only_ending_differs(&lower_s, &cand)
+            && !is_direct_neighbour_subst(&lower, &cand, lang)
+            && !hard_soft_slip(d, &lower, &cand)
+        {
             continue;
         }
         if lang == Lang::En && (en_affix_only(&lower_s, &cand) || en_end_letter_only(&lower_s, &cand)) {
@@ -927,6 +932,60 @@ pub fn first_slip_rank(len: usize, lang: Lang) -> u32 {
         8.. if lang == Lang::Ru => FIRST_SLIP_RANK_LONG,
         _ => FIRST_SLIP_RANK,
     }
+}
+
+const ROW_SLIP_MIN_LEN: usize = 8;
+const ROW_SLIP_MAX_COLS: i32 = 2;
+const HARD_SOFT: [(char, char); 5] = [('о', 'е'), ('ы', 'и'), ('а', 'я'), ('у', 'ю'), ('э', 'е')];
+
+fn single_diff(typed: &[char], cand: &str) -> Option<(char, char)> {
+    let cv: Vec<char> = cand.chars().collect();
+    if cv.len() != typed.len() {
+        return None;
+    }
+    let diff: Vec<usize> = (0..cv.len()).filter(|&i| cv[i] != typed[i]).collect();
+    match diff.as_slice() {
+        [i] => Some((typed[*i], cv[*i])),
+        _ => None,
+    }
+}
+
+fn only_substitution(d: &Dictionary, typed: &[char], cand: &str, lang: Lang, same_pos: bool) -> bool {
+    let cv: Vec<char> = cand.chars().collect();
+    let Some(at) = (0..typed.len()).find(|&i| cv.get(i) != Some(&typed[i])) else { return false };
+    let alphabet = match lang {
+        Lang::En => EN_ALPHABET,
+        Lang::Ru => RU_ALPHABET,
+    };
+    (0..typed.len()).filter(|&i| !same_pos || i == at).all(|i| {
+        alphabet.chars().filter(|&a| a != typed[i]).all(|a| {
+            let mut v = typed.to_vec();
+            v[i] = a;
+            let c: String = v.into_iter().collect();
+            c == cand || d.rank(&c).is_none_or(|r| r >= MAX_RANK)
+        })
+    })
+}
+
+fn long_row_slip(d: &Dictionary, typed: &[char], cand: &str, lang: Lang) -> bool {
+    if typed.len() < ROW_SLIP_MIN_LEN {
+        return false;
+    }
+    let Some((a, b)) = single_diff(typed, cand) else { return false };
+    let near = match (key_pos(a, lang), key_pos(b, lang)) {
+        (Some((ra, ca)), Some((rb, cb))) => ra == rb && (ca - cb).abs() <= ROW_SLIP_MAX_COLS,
+        _ => false,
+    };
+    near && only_substitution(d, typed, cand, lang, false)
+}
+
+fn hard_soft_slip(d: &Dictionary, typed: &[char], cand: &str) -> bool {
+    let cv: Vec<char> = cand.chars().collect();
+    if cv.len() != typed.len() || cv.last() != typed.last() {
+        return false;
+    }
+    single_diff(typed, cand).is_some_and(|(a, b)| HARD_SOFT.iter().any(|&(x, y)| (x, y) == (a, b) || (y, x) == (a, b)))
+        && only_substitution(d, typed, cand, Lang::Ru, true)
 }
 
 fn first_key_slip(typed: &[char], cand: &str, lang: Lang) -> bool {

@@ -127,3 +127,7 @@ layout	rnhf	утра
 layout	enuf	утра
 layout	1nhf	утра
 transp	the amry	the army
+typo	сетевые йстройства	сетевые устройства
+typo	йстройства	устройства
+typo	нет ли лишного	нет ли лишнего
+typo	лишного	лишнего
