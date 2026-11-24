@@ -216,14 +216,29 @@ fn suggest_impl_ctx(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
 
 pub const SUPPORT_RANK: u32 = 40_000;
 
-pub const RARE_FIX_MIN_LEN: usize = 7;
+
+fn is_subsequence(short: &[char], long: &[char]) -> bool {
+    let mut it = long.iter();
+    short.iter().all(|c| it.any(|x| x == c))
+}
 
 fn rare_fix_supported(d: &Dictionary, word: &str, fix: &str, lang: Lang, ctx: &Context) -> bool {
     let n = Dictionary::normalize(fix);
     if d.rank(&n).is_none_or(|r| r < SUPPORT_RANK) {
         return true;
     }
-    if word.chars().count() >= RARE_FIX_MIN_LEN && !word.chars().next().is_some_and(char::is_uppercase) {
+    let lower: Vec<char> = Dictionary::normalize(word).chars().collect();
+    let rest_lower = word.chars().skip(1).all(char::is_lowercase);
+    let lowercase = rest_lower && word.chars().next().is_some_and(char::is_lowercase);
+    let fv: Vec<char> = n.chars().collect();
+    let shape_ok = lowercase || (rest_lower && fv.len() == lower.len());
+    if lower.len() >= FULL_MIN_LEN && shape_ok && distance_kb(&lower, &fv, 1, lang) <= 1 && !frequent_within_two(d, &lower) {
+        return true;
+    }
+    if fv.len() >= FULL_MIN_LEN && lowercase && fv.len() + 2 >= lower.len() && is_subsequence(&fv, &lower) {
+        return true;
+    }
+    if lang == Lang::Ru && morph::paradigm_sibling_rank(d, &n).is_some_and(|r| r < TAIL_RANK) {
         return true;
     }
     ctx.prev.as_deref().filter(|p| *p != ngram::START).is_some_and(|p| ngram::get(lang).count(&[p, &n]) > 0.0)
@@ -1671,7 +1686,7 @@ impl Ranked {
             return None;
         }
         if let Some(s) = self.second {
-            if r.saturating_add(1).saturating_mul(DOMINANCE) > s.saturating_add(1) {
+            if !(r < SUPPORT_RANK && s >= SUPPORT_RANK) && r.saturating_add(1).saturating_mul(DOMINANCE) > s.saturating_add(1) {
                 return None;
             }
         }

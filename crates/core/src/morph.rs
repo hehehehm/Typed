@@ -344,7 +344,7 @@ pub fn is_known_form(d: &Dictionary, word: &str) -> bool {
 
 pub fn candidate_rank(d: &Dictionary, w: &str) -> Option<u32> {
     match d.rank(w) {
-        Some(r) if r < crate::typo::TAIL_RANK => Some(r),
+        Some(r) if r < crate::typo::TAIL_RANK || r >= crate::typo::SUPPORT_RANK => Some(r),
         Some(r) => Some(match evidence(d, w) {
             Some((_, sr, stem)) if stem >= MIN_STEM_DIRECT => r.min(sr),
             _ => r,
@@ -353,6 +353,13 @@ pub fn candidate_rank(d: &Dictionary, w: &str) -> Option<u32> {
             let base = w.strip_suffix("ся").or_else(|| w.strip_suffix("сь"))?;
             d.rank(base).or_else(|| paradigm_rank(d, base))
         }),
+    }
+}
+
+pub fn paradigm_sibling_rank(d: &Dictionary, w: &str) -> Option<u32> {
+    match evidence(d, w) {
+        Some((_, sr, stem)) if stem >= MIN_STEM_DIRECT => Some(sr),
+        _ => None,
     }
 }
 
