@@ -104,6 +104,10 @@ pub const SPLIT_VS_DEDUPE: f64 = 10.0;
 
 pub const NC_ERROR_RATE: f64 = 0.01;
 pub const NC_UNSEEN: f64 = 0.5;
+pub const NC_KNOWN_RATE: f64 = 0.0001;
+const LAYOUT_TYPO_PRIOR: f64 = 0.01;
+const MAX_WORD_SHARE: f64 = 0.05;
+const DOMINANT_CONVERT_MIN_LEN: usize = 3;
 pub const NC_UNKNOWN_RATE: f64 = 0.01;
 
 fn attested_form_wins(token: &str, text: &str, target: Lang) -> bool {
@@ -1035,6 +1039,17 @@ impl Engine {
             }
         }
         if src_dict.contains(core) {
+            if letters.len() >= DOMINANT_CONVERT_MIN_LEN {
+                let typed = crate::ngram::get(src).count(&[&Dictionary::normalize(core)]).max(NC_UNSEEN) / crate::ngram::get(src).total().max(1.0);
+                let dg = crate::ngram::get(dst);
+                let dominant = Self::try_convert(&chars, src, o.min_word_len, |w| {
+                    let n = Dictionary::normalize(w);
+                    dst_dict.rank(&n).is_some() && dg.count(&[&n]) / dg.total().max(1.0) * NC_KNOWN_RATE > typed
+                });
+                if let Some(d) = dominant {
+                    return d;
+                }
+            }
             return Decision::Keep("known word in current layout");
         }
         if let Some(d) = Self::hyphen_converted(&chars, src) {
@@ -1170,6 +1185,9 @@ impl Engine {
             }
             if core.chars().all(char::is_alphabetic) {
                 if let Some(fix) = self.typo_fix(core, src) {
+                    if let Some(d) = self.dominant_layout_typo(token, &chars, src, &fix) {
+                        return d;
+                    }
                     return Decision::Convert { text: token.replacen(core, &fix, 1), target: src, reason: TYPO_REASON };
                 }
             }
@@ -1572,6 +1590,20 @@ impl Engine {
             }
         }
         Context { prev: words.first().cloned(), prev2: words.get(1).cloned() }
+    }
+
+    fn dominant_layout_typo(&self, token: &str, chars: &[char], src: Lang, fix: &str) -> Option<Decision> {
+        let sg = crate::ngram::get(src);
+        let fix_share = sg.count(&[&Dictionary::normalize(fix)]) / sg.total().max(1.0);
+        if fix_share >= MAX_WORD_SHARE * LAYOUT_TYPO_PRIOR {
+            return None;
+        }
+        let d = self.pick_layout_typo(token, chars, src)?;
+        let Decision::Convert { text, target, .. } = &d else { return None };
+        let w = Dictionary::normalize(trim_non_letters(text));
+        let dg = crate::ngram::get(*target);
+        let share = dg.count(&[&w]) / dg.total().max(1.0);
+        (share * LAYOUT_TYPO_PRIOR > fix_share).then_some(d)
     }
 
     fn pick_layout_typo(&self, token: &str, chars: &[char], src: Lang) -> Option<Decision> {
