@@ -205,10 +205,28 @@ fn suggest_impl(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, le
 
 fn suggest_impl_ctx(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level, ctx: &Context) -> Option<String> {
     let fix = suggest_core(d, word, lang, assume_unknown, level, ctx)?;
+    if !rare_fix_supported(d, word, &fix, lang, ctx) {
+        return None;
+    }
     if lang == Lang::Ru && !morph::keeps_derivation(d, &Dictionary::normalize(word), &Dictionary::normalize(&fix)) {
         return None;
     }
     Some(fix)
+}
+
+pub const SUPPORT_RANK: u32 = 40_000;
+
+pub const RARE_FIX_MIN_LEN: usize = 7;
+
+fn rare_fix_supported(d: &Dictionary, word: &str, fix: &str, lang: Lang, ctx: &Context) -> bool {
+    let n = Dictionary::normalize(fix);
+    if d.rank(&n).is_none_or(|r| r < SUPPORT_RANK) {
+        return true;
+    }
+    if word.chars().count() >= RARE_FIX_MIN_LEN && !word.chars().next().is_some_and(char::is_uppercase) {
+        return true;
+    }
+    ctx.prev.as_deref().filter(|p| *p != ngram::START).is_some_and(|p| ngram::get(lang).count(&[p, &n]) > 0.0)
 }
 
 fn suggest_core(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool, level: Level, ctx: &Context) -> Option<String> {
