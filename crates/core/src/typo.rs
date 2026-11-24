@@ -668,7 +668,8 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
         };
         let first: String = lower[..1].iter().collect();
         let swapped: String = [lower[1], lower[0]].iter().collect();
-        let pool = d.starting_with(&first).chain(d.starting_with(&swapped).filter(|_| lower[0] != lower[1]));
+        let (lo, hi) = (lower.len().saturating_sub(3).max(MIN_LEN_2 - 2), lower.len() + 3);
+        let pool = d.starting_with_len(&first, lo, hi).chain(d.starting_with_len(&swapped, lo, hi).filter(|_| lower[0] != lower[1]));
         for (cand, r) in pool {
             if r >= MAX_RANK || !first_letter_kept(&lower, cand) {
                 continue;
@@ -748,7 +749,8 @@ fn suggest_one(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool) -> 
 fn frequent_within_two(d: &Dictionary, lower: &[char]) -> bool {
     let first: String = lower[..1].iter().collect();
     let swapped: String = [lower[1], lower[0]].iter().collect();
-    let pool = d.starting_with(&first).chain(d.starting_with(&swapped).filter(|_| lower[0] != lower[1]));
+    let (lo, hi) = (lower.len().saturating_sub(2), lower.len() + 2);
+    let pool = d.starting_with_len(&first, lo, hi).chain(d.starting_with_len(&swapped, lo, hi).filter(|_| lower[0] != lower[1]));
     let found = pool.filter(|&(_, r)| r < TAIL_RANK).any(|(w, _)| {
         let n = w.chars().count();
         n + 2 >= lower.len() && n <= lower.len() + 2 && bag_excess(w.chars(), lower) <= 2 && {
@@ -919,10 +921,11 @@ fn is_known_leading_target(d: &Dictionary, w: &str, lang: Lang) -> bool {
 }
 
 pub(crate) fn first_letter_kept(typed: &[char], cand: &str) -> bool {
-    let cv: Vec<char> = cand.chars().collect();
-    match (cv.first(), typed.first()) {
-        (Some(a), Some(b)) if a == b => true,
-        _ => cv.len() == typed.len() && cv.len() >= 2 && cv[0] == typed[1] && cv[1] == typed[0],
+    let mut it = cand.chars();
+    let (a, b) = (it.next(), it.next());
+    match (a, typed.first()) {
+        (Some(a), Some(&t)) if a == t => true,
+        _ => typed.len() >= 2 && a == Some(typed[1]) && b == Some(typed[0]) && cand.chars().count() == typed.len(),
     }
 }
 

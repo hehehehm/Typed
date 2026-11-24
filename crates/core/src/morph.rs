@@ -425,18 +425,21 @@ pub fn max_end_len() -> usize {
 }
 
 pub fn reinflect(cand: &str, typed: &str) -> Vec<(String, bool)> {
-    let c: Vec<char> = cand.chars().collect();
     let mut out = Vec::new();
+    if cand.ends_with("ся") || cand.ends_with("сь") {
+        return out;
+    }
+    let c: Vec<char> = cand.chars().collect();
     for group in GROUPS.iter().filter(|g| g.class != Class::Verb) {
         for end in group.ends {
+            if !cand.ends_with(end) {
+                continue;
+            }
             let n = end.chars().count();
-            if c.len() < MIN_STEM + n || !cand.ends_with(end) || !group.stem.ok(c[c.len() - n - 1]) {
+            if c.len() < MIN_STEM + n || !group.stem.ok(c[c.len() - n - 1]) {
                 continue;
             }
             let last = c[c.len() - n - 1];
-            if cand.ends_with("ся") || cand.ends_with("сь") {
-                return out;
-            }
             let stem: String = c[..c.len() - n].iter().collect();
             for other in group.ends.iter().filter(|o| *o != end && !o.is_empty()) {
                 if typed.ends_with(other) {

@@ -34,6 +34,8 @@ pub struct Dictionary {
     ranks: HashMap<String, u32>,
     bigrams: HashSet<(char, char)>,
     sorted: Vec<String>,
+    sorted_rank: Vec<u32>,
+    sorted_len: Vec<u8>,
     known: Option<fst::Set<&'static [u8]>>,
     brands: HashSet<String>,
     names: Option<fst::Set<&'static [u8]>>,
@@ -98,7 +100,9 @@ impl Dictionary {
         let bigrams = counts.into_iter().filter(|&(_, n)| n >= MIN_BIGRAM_WORDS).map(|(k, _)| k).collect();
         let mut sorted: Vec<String> = ranks.keys().cloned().collect();
         sorted.sort_unstable();
-        Dictionary { lang, ranks, bigrams, sorted, known: None, brands: HashSet::new(), names: None }
+        let sorted_rank = sorted.iter().map(|w| ranks[w]).collect();
+        let sorted_len = sorted.iter().map(|w| w.chars().count().min(u8::MAX as usize) as u8).collect();
+        Dictionary { lang, ranks, bigrams, sorted, sorted_rank, sorted_len, known: None, brands: HashSet::new(), names: None }
     }
 
     pub fn with_known_set(mut self, fst_bytes: &'static [u8]) -> Self {
@@ -209,10 +213,13 @@ impl Dictionary {
 
     pub fn starting_with<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = (&'a str, u32)> + 'a {
         let i = self.sorted.partition_point(|w| w.as_str() < prefix);
-        self.sorted[i..]
-            .iter()
-            .take_while(move |w| w.starts_with(prefix))
-            .filter_map(move |w| self.ranks.get(w).map(|&r| (w.as_str(), r)))
+        self.sorted[i..].iter().zip(&self.sorted_rank[i..]).take_while(move |(w, _)| w.starts_with(prefix)).map(|(w, &r)| (w.as_str(), r))
+    }
+
+    pub fn starting_with_len<'a>(&'a self, prefix: &'a str, lo: usize, hi: usize) -> impl Iterator<Item = (&'a str, u32)> + 'a {
+        let i = self.sorted.partition_point(|w| w.as_str() < prefix);
+        let j = i + self.sorted[i..].partition_point(|w| w.starts_with(prefix) || w.as_str() < prefix);
+        (i..j).filter(move |&k| (lo..=hi).contains(&(self.sorted_len[k] as usize))).map(move |k| (self.sorted[k].as_str(), self.sorted_rank[k]))
     }
 
     pub fn full_forms_near(&self, word: &str, max: usize, first: &[char], limit: usize) -> Vec<String> {

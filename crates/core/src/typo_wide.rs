@@ -372,7 +372,9 @@ pub fn suggest_wide(d: &Dictionary, word: &str, lang: Lang, assume_unknown: bool
     let rank_limit = if lowercase { short_rank_limit(n) } else { TAIL_RANK };
     let first: String = lower[..1].iter().collect();
     let swapped: String = [lower[1], lower[0]].iter().collect();
-    let pool = d.starting_with(&first).chain(d.starting_with(&swapped).filter(|_| lower[0] != lower[1]));
+    let spread = (max / 6) as usize;
+    let (lo, hi) = (n.saturating_sub(spread).max(2), n + spread);
+    let pool = d.starting_with_len(&first, lo, hi).chain(d.starting_with_len(&swapped, lo, hi).filter(|_| lower[0] != lower[1]));
     let mut all: Vec<Scored> = Vec::new();
     let tail2 = &lower[n - 2..];
     let odd = d.unseen_bigrams(&lower_s) >= 1;
